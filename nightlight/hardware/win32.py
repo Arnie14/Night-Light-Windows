@@ -58,6 +58,7 @@ OUTPUT_TECHNOLOGIES = {
     0xFFFFFFFF: "Other",
 }
 _INTERNAL_TECHNOLOGIES = {6, 11, 13, 0x80000000}
+OUTPUT_HDMI = 5
 # Displays that are drawn by a driver rather than a GPU output (DisplayLink
 # docks, wireless displays, remote/virtual displays) have no DDC/CI channel.
 INDIRECT_TECHNOLOGIES = {15, 16, 17}
@@ -201,6 +202,17 @@ def instance_id_from_device_path(path: str) -> str:
 # --- dxva2 (DDC/CI) ---------------------------------------------------------
 
 VCP_LUMINANCE = 0x10
+# MCCS "display power mode": 1 on, 2 standby, 3 suspend, 4 off, 5 off with
+# the power button. Read before writing to a monitor unprompted (restoring
+# brightness), since DDC/CI commands can wake a sleeping monitor or, on some
+# models, hang its firmware until it is unplugged.
+VCP_POWER_MODE = 0xD6
+POWER_ON = 1
+# Other brightness-like codes some monitors answer instead of 0x10
+# (Twinkle Tray's fallbacks); reported by --probe.
+VCP_CONTRAST = 0x12
+VCP_BACKLIGHT_CONTROL = 0x13
+VCP_BACKLIGHT_WHITE = 0x6B
 
 # winerror.h. Monitorian and Twinkle Tray retry the transient ones.
 ERROR_GRAPHICS_I2C_ERROR_TRANSMITTING_DATA = 0xC0262582

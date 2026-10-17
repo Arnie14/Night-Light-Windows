@@ -68,6 +68,10 @@ The log is also written to `%LOCALAPPDATA%\night-light\Logs\night-light.log`, an
 
 ## 4. Brightness
 
+Before testing external displays, run `Winlight.exe --probe` (or `python main.py --probe`) once with everything connected, and keep `probe.txt` from the log folder. For each display it shows how it is connected, which DDC/CI codes it answers, how long each answer takes, and whether it reports its power state.
+
+For each external display, note: brand and model, the connection (HDMI, DisplayPort, USB-C, Thunderbolt; direct, adapter, hub or dock), and the GPU it is plugged into.
+
 Per external monitor:
 
 - [ ] The flyout lists it by model name, with its current brightness.
@@ -75,7 +79,18 @@ Per external monitor:
 - [ ] After a fast drag, the monitor ends at the slider's final value.
 - [ ] 0% and 100% match the monitor's own menu minimum and maximum.
 - [ ] Change brightness with the monitor's buttons, then reopen the flyout after 5 s or more: the slider shows the new value.
-- [ ] A monitor with DDC/CI switched off in its menu shows "not supported" (switch it off, then click ⟳).
+- [ ] A monitor with DDC/CI switched off in its menu shows "not supported", with advice to turn DDC/CI on (switch it off, then click ⟳).
+- [ ] Turn the monitor off with its power button and back on, with Winlight running: it is listed again with working brightness within about 10 s (DisplayPort monitors usually disappear while off; HDMI ones often stay listed).
+- [ ] Sleep the PC with the monitor connected, wake it: the monitor wakes normally and isn't woken or turned on by Winlight on its own. **Note any monitor that stays black or needs unplugging** (some firmware hangs if sent DDC/CI while asleep).
+- [ ] Note any **flicker** while dragging the slider, or a monitor that changes in visible steps instead of smoothly.
+- [ ] If the flyout ever shows "A display isn't responding", note which display and what you were doing, and send the log.
+
+TVs (over HDMI):
+
+- [ ] The TV is listed. Most TVs don't support DDC/CI: it should show "not supported" with the TV hint, not an error. If it **does** have a working slider, note the brand and model.
+- [ ] Night light tints the TV like the other displays (unless HDR is on for it, where it is skipped and the log says so).
+- [ ] With HDR on for the TV (Settings > Display > Use HDR): note what the flyout shows and whether Windows' own "SDR content brightness" slider is available for it.
+- [ ] Note the TV's input mode (PC/Game mode or not) and whether that changes anything.
 
 Laptop panel:
 
@@ -83,10 +98,14 @@ Laptop panel:
 - [ ] Windows' own brightness slider (in quick settings) and the app agree after you reopen the flyout.
 - [ ] Unplug and replug the charger, or switch power mode: does the brightness jump back? If so, note it; Monitorian uses the power plan instead of WMI for this reason.
 
-Docks and adapters (if you have one):
+Docks, adapters and ports (whatever you have):
 
 - [ ] A monitor on a DisplayLink/USB dock is listed as not supported, with the DisplayLink reason.
 - [ ] A monitor through a USB-C or Thunderbolt dock: does DDC/CI work?
+- [ ] The same monitor on HDMI and on DisplayPort (or USB-C): does DDC/CI work on both? The remembered brightness should follow it between ports.
+- [ ] A converter (DisplayPort-to-HDMI, USB-C-to-HDMI) or KVM switch: does DDC/CI pass through?
+- [ ] Two monitors daisy-chained over DisplayPort (MST), if available: are both controllable?
+- [ ] NVIDIA Surround or AMD Eyefinity (several monitors combined into one): expected not to work, as in the other apps.
 
 ## 5. Night light
 

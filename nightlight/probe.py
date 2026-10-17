@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import platform
 import sys
+import time
 import traceback
 from collections.abc import Callable
 from datetime import datetime
@@ -107,16 +108,32 @@ def _ddc(out) -> None:
     for monitor in monitors:
         out(f"{monitor.gdi_name}: {monitor.description} (handle {monitor.handle})")
         try:
-            try:
-                current, maximum = win32.get_vcp(monitor.handle, win32.VCP_LUMINANCE)
-                out(f"  VCP 0x10 brightness: {current} of {maximum}")
-            except win32.DdcError as exc:
-                out(f"  VCP 0x10 brightness: {exc}")
+            # Brightness, then what helps explain a monitor that misbehaves:
+            # whether it reports its power state (checked before restoring
+            # brightness), and other brightness-like codes some monitors
+            # answer instead of 0x10. Each read is timed: slow answers
+            # (hundreds of ms) point at a dock, adapter or busy monitor.
+            for code, label in (
+                (win32.VCP_LUMINANCE, "brightness"),
+                (win32.VCP_POWER_MODE, "power mode (1 = on)"),
+                (win32.VCP_CONTRAST, "contrast"),
+                (win32.VCP_BACKLIGHT_CONTROL, "backlight control"),
+                (win32.VCP_BACKLIGHT_WHITE, "backlight level (white)"),
+            ):
+                started = time.perf_counter()
+                try:
+                    current, maximum = win32.get_vcp(monitor.handle, code)
+                    result = f"{current} of {maximum}"
+                except win32.DdcError as exc:
+                    result = str(exc)
+                out(f"  VCP 0x{code:02X} {label}: {result} ({(time.perf_counter() - started) * 1000:.0f} ms)")
+            started = time.perf_counter()
             try:
                 minimum, current, maximum = win32.get_monitor_brightness(monitor.handle)
-                out(f"  GetMonitorBrightness: {current} in {minimum}-{maximum}")
+                result = f"{current} in {minimum}-{maximum}"
             except win32.DdcError as exc:
-                out(f"  GetMonitorBrightness: {exc}")
+                result = str(exc)
+            out(f"  GetMonitorBrightness: {result} ({(time.perf_counter() - started) * 1000:.0f} ms)")
         finally:
             win32.destroy_physical_monitor(monitor.handle)
 
@@ -185,10 +202,14 @@ def _backend(out, kind: str) -> None:
         if not monitors:
             out("No monitors")
         for info in monitors:
+            kind = "built-in" if info.internal else "external"
+            out(f"{info.index}: {info.name} [{info.key or 'no id'}, {kind}]")
             if info.supported:
-                out(f"{info.index}: {info.name}: brightness {brightness.get_brightness(info.index)}%")
+                power = getattr(brightness, "is_powered_on", lambda index: None)(info.index)
+                awake = {True: "on", False: "asleep", None: "unknown"}[power]
+                out(f"  brightness {brightness.get_brightness(info.index)}%, power state {awake}")
             else:
-                out(f"{info.index}: {info.name}: not supported{f' ({info.reason})' if info.reason else ''}")
+                out(f"  not supported{f': {info.reason}' if info.reason else ''}")
     finally:
         if close := getattr(brightness, "close", None):
             close()

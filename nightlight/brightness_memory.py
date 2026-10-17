@@ -62,6 +62,7 @@ class BrightnessMemory(QObject):
         monitors.monitorsChanged.connect(self._on_monitors_changed)
         monitors.brightnessChanged.connect(self._on_brightness)
         monitors.brightnessSet.connect(self._on_set)
+        monitors.restoreDeferred.connect(self._on_deferred)
 
     @property
     def enabled(self) -> bool:
@@ -109,7 +110,13 @@ class BrightnessMemory(QObject):
             target = max(target, MIN_INTERNAL)
         if value != target:
             log.info("Restoring %s brightness: %d%% -> %d%%", monitor.name, value, target)
-            self._monitors.set_brightness(index, target)
+            self._monitors.restore_brightness(index, target)
+
+    def _on_deferred(self, index: int) -> None:
+        """The monitor was asleep or the write failed: restore at a later reading."""
+        monitor = self._monitors.monitor(index)
+        if monitor is not None and self._enabled and monitor.key in self.levels:
+            self._due.add(monitor.key)
 
     def _on_set(self, index: int, value: int) -> None:
         monitor = self._monitors.monitor(index)

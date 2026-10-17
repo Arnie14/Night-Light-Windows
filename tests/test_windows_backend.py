@@ -101,9 +101,43 @@ def test_unresponsive_and_indirect_displays_are_listed_as_unsupported(monkeypatc
     ddc = FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x"), PhysicalMonitor(r"\\.\DISPLAY2", 8, "y")], {})
     ddc.install(monkeypatch, [target(r"\\.\DISPLAY1", "Old TV"), target(r"\\.\DISPLAY2", "Dock screen", DISPLAYLINK)])
     tv, dock = backend_with().list_monitors()
-    assert not tv.supported and tv.reason == ""
+    assert not tv.supported and "Turn DDC/CI on" in tv.reason and "TVs" in tv.reason  # HDMI: maybe a TV
     assert not dock.supported and "DisplayLink" in dock.reason
     assert sorted(ddc.destroyed) == [7, 8]  # handles of failed monitors are released
+
+
+def test_displayport_monitor_without_ddc_gets_no_tv_hint(monkeypatch):
+    FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x")], {}).install(monkeypatch, [target(r"\\.\DISPLAY1", "Office monitor", DP)])
+    [monitor] = backend_with().list_monitors()
+    assert "Turn DDC/CI on" in monitor.reason and "TVs" not in monitor.reason
+
+
+def test_power_state_comes_from_vcp_d6(monkeypatch):
+    ddc = FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x"), PhysicalMonitor(r"\\.\DISPLAY2", 8, "y"), PhysicalMonitor(r"\\.\DISPLAY3", 9, "z")],
+                  {7: (40, 100), 8: (40, 100), 9: (40, 100)})
+    power = {7: (1, 5), 8: (4, 5)}  # on, off; 9 doesn't report it
+    get_brightness = ddc.get_vcp
+
+    def get_vcp(handle, code):
+        if code == win32.VCP_POWER_MODE:
+            result = power.get(handle, win32.ERROR_GRAPHICS_DDCCI_VCP_NOT_SUPPORTED)
+            if isinstance(result, int):
+                raise DdcError("Reading VCP", result)
+            return result
+        return get_brightness(handle, code)
+
+    ddc.get_vcp = get_vcp
+    ddc.install(monkeypatch, [target(rf"\\.\DISPLAY{i}", f"M{i}", DP) for i in (1, 2, 3)])
+    backend = backend_with()
+    backend.list_monitors()
+    assert [backend.is_powered_on(i) for i in range(3)] == [True, False, None]
+
+
+def test_laptop_panel_power_state_is_unknown(monkeypatch):
+    FakeDdc([], {}).install(monkeypatch, [target(r"\\.\DISPLAY1", "", INTERNAL)])
+    backend = backend_with(FakeWmi([("panel", 80, [])]))
+    backend.list_monitors()
+    assert backend.is_powered_on(0) is None
 
 
 def test_cloned_displays_get_the_handle_that_answers(monkeypatch):

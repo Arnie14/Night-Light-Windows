@@ -21,6 +21,14 @@ from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo, neares
 log = logging.getLogger(__name__)
 
 INDIRECT_REASON = "Connected through a USB (DisplayLink), wireless or virtual display adapter, which can't pass DDC/CI brightness commands"
+# Why an external display didn't answer, in the order to try things: the
+# setting is off by default on many monitors, and adapters, hubs, MST and
+# docks often don't pass DDC/CI (Monitorian's and Twinkle Tray's FAQs).
+NO_DDC_REASON = (
+    "Didn't answer over DDC/CI. Turn DDC/CI on in the display's own menu; if it is on, "
+    "try another cable or port without adapters, hubs or docks"
+)
+TV_HINT = " (most TVs don't support it)"
 
 
 @dataclass
@@ -107,7 +115,8 @@ class WindowsBrightnessBackend:
                 elif target.output_technology in win32.INDIRECT_TECHNOLOGIES:
                     monitor = _Monitor(MonitorInfo(0, name, False, INDIRECT_REASON))
                 else:
-                    monitor = _Monitor(MonitorInfo(0, name, False))
+                    hdmi = target.output_technology == win32.OUTPUT_HDMI
+                    monitor = _Monitor(MonitorInfo(0, name, False, NO_DDC_REASON + (TV_HINT if hdmi else "")))
                 monitor.info = replace(monitor.info, key=target.hardware_id, internal=target.internal)
                 monitors.append(monitor)
             monitors += responding  # more answering monitors than targets; shouldn't happen
@@ -169,6 +178,20 @@ class WindowsBrightnessBackend:
             if exc.monitor_gone:
                 raise MonitorGoneError(monitor.info.name) from exc
             raise
+
+    def is_powered_on(self, index: int) -> bool | None:
+        """Whether a DDC/CI monitor says it is on (VCP 0xD6). None when it
+        can't tell: no answer, or a laptop panel (on while Windows runs)."""
+        monitor = self._monitors[index]
+        if monitor.handle is None or monitor.method not in ("vcp", "high-level"):
+            return None
+        try:
+            mode, _maximum = win32.get_vcp(monitor.handle, win32.VCP_POWER_MODE)
+        except win32.DdcError as exc:
+            if exc.monitor_gone:
+                raise MonitorGoneError(monitor.info.name) from exc
+            return None  # many monitors don't report it; treat as unknown
+        return mode == win32.POWER_ON
 
     def close(self) -> None:
         for monitor in self._monitors:

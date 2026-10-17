@@ -23,7 +23,7 @@ Both projects combine several APIs, because no single one gives everything:
 | WMI `root\wmi` `WmiMonitorBrightness` / `WmiMonitorBrightnessMethods` | Built-in laptop panel brightness and its supported levels | Both |
 | WinRT `DisplayMonitor` | Better names, connection kind | Monitorian, on Windows 10 1803+ |
 
-- ✅ `nightlight/hardware/win32.py` binds `QueryDisplayConfig`, `EnumDisplayMonitors`, dxva2 and GDI with ctypes. Names come from the EDID via `QueryDisplayConfig`, not from the DDC/CI capabilities string (see §6).
+- ✅ `nightlight/hardware/win32.py` binds `QueryDisplayConfig`, `EnumDisplayMonitors`, dxva2 and GDI with ctypes. Names come from the EDID via `QueryDisplayConfig`, not from the DDC/CI capabilities string (see §7).
 - ✅ The device path converts to a PnP instance id (`DISPLAY\BOE0812\4&...&UID265988`), which is how both projects match a WMI instance to a display.
 - ✅ The connector type marks built-in panels (LVDS, embedded DisplayPort or UDI, "internal") and "indirect" displays (DisplayLink/USB, Miracast, virtual), which have no DDC/CI channel.
 - ➖ WinRT `DisplayMonitor`: `QueryDisplayConfig` names have been good enough.
@@ -134,7 +134,27 @@ From Twinkle Tray's settings (its `en.json` strings) and Monitorian's README:
   - ✅ A fixed 100 ms throttle with only the latest value sent. 📋 Make it a setting if testing finds a monitor that flickers.
 - 📋 **Later:** hide and rename displays, reorder them (both); hotkeys and an on-screen overlay (Twinkle Tray, and Monitorian as a paid add-on); brightness by time of day and dimming when idle (Twinkle Tray); contrast and min/max range per monitor (Monitorian); scrolling over the tray icon (needs a native event filter, see §4).
 
-## 6. Quirks and issues they ran into
+## 6. External monitors and TVs: what to expect and how it's handled
+
+From Twinkle Tray's [display detection page](https://github.com/xanderfrangos/twinkle-tray/wiki/Display-Detection-&-Support-Issues) and [release notes](https://github.com/xanderfrangos/twinkle-tray/releases), Monitorian's [README](https://github.com/emoacht/Monitorian) and issues (e.g. [#50](https://github.com/emoacht/monitorian/issues/50), monitors uncontrollable after hibernation), and reports from other DDC/CI tools:
+
+| Problem | What the other projects say | Here |
+|---|---|---|
+| DDC/CI off in the monitor's menu, or blocked by a preset/mode | The most common cause (both FAQs) | ✅ The "not supported" text says to turn DDC/CI on, then to try another cable or port |
+| Hubs, converters, KVMs, MST and docks strip DDC/CI | Test without them; switching HDMI ↔ DisplayPort can help | ✅ Same advice in the "not supported" text; DisplayLink/USB displays get their own reason. 📋 Results by dock and adapter go in the test report |
+| TVs | "Most consumer TVs don't support it"; HDR TVs only have Windows' SDR brightness | ✅ HDMI displays that don't answer get "most TVs don't support it". 📋 SDR brightness for HDR displays (Monitorian, Twinkle Tray 1.17) and gamma "software dimming" for displays without DDC/CI (Twinkle Tray 1.18) |
+| NVIDIA Surround / AMD Eyefinity | Incompatible: several monitors merged into one virtual display | ➖ Documented in the test plan |
+| Old AMD drivers, hub firmware | Known DDC/CI problems; update drivers and dock firmware | ➖ Advice for reports |
+| Monitors that hang during detection | Twinkle Tray 1.18 added a "safety system" and retries; capability strings are the worst offender | ✅ No capability strings. A watchdog reports a call stuck for 10 s in the log and the flyout ("A display isn't responding…"), and quitting no longer waits for it |
+| DDC/CI to a sleeping monitor | Can wake it or, on some models, hang the firmware until it's unplugged; Twinkle Tray added "monitor power state detection" | ✅ Before restoring brightness (the only time the app writes unprompted), VCP 0xD6 is read; a monitor in standby or off is left alone and restored at a later reading. Monitors that don't report it are assumed awake |
+| Monitor not ready after sleep or plugging in | Both re-detect several times over 30–60 s | ✅ Re-detection at 2 and 8 s after changes, 5, 15 and 30 s after waking; restores wait for an answer |
+| Brightness reverting after hardware events, startup overwriting the current level | Fixed in Twinkle Tray 1.17/1.18 | ✅ Only levels set in the app are remembered; restores happen only on start, wake and reconnect |
+| Writes that are acknowledged but ignored | Monitorian notes `SetMonitorBrightness` may report success | 📋 `--probe` shows what a monitor answers; slider testing shows whether it obeys |
+| Monitors answering other codes than 0x10 | Twinkle Tray tries 0x13, 0x6B (and lets users pick a code) | ✅ `--probe` reports 0x12, 0x13 and 0x6B for each monitor. 📋 Fall back to them if testing finds such a monitor |
+| Flicker when written to quickly | Twinkle Tray's update rate setting goes up to 2 s | ✅ 100 ms throttle, latest value only. 📋 A setting if testing finds flicker |
+| A monitor turned off with its button and back on | DisplayPort monitors disappear and come back (a display change); HDMI ones often stay listed | ✅ Display changes re-detect. 📋 Monitorian also re-checks when Windows turns the display on |
+
+## 7. Quirks and issues they ran into
 
 - **Monitors aren't ready straight after a change.** After a display change, resume or sign-in, monitors often don't answer DDC/CI for several seconds.
   - Monitorian's timers tick at gaps of 1, 4, 5 and 10 s after a display settings change, so it re-scans 1, 5, 10 and 20 s afterwards. After resume it re-scans at 5, 10, 20, 30 and 60 s; after the display turns on at 5 and 10 s; and after sign-in at 30 and 60 s. It ignores display changes while the display is off.

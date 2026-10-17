@@ -93,3 +93,62 @@ def test_scaling_helpers():
     assert valid_range(0, 30, 100) and not valid_range(0, 0, 0) and not valid_range(0, 120, 100)
     assert nearest_level([0, 25, 50, 75, 100], 60) == 50
     assert nearest_level([], 60) == 60
+
+
+class PoweredBackend(SlowBackend):
+    def __init__(self, awake):
+        super().__init__(delay=0)
+        self.awake = awake
+
+    def is_powered_on(self, index):
+        return self.awake
+
+
+@pytest.mark.parametrize("awake", [True, None])  # None: the monitor can't tell, so assume awake
+def test_restore_sets_an_awake_monitor(manager, awake):
+    backend = PoweredBackend(awake)
+    monitors = manager(backend)
+    monitors.refresh()
+    assert wait_until(lambda: 0 in monitors.brightness)  # detection, including its first reading, is done
+    changed, deferred = [], []
+    monitors.brightnessChanged.connect(lambda i, v: changed.append((i, v)))
+    monitors.restoreDeferred.connect(deferred.append)
+    monitors.restore_brightness(0, 30)
+    assert wait_until(lambda: changed)
+    assert backend.sets == [30] and changed == [(0, 30)] and deferred == []
+
+
+def test_restore_leaves_a_sleeping_monitor_alone(manager):
+    backend = PoweredBackend(False)
+    monitors = manager(backend)
+    monitors.refresh()
+    assert wait_until(lambda: 0 in monitors.brightness)
+    deferred = []
+    monitors.restoreDeferred.connect(deferred.append)
+    monitors.restore_brightness(0, 30)
+    assert wait_until(lambda: deferred)
+    assert deferred == [0] and backend.sets == []  # nothing sent: it could wake or hang it
+
+
+def test_a_hung_monitor_call_is_reported_and_quitting_does_not_wait_for_it(monkeypatch):
+    from nightlight import monitors as monitors_module
+
+    monkeypatch.setattr(monitors_module, "HANG_WARNING_S", 0.1)
+    monkeypatch.setattr(monitors_module, "WATCHDOG_INTERVAL_MS", 50)
+    monkeypatch.setattr(monitors_module, "SHUTDOWN_WAIT_MS", 200)
+    backend = SlowBackend()
+    backend.release.clear()  # list_monitors blocks, like a monitor that never answers
+    monitors = MonitorManager(backend)
+    errors = []
+    monitors.error.connect(errors.append)
+    monitors.refresh()
+    assert wait_until(lambda: errors)
+    assert "isn't responding" in errors[0] and "detecting monitors" in errors[0]
+    assert len(errors) == 1  # once per stuck call, not on every check
+    QTest.qWait(150)
+    assert len(errors) == 1
+    started = time.monotonic()
+    monitors.shutdown()
+    assert time.monotonic() - started < 1 and monitors.hung
+    backend.release.set()  # let the thread finish so the test run can end cleanly
+    monitors._thread.wait(2000)

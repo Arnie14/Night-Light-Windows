@@ -19,11 +19,13 @@ class FakeManager(QObject):
     monitorsChanged = Signal(list)
     brightnessChanged = Signal(int, object)
     brightnessSet = Signal(int, int)
+    restoreDeferred = Signal(int)
 
     def __init__(self):
         super().__init__()
         self.monitors = []
         self.sent = []  # (index, value) set on the hardware
+        self.asleep = set()  # indexes whose power state says standby/off
 
     def monitor(self, index):
         return next((m for m in self.monitors if m.index == index), None)
@@ -39,6 +41,13 @@ class FakeManager(QObject):
     def set_brightness(self, index, value):  # same order as MonitorManager
         self.sent.append((index, value))
         self.brightnessSet.emit(index, value)
+        self.brightnessChanged.emit(index, value)
+
+    def restore_brightness(self, index, value):  # as MonitorManager's worker answers
+        if index in self.asleep:
+            self.restoreDeferred.emit(index)
+            return
+        self.sent.append((index, value))
         self.brightnessChanged.emit(index, value)
 
 
@@ -148,3 +157,19 @@ def test_corrupt_or_odd_files_are_ignored(tmp_path):
     assert brightness_memory.load(path) == {}
     path.write_text(json.dumps({"levels": {"A": 50, "B": "high", "C": 150, "D": True}}))
     assert brightness_memory.load(path) == {"A": 50, "C": 100}
+
+
+def test_sleeping_monitor_is_restored_once_awake(tmp_path):
+    manager, _, _ = make(tmp_path, {"DEL41A2": 30})
+    manager.asleep.add(0)
+    manager.detect([DELL], {0: 100})  # answers reads, but its power state says standby
+    assert manager.sent == []
+    manager.asleep.clear()
+    manager.detect([DELL], {0: 100})  # the next detection, now awake
+    assert manager.sent == [(0, 30)]
+
+
+def test_restores_do_not_count_as_the_users_choice(tmp_path):
+    manager, memory, _ = make(tmp_path, {"DEL41A2": 30})
+    manager.detect([DELL], {0: 100})
+    assert manager.sent == [(0, 30)] and memory.levels == {"DEL41A2": 30}

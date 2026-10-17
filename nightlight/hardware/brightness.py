@@ -53,6 +53,9 @@ class BrightnessBackend(Protocol):
     def get_brightness(self, index: int) -> int | None: ...
     def set_brightness(self, index: int, value: int) -> None: ...
 
+    # Optional: is_powered_on(index) -> bool | None, whether the monitor is
+    # awake (None: it can't tell). Checked before restoring brightness.
+
 
 def to_percent(raw: int, minimum: int, maximum: int) -> int:
     """A monitor's raw brightness as 0-100. Monitors report their own range:

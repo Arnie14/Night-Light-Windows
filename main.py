@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import argparse
+import os
 import logging
 import logging.handlers
 import signal
@@ -69,6 +70,11 @@ def main() -> int:
     instance.activated.connect(night_light.show_panel)
     instance.quitRequested.connect(app.quit)
     exit_code = app.exec()
+    if night_light.monitors.hung:
+        # A display's DDC/CI call never returned and can't be interrupted;
+        # don't wait for it (night light was already reset, settings saved).
+        logging.shutdown()
+        os._exit(exit_code)
     del night_light  # kept alive until here: Qt objects it owns must outlive the event loop
     return exit_code
 
