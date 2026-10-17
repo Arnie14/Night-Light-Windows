@@ -34,6 +34,7 @@ def main() -> int:
         help="print a report of what Windows says about each display, then exit. Read-only, "
         "except that it briefly tints each display to find the warmest night light Windows allows",
     )
+    parser.add_argument("--quit", action="store_true", help="ask a running copy to quit (restoring normal colors), then exit")
     parser.add_argument("--allow-multiple", action="store_true", help="don't stop a second copy from starting")
     args = parser.parse_args()
 
@@ -53,6 +54,11 @@ def main() -> int:
         return probe.run(args.backend, log_file.parent if log_file else None)
 
     instance = SingleInstance()
+    if args.quit:
+        # Used by the installer and uninstaller: a clean exit resets the gamma ramps.
+        running = instance.send(b"quit")
+        log.info("Asked the running copy to quit" if running else "No running copy to quit")
+        return 0
     if not args.allow_multiple and instance.notify_running():
         log.info("Night Light is already running; asked it to show its panel")
         return 0
@@ -61,6 +67,7 @@ def main() -> int:
     brightness, gamma = create_backends(args.backend)
     night_light = NightLightApp(app, brightness, gamma, args.config or config.default_path())
     instance.activated.connect(night_light.show_panel)
+    instance.quitRequested.connect(app.quit)
     exit_code = app.exec()
     del night_light  # kept alive until here: Qt objects it owns must outlive the event loop
     return exit_code
