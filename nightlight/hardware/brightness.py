@@ -1,13 +1,14 @@
-"""Display backends: the layer that actually talks to monitor hardware.
+"""Brightness backends: the layer that actually talks to monitor hardware.
 
 Every backend exposes the same small interface so the UI never needs to know
 whether it is driving real DDC/CI monitors or fake ones used for development.
-All methods may be slow and must only be called from the worker thread.
+All methods may be slow and must only be called from the monitor worker thread.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -21,7 +22,7 @@ class MonitorInfo:
     supported: bool  # False when the monitor doesn't respond to DDC/CI
 
 
-class DisplayBackend(Protocol):
+class BrightnessBackend(Protocol):
     def list_monitors(self) -> list[MonitorInfo]: ...
     def get_brightness(self, index: int) -> int | None: ...
     def set_brightness(self, index: int, value: int) -> None: ...
@@ -71,10 +72,15 @@ class DdcBackend:
             monitor.set_luminance(value)
 
 
-class FakeBackend:
-    """In-memory monitors for working on the UI without DDC/CI hardware."""
+class FakeBrightnessBackend:
+    """In-memory monitors for working without DDC/CI hardware.
 
-    def __init__(self) -> None:
+    Calls sleep for `latency` seconds to mimic how slow real DDC/CI is, so
+    UI responsiveness problems show up during development too.
+    """
+
+    def __init__(self, latency: float = 0.15) -> None:
+        self._latency = latency
         self._monitors = [
             MonitorInfo(0, "Fake Monitor 1 (DELL U2720Q)", True),
             MonitorInfo(1, "Fake Monitor 2 (LG 27GL850)", True),
@@ -83,11 +89,14 @@ class FakeBackend:
         self._brightness = {0: 70, 1: 40}
 
     def list_monitors(self) -> list[MonitorInfo]:
+        time.sleep(self._latency * len(self._monitors))
         return list(self._monitors)
 
     def get_brightness(self, index: int) -> int | None:
+        time.sleep(self._latency)
         return self._brightness.get(index)
 
     def set_brightness(self, index: int, value: int) -> None:
+        time.sleep(self._latency)
         log.info("Fake monitor %d brightness -> %d", index, value)
         self._brightness[index] = value

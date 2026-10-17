@@ -1,16 +1,26 @@
 import argparse
 import logging
+import signal
 import sys
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
-from nightlight.backends import DdcBackend, FakeBackend
-from nightlight.ui.main_window import MainWindow
+from nightlight import config
+from nightlight.app import NightLightApp
+from nightlight.hardware import create_backends
+from nightlight.ui import icons
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Night Light for Windows")
-    parser.add_argument("--fake", action="store_true", help="use fake monitors (no hardware needed)")
+    parser.add_argument(
+        "--backend",
+        choices=["auto", "real", "fake"],
+        default="auto",
+        help="hardware backend: real monitors, fake ones, or auto (real on Windows, fake elsewhere)",
+    )
+    parser.add_argument("--config", type=Path, help="settings file to use instead of the default")
     parser.add_argument("--debug", action="store_true", help="verbose logging")
     args = parser.parse_args()
 
@@ -19,11 +29,14 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    # Let Ctrl+C in the terminal quit; Qt's event loop otherwise swallows it.
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
     app = QApplication(sys.argv)
     app.setApplicationName("Night Light")
-    backend = FakeBackend() if args.fake else DdcBackend()
-    window = MainWindow(backend)
-    window.show()
+    app.setWindowIcon(icons.night_icon())
+    brightness, gamma = create_backends(args.backend)
+    _night_light = NightLightApp(app, brightness, gamma, args.config or config.default_path())
     return app.exec()
 
 
