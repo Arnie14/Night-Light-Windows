@@ -4,12 +4,13 @@
 # - Push a version tag (git tag v0.1.0-beta.1 && git push origin v0.1.0-beta.1)
 #   to publish a GitHub release with the files. Tags with a "-" (beta, rc)
 #   become pre-releases.
-# - Or run it by hand from the Actions tab to just get the files as a
-#   downloadable artifact, without a release.
+# - A push to main, or running it by hand from the Actions tab, tests and
+#   builds the files as a downloadable artifact, without a release.
 name: Build Windows app
 
 on:
   push:
+    branches: [main]  # tests and builds the files as an artifact, no release
     tags: ["v*"]
   workflow_dispatch:
 
@@ -29,10 +30,11 @@ jobs:
           cache-dependency-path: requirements*.txt
 
       - name: Install dependencies
-        run: python -m pip install -r requirements-dev.txt -r requirements-build.txt
+        run: python -m pip install -r requirements-dev.txt -r requirements-build.txt pytest-github-actions-annotate-failures
 
       - name: Test
-        run: python -m pytest -q
+        # Failures also appear as annotations on the run, readable without logs.
+        run: python -m pytest -q --tb=short -ra
 
       - name: Make sure Inno Setup is installed
         shell: pwsh
