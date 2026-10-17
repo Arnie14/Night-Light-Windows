@@ -199,6 +199,6 @@ With a build from [Releases](https://github.com/Arnie14/Night-Light-Windows/rele
 ## What to send back
 
 - `probe.txt` and `night-light.log`, both from `%LOCALAPPDATA%\night-light\Logs\`.
-- The screenshots from §9.
+- The screenshots.
 - The failing checklist items, with what happened instead.
 - The output of `pytest`, if anything failed.
