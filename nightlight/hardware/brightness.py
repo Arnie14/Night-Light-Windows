@@ -21,6 +21,12 @@ class MonitorInfo:
     index: int
     name: str
     supported: bool  # False when the monitor doesn't respond to DDC/CI
+    reason: str = ""  # why it isn't supported, when the backend knows better than "no DDC/CI"
+
+
+class MonitorGoneError(Exception):
+    """The monitor disappeared (unplugged, or the displays were reconfigured);
+    the monitor list is out of date and should be detected again."""
 
 
 class BrightnessBackend(Protocol):
@@ -29,8 +35,31 @@ class BrightnessBackend(Protocol):
     def set_brightness(self, index: int, value: int) -> None: ...
 
 
+def to_percent(raw: int, minimum: int, maximum: int) -> int:
+    """A monitor's raw brightness as 0-100. Monitors report their own range:
+    as Monitorian notes, the minimum is not always 0 nor the maximum 100."""
+    return round((raw - minimum) * 100 / (maximum - minimum))
+
+
+def to_raw(percent: int, minimum: int, maximum: int) -> int:
+    return round(minimum + percent * (maximum - minimum) / 100)
+
+
+def valid_range(minimum: int, current: int, maximum: int) -> bool:
+    return minimum < maximum and minimum <= current <= maximum
+
+
+def nearest_level(levels: list[int], value: int) -> int:
+    """The supported level closest to `value`; laptop panels often offer only a
+    few (WMI reports them), and other values are rejected or rounded oddly."""
+    return min(levels, key=lambda level: (abs(level - value), level)) if levels else value
+
+
 class DdcBackend:
-    """External monitors over DDC/CI, using the `monitorcontrol` library."""
+    """External monitors over DDC/CI on Linux (i2c-dev), using the `monitorcontrol` library.
+
+    Windows uses nightlight.hardware.windows instead, which also handles laptop panels.
+    """
 
     def __init__(self) -> None:
         self._monitors: list = []

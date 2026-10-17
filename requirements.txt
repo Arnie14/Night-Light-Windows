@@ -1,5 +1,6 @@
 PySide6>=6.8
-monitorcontrol>=3.1
 astral>=3.2
 platformdirs>=4.0
+wmi>=1.5.1; sys_platform == "win32"  # built-in laptop panel brightness (installs pywin32)
+monitorcontrol>=3.1; sys_platform == "linux"  # DDC/CI for the "real" backend on Linux
 jeepney>=0.8; sys_platform == "linux"  # KDE development backend only

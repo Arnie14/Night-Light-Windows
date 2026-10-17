@@ -91,6 +91,50 @@ def whitepoint(kelvin: float) -> Whitepoint:
     return tuple(a * (1 - blend) + b * blend for a, b in zip(low, high))
 
 
-def gamma_ramp(wp: Whitepoint, size: int = 256) -> list[list[int]]:
-    """Three 16-bit ramps (R, G, B) of `size` entries, scaled by the whitepoint."""
-    return [[min(65535, round(i * 65535 / (size - 1) * factor)) for i in range(size)] for factor in wp]
+def gamma_ramp(wp: Whitepoint, size: int = 256, base: list[list[int]] | None = None) -> list[list[int]]:
+    """Three 16-bit ramps (R, G, B) of `size` entries, scaled by the whitepoint.
+
+    `base` is the ramp to tint, such as a monitor's calibration; the default
+    is the identity ramp.
+    """
+    if base is None:
+        base = identity_ramp(size)
+    return [[min(65535, round(value * factor)) for value in channel] for channel, factor in zip(base, wp)]
+
+
+def identity_ramp(size: int = 256) -> list[list[int]]:
+    return [[round(i * 65535 / (size - 1)) for i in range(size)] for _ in range(3)]
+
+
+# A ramp whose channels all still reach this share of full output is taken
+# to be a calibration (or the identity), not a leftover tint from a night
+# light: warming always pulls the blue channel's top well below full.
+PLAUSIBLE_BASE_PEAK = 0.9
+
+
+def plausible_base(ramp: list[list[int]]) -> bool:
+    """Whether a ramp found on a display is worth keeping as the base to tint.
+
+    Gamma ramps outlive the app, so the ramp found at startup may be our own
+    tint from a crashed session, or another tool's (f.lux, Windows Night
+    Light); tinting that again would compound it.
+    """
+    if len(ramp) != 3:
+        return False
+    for channel in ramp:
+        if not channel or channel[-1] < PLAUSIBLE_BASE_PEAK * 65535:
+            return False
+        if any(b < a for a, b in zip(channel, channel[1:])):
+            return False
+    return True
+
+
+# Drivers may keep fewer than 16 bits per entry, so a ramp read back can
+# differ slightly from the one set (same tolerance as Twinkle Tray).
+RAMP_TOLERANCE = 256
+
+
+def ramps_match(a: list[list[int]], b: list[list[int]], tolerance: int = RAMP_TOLERANCE) -> bool:
+    if len(a) != len(b):
+        return False
+    return all(len(x) == len(y) and all(abs(p - q) <= tolerance for p, q in zip(x, y)) for x, y in zip(a, b))
