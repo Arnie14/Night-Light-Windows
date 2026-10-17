@@ -182,6 +182,13 @@ class DisplayTarget:
     def instance_id(self) -> str:
         return instance_id_from_device_path(self.device_path)
 
+    @property
+    def hardware_id(self) -> str:
+        """The EDID manufacturer and product code, e.g. "DEL41A2". Unlike the
+        instance id it stays the same when the monitor moves to another port."""
+        parts = self.instance_id.split("\\")
+        return parts[1] if len(parts) >= 2 else ""
+
 
 def instance_id_from_device_path(path: str) -> str:
     r"""Turn a monitor device path into its PnP instance id, which WMI's

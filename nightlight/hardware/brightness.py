@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 log = logging.getLogger(__name__)
@@ -22,6 +22,25 @@ class MonitorInfo:
     name: str
     supported: bool  # False when the monitor doesn't respond to DDC/CI
     reason: str = ""  # why it isn't supported, when the backend knows better than "no DDC/CI"
+    # Identifies the monitor across reconnects, for remembering its settings.
+    # Not the Windows device instance id: that changes with the port or cable
+    # (Monitorian's README), so the EDID's manufacturer and product code are
+    # used where known. Identical monitors are told apart by order ("#2").
+    key: str = ""
+    internal: bool = False  # a laptop's built-in panel
+
+
+def with_unique_keys(monitors: list[MonitorInfo]) -> list[MonitorInfo]:
+    """Fill in missing keys from the name, and number repeated ones."""
+    seen: dict[str, int] = {}
+    result = []
+    for monitor in monitors:
+        key = monitor.key or f"name:{monitor.name}"
+        seen[key] = seen.get(key, 0) + 1
+        if seen[key] > 1:
+            key = f"{key}#{seen[key]}"
+        result.append(replace(monitor, key=key))
+    return result
 
 
 class MonitorGoneError(Exception):
@@ -112,9 +131,9 @@ class FakeBrightnessBackend:
     def __init__(self, latency: float = 0.15) -> None:
         self._latency = latency
         self._monitors = [
-            MonitorInfo(0, "Fake Monitor 1 (DELL U2720Q)", True),
-            MonitorInfo(1, "Fake Monitor 2 (LG 27GL850)", True),
-            MonitorInfo(2, "Fake Monitor 3 (no DDC/CI)", False),
+            MonitorInfo(0, "Fake Monitor 1 (DELL U2720Q)", True, key="DEL41A2"),
+            MonitorInfo(1, "Fake Monitor 2 (LG 27GL850)", True, key="GSM5B7F"),
+            MonitorInfo(2, "Fake Monitor 3 (no DDC/CI)", False, key="ACI27A1"),
         ]
         self._brightness = {0: 70, 1: 40}
 

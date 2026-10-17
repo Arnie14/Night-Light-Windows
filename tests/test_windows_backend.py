@@ -123,6 +123,26 @@ def test_cloned_displays_get_the_handle_that_answers(monkeypatch):
     assert wmi.set_calls == [(r"DISPLAY\BOE0812\4&2a6&0&UID26_0", 50)]  # nearest supported level
 
 
+def test_keys_come_from_the_edid_and_survive_a_port_change(monkeypatch):
+    def dell(uid):  # the same monitor on another port gets another instance id
+        return rf"\\?\DISPLAY#DEL41A2#5&1a2b&0&UID{uid}#{{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}}"
+
+    keys = []
+    for uid in ("4352", "8448"):
+        ddc = FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x"), PhysicalMonitor(r"\\.\DISPLAY2", 8, "y")], {7: (40, 100), 8: (40, 100)})
+        # Two identical monitors: the second is told apart by order.
+        ddc.install(monkeypatch, [target(r"\\.\DISPLAY1", "DELL", path=dell(uid)), target(r"\\.\DISPLAY2", "DELL", path=dell("1"))])
+        keys.append([m.key for m in backend_with().list_monitors()])
+    assert keys == [["DEL41A2", "DEL41A2#2"]] * 2
+
+
+def test_built_in_panel_is_marked_internal(monkeypatch):
+    path = r"\\?\DISPLAY#BOE0812#4&2a6&0&UID26#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+    FakeDdc([], {}).install(monkeypatch, [target(r"\\.\DISPLAY1", "", INTERNAL, path=path)])
+    [panel] = backend_with(FakeWmi([(r"DISPLAY\BOE0812\4&2a6&0&UID26_0", 80, [])])).list_monitors()
+    assert (panel.key, panel.internal) == ("BOE0812", True)
+
+
 def test_internal_panel_without_wmi_explains_why(monkeypatch):
     FakeDdc([], {}).install(monkeypatch, [target(r"\\.\DISPLAY1", "", INTERNAL)])
     backend = backend_with(FakeWmi([]))

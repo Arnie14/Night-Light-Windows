@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterable
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
-from nightlight.hardware.brightness import BrightnessBackend, MonitorGoneError, MonitorInfo
+from nightlight.hardware.brightness import BrightnessBackend, MonitorGoneError, MonitorInfo, with_unique_keys
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +90,10 @@ class _Worker(QObject):
 
 class MonitorManager(QObject):
     monitorsChanged = Signal(list)  # list[MonitorInfo]
-    brightnessChanged = Signal(int, object)  # index, int | None
+    # A monitor's brightness as last read or set: index, int | None.
+    brightnessChanged = Signal(int, object)
+    # Brightness was set from the app (a slider, linked monitors, a restore): index, value.
+    brightnessSet = Signal(int, int)
     error = Signal(str)
 
     # Requests to the worker thread.
@@ -160,6 +163,10 @@ class MonitorManager(QObject):
 
     def set_brightness(self, index: int, value: int) -> None:
         self.brightness[index] = value
+        # brightnessSet first: it tells BrightnessMemory the user picked this
+        # level, before brightnessChanged could make a pending restore undo it.
+        self.brightnessSet.emit(index, value)
+        self.brightnessChanged.emit(index, value)
         with self._pending_lock:
             queued = index in self._pending
             self._pending[index] = value
@@ -175,7 +182,11 @@ class MonitorManager(QObject):
         with self._pending_lock:
             return self._pending.pop(index, None)
 
+    def monitor(self, index: int) -> MonitorInfo | None:
+        return next((m for m in self.monitors if m.index == index), None)
+
     def _on_monitors_found(self, monitors: list[MonitorInfo]) -> None:
+        monitors = with_unique_keys(monitors)
         self.monitors = monitors
         self.brightness = {}
         self.monitorsChanged.emit(monitors)

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field, replace
 
 from nightlight.core.colortemp import NEUTRAL_KELVIN, gamma_ramp, identity_ramp, plausible_base, ramps_match, whitepoint
 from nightlight.hardware import win32
-from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo, nearest_level, to_percent, to_raw, valid_range
+from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo, nearest_level, to_percent, to_raw, valid_range, with_unique_keys
 
 log = logging.getLogger(__name__)
 
@@ -100,15 +100,16 @@ class WindowsBrightnessBackend:
             for target in group:
                 name = target.friendly_name or ("Built-in display" if target.internal else f"{target.connector} display")
                 if target.internal:
-                    monitors.append(self._panel(name, target, panels))
+                    monitor = self._panel(name, target, panels)
                 elif responding:
                     monitor = responding.pop(0)
                     monitor.info = replace(monitor.info, name=name)
-                    monitors.append(monitor)
                 elif target.output_technology in win32.INDIRECT_TECHNOLOGIES:
-                    monitors.append(_Monitor(MonitorInfo(0, name, False, INDIRECT_REASON)))
+                    monitor = _Monitor(MonitorInfo(0, name, False, INDIRECT_REASON))
                 else:
-                    monitors.append(_Monitor(MonitorInfo(0, name, False)))
+                    monitor = _Monitor(MonitorInfo(0, name, False))
+                monitor.info = replace(monitor.info, key=target.hardware_id, internal=target.internal)
+                monitors.append(monitor)
             monitors += responding  # more answering monitors than targets; shouldn't happen
 
         # Displays the display configuration didn't describe (or it failed).
@@ -116,11 +117,12 @@ class WindowsBrightnessBackend:
             for physical in physicals:
                 monitors.append(self._probe(physical) or _Monitor(MonitorInfo(0, physical.description, False)))
         for instance, current, levels in panels:
-            monitors.append(_Monitor(MonitorInfo(0, "Built-in display", True), "wmi", wmi_instance=instance, levels=levels, detected=current))
+            info = MonitorInfo(0, "Built-in display", True, key="internal", internal=True)
+            monitors.append(_Monitor(info, "wmi", wmi_instance=instance, levels=levels, detected=current))
 
-        for i, monitor in enumerate(monitors):
-            monitor.info = replace(monitor.info, index=i)
-            log.info("Monitor %d: %s (%s)", i, monitor.info.name, monitor.method if monitor.info.supported else "not supported")
+        for monitor, info in zip(monitors, with_unique_keys([replace(m.info, index=i) for i, m in enumerate(monitors)])):
+            monitor.info = info
+            log.info("Monitor %d: %s [%s] (%s)", info.index, info.name, info.key, monitor.method if info.supported else "not supported")
         self._monitors = monitors
         return [m.info for m in monitors]
 
