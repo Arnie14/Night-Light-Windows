@@ -67,6 +67,9 @@ class NightLightApp:
         qapp.aboutToQuit.connect(self._shutdown)
         self.monitors.refresh()
 
+    def show_panel(self) -> None:
+        self.flyout.show_near(self.tray.geometry() if self.tray else None)
+
     def show_settings(self) -> None:
         if self._settings is None:
             self._settings = SettingsWindow(self.controller)
