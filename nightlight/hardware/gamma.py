@@ -1,4 +1,4 @@
-"""Gamma backends: apply a night light whitepoint to the displays.
+"""Gamma backends: apply a night light colour temperature to the displays.
 
 Night light is global, as in KDE: the same ramp goes to every display.
 """
@@ -9,29 +9,33 @@ import logging
 import sys
 from typing import Protocol
 
-from nightlight.core.colortemp import NEUTRAL_WHITEPOINT, Whitepoint, gamma_ramp
+from nightlight.core.colortemp import NEUTRAL_KELVIN, Whitepoint, gamma_ramp, whitepoint
 
 log = logging.getLogger(__name__)
 
 
 class GammaBackend(Protocol):
-    def apply(self, whitepoint: Whitepoint) -> None: ...
+    def apply(self, kelvin: int) -> None: ...
     def reset(self) -> None: ...
 
 
 class FakeGammaBackend:
-    """Remembers and logs the whitepoint instead of touching any display."""
+    """Remembers and logs the temperature instead of touching any display."""
 
     def __init__(self) -> None:
-        self.whitepoint: Whitepoint = NEUTRAL_WHITEPOINT
+        self.kelvin = NEUTRAL_KELVIN
 
-    def apply(self, whitepoint: Whitepoint) -> None:
-        if whitepoint != self.whitepoint:
-            log.info("Fake gamma -> r=%.3f g=%.3f b=%.3f", *whitepoint)
-        self.whitepoint = whitepoint
+    @property
+    def whitepoint(self) -> Whitepoint:
+        return whitepoint(self.kelvin)
+
+    def apply(self, kelvin: int) -> None:
+        if kelvin != self.kelvin:
+            log.info("Fake gamma -> %d K (r=%.3f g=%.3f b=%.3f)", kelvin, *whitepoint(kelvin))
+        self.kelvin = kelvin
 
     def reset(self) -> None:
-        self.apply(NEUTRAL_WHITEPOINT)
+        self.apply(NEUTRAL_KELVIN)
 
 
 if sys.platform == "win32":
@@ -69,9 +73,9 @@ if sys.platform == "win32":
         def __init__(self) -> None:
             self._warned: set[str] = set()
 
-        def apply(self, whitepoint: Whitepoint) -> None:
+        def apply(self, kelvin: int) -> None:
             ramp = ((wintypes.WORD * _RAMP_SIZE) * 3)()
-            for c, channel in enumerate(gamma_ramp(whitepoint, _RAMP_SIZE)):
+            for c, channel in enumerate(gamma_ramp(whitepoint(kelvin), _RAMP_SIZE)):
                 for i, value in enumerate(channel):
                     ramp[c][i] = value
             for name in self._display_names():
@@ -88,7 +92,7 @@ if sys.platform == "win32":
                     _gdi32.DeleteDC(hdc)
 
         def reset(self) -> None:
-            self.apply(NEUTRAL_WHITEPOINT)
+            self.apply(NEUTRAL_KELVIN)
 
         def _warn_once(self, key: str, message: str, *args) -> None:
             if key not in self._warned:

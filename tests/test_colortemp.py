@@ -15,6 +15,17 @@ def test_lower_is_warmer():
     assert whitepoint(2000)[2] < whitepoint(4000)[2] < whitepoint(6000)[2]
 
 
+def test_matches_kde_redshift_table():
+    assert whitepoint(1000) == (1.0, 0.18172716, 0.0)
+    assert whitepoint(4500) == (1.0, 0.86860704, 0.73688797)
+
+
+def test_interpolates_between_table_entries():
+    low, high, mid = whitepoint(3400), whitepoint(3500), whitepoint(3450)
+    for a, b, m in zip(low, high, mid):
+        assert abs(m - (a + b) / 2) < 1e-9
+
+
 def test_out_of_range_is_clamped():
     assert whitepoint(10_000) == whitepoint(6500)
     assert whitepoint(100) == whitepoint(1000)

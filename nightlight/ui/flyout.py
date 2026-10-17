@@ -10,17 +10,18 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QToolButton,
     QVBoxLayout,
-    QWidget,
 )
 
 from nightlight.controller import NightLightController
 from nightlight.hardware.brightness import MonitorInfo
 from nightlight.monitors import MonitorManager
 from nightlight.ui import icons
-from nightlight.ui.widgets import MonitorBrightness, night_light_status
+from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status
+from nightlight.ui.widgets import MonitorBrightness
 
 
 class Flyout(QFrame):
@@ -66,14 +67,20 @@ class Flyout(QFrame):
 
         night = QHBoxLayout()
         self._night_icon = QLabel()
+        night_labels = QVBoxLayout()
+        night_labels.setSpacing(0)
+        night_labels.addWidget(QLabel("Night Light"))
         self._night_text = QLabel()
         self._night_text.setWordWrap(True)
+        self._night_text.setEnabled(False)
+        night_labels.addWidget(self._night_text)
+        self._override_menu = QMenu(self)
         self._toggle = QPushButton()
-        self._toggle.clicked.connect(lambda: controller.set_inhibited(not controller.inhibited))
+        self._toggle.clicked.connect(self._on_toggle_clicked)
         configure = QToolButton(text="⚙", toolTip="Configure Night Light…")
         configure.clicked.connect(self.configureRequested)
         night.addWidget(self._night_icon)
-        night.addWidget(self._night_text, 1)
+        night.addLayout(night_labels, 1)
         night.addWidget(self._toggle)
         night.addWidget(configure)
         layout.addLayout(night)
@@ -146,8 +153,13 @@ class Flyout(QFrame):
 
     def _update_night_light(self) -> None:
         controller = self._controller
-        night = controller.config.enabled and not controller.inhibited and controller.state.night_factor > 0
-        self._night_icon.setPixmap((icons.night_icon() if night else icons.day_icon()).pixmap(22, 22))
+        self._night_icon.setPixmap((icons.night_icon() if is_night_light_on(controller) else icons.day_icon()).pixmap(22, 22))
         self._night_text.setText(night_light_status(controller))
-        self._toggle.setVisible(controller.config.enabled)
-        self._toggle.setText("Resume" if controller.inhibited else "Suspend")
+        if self._override_menu.isVisible():
+            return  # don't rebuild the menu under the user's cursor
+        self._toggle.setText(build_override_menu(controller, self._override_menu))
+        self._toggle.setMenu(None if self._override_menu.isEmpty() else self._override_menu)
+
+    def _on_toggle_clicked(self) -> None:
+        # Only reached without a menu, i.e. while an override is active.
+        self._controller.clear_override()

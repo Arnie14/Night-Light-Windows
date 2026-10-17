@@ -10,14 +10,28 @@ from nightlight.hardware.gamma import FakeGammaBackend, GammaBackend
 
 log = logging.getLogger(__name__)
 
+BACKENDS = ("auto", "real", "kde", "fake")
+
 
 def create_backends(kind: str = "auto") -> tuple[BrightnessBackend, GammaBackend]:
-    """`kind` is "real", "fake", or "auto" (real on Windows, fake elsewhere)."""
+    """`kind` is one of BACKENDS. "auto" picks real on Windows, KDE on a Plasma
+    desktop, and fake otherwise. Must be called after QApplication exists."""
     if kind == "auto":
-        kind = "real" if sys.platform == "win32" else "fake"
+        if sys.platform == "win32":
+            kind = "real"
+        else:
+            from nightlight.hardware import kde
+
+            kind = "kde" if kde.is_available() else "fake"
+
     if kind == "fake":
         log.info("Using fake monitors and fake gamma")
         return FakeBrightnessBackend(), FakeGammaBackend()
+    if kind == "kde":
+        from nightlight.hardware.kde import KdeBrightnessBackend, KWinNightLightBackend
+
+        log.info("Using KDE Plasma (PowerDevil brightness, KWin night light)")
+        return KdeBrightnessBackend(), KWinNightLightBackend()
 
     if sys.platform == "win32":
         from nightlight.hardware.gamma import WindowsGammaBackend

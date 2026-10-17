@@ -4,16 +4,20 @@ A lightweight Windows app that gives users control over screen brightness and ni
 
 Inspired by the display controls in KDE Plasma on Linux, this app brings similar functionality to Windows, especially for multi-monitor setups where native support falls short.
 
-## ✨ Features (Planned & In Progress)
+## ✨ Features
 
-- ✅ Custom GUI built with Python and Qt
-- 🔆 Per-monitor brightness adjustment (DDC/CI for external monitors, WMI for built-in laptop panels)
-- 🌙 Night light with an adjustable color temperature slider (warm color shift)
-- ⏰ Scheduling: manual times and sunrise/sunset, with gradual transitions
-- 🖥️ Multi-display support with automatic detection of connected or disconnected monitors
-- 📌 System tray integration with a quick-access flyout
-- 💾 Settings persistence
-- ⚠️ Clear "not supported" state for monitors that don't expose DDC/CI
+Status: ✅ built and tested on Linux · 🧪 built, untested on Windows · 📋 planned
+
+- ✅ Custom GUI built with Python and Qt, modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings
+- 🧪 Per-monitor brightness adjustment (DDC/CI for external monitors)
+- 📋 Laptop panel brightness via WMI
+- 🧪 Night light with an adjustable color temperature (warm color shift) and a live preview while dragging the slider
+- ✅ Scheduling: custom times or sunrise/sunset at a manual location, with gradual transitions
+- ✅ Suspend or activate Night Light temporarily (1 hour, until the next change, or until turned off)
+- 🧪 System tray integration with a quick-access flyout
+- ✅ Settings persistence
+- ✅ Clear "not supported" state for monitors that don't expose DDC/CI
+- 📋 Automatic detection of monitors being connected or disconnected (currently a manual refresh button)
 
 ## 🎯 Goals
 
@@ -42,6 +46,8 @@ This project addresses those gaps with DDC/CI for hardware brightness and softwa
 | Scheduling | `QTimer` + `astral` (sunrise/sunset) |
 | Settings | JSON stored with `platformdirs` |
 | Packaging | PyInstaller |
+
+On a KDE Plasma desktop the app drives Plasma's own brightness and Night Light services (via `jeepney`) so it can be developed and tried without Windows. See [Development](#-development).
 
 ## ⚠️ Known Challenges
 
@@ -77,15 +83,61 @@ It is also a learning-focused project designed to:
 - Handle cross-device compatibility (DDC/CI, multi-monitor)
 - Use AI tools (like ChatGPT or Copilot) effectively in software development
 
-## 🚀 Getting Started (For Devs)
+## 🚀 Getting Started
 
 ```bash
 # Clone the repo
-git clone https://github.com/arnie14/night-light-windows.git
-cd night-light-windows
+git clone https://github.com/Arnie14/Night-Light-Windows.git
+cd Night-Light-Windows
 
-# Install dependencies
+# Create a virtual environment and install dependencies
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 # Run the app
 python main.py
+```
+
+## 🧑‍💻 Development
+
+The app is built so most of it can be developed on Linux. The hardware layer sits behind small interfaces with several implementations, chosen with `--backend`:
+
+| Backend | Used for |
+|---|---|
+| `real` (default on Windows) | DDC/CI monitors and Windows gamma ramps |
+| `kde` (default on a KDE Plasma desktop) | Plasma's own brightness and Night Light services, so the UI visibly works on a Linux laptop |
+| `fake` (default elsewhere) | Pretend monitors and a logged "gamma", no hardware needed |
+
+```bash
+python main.py --backend fake --debug
+pip install -r requirements-dev.txt
+pytest
+```
+
+### Project layout
+
+```
+main.py                  entry point and command line
+nightlight/
+  app.py                 wires services to the UI
+  config.py              settings and JSON storage
+  controller.py          applies the schedule to the displays (animation, overrides)
+  monitors.py            runs slow monitor calls on a background thread
+  core/                  pure logic, no Qt or hardware: colortemp.py, schedule.py
+  hardware/              brightness.py, gamma.py (+ Windows), kde.py (Linux dev backend)
+  ui/                    tray, flyout, settings_window, widgets, night_light_text, icons
+tests/                   pytest suite for core, config and controller
+```
+
+## 📄 License
+
+This project is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
+
+## 🙏 Acknowledgements
+
+Behavior, wording and some data are based on the open-source work of other projects, used under licenses compatible with the GPL-3.0:
+
+- **[KDE Plasma](https://kde.org/plasma-desktop/)**: the design of the Brightness and Color panel and the Night Light settings page, KWin's Night Light transition behavior and timings, and the schedule rules from [knighttime](https://invent.kde.org/plasma/knighttime). KWin and PowerDevil are GPL-2.0-or-later; knighttime is LGPL.
+- **[Redshift](https://github.com/jonls/redshift)** (GPL-3.0) and KWin: the blackbody color table by Ingo Thies (2013) used in [nightlight/core/colortemp.py](nightlight/core/colortemp.py).
+- Python libraries: [PySide6](https://doc.qt.io/qtforpython-6/) (LGPL-3.0), [monitorcontrol](https://github.com/newAM/monitorcontrol) (MIT), [astral](https://github.com/sffjunkie/astral) (Apache-2.0), [platformdirs](https://github.com/tox-dev/platformdirs) (MIT), [jeepney](https://gitlab.com/takluyver/jeepney) (MIT).

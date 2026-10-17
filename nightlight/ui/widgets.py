@@ -1,12 +1,10 @@
-"""Small widgets and helpers shared between the flyout and the settings window."""
+"""Small reusable widgets shared by the flyout and the settings window."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 
-from nightlight.config import Mode
-from nightlight.controller import NightLightController
 from nightlight.core.colortemp import MAX_KELVIN, MIN_KELVIN
 from nightlight.hardware.brightness import MonitorInfo
 
@@ -69,7 +67,7 @@ class MonitorBrightness(QWidget):
 
 
 class TemperatureSlider(QWidget):
-    """Kelvin slider, warm on the left, with a "4500 K" readout."""
+    """Kelvin slider like KDE's: "Cool (no filter)" on the left, "Warm" on the right."""
 
     valueChanged = Signal(int)
 
@@ -80,12 +78,14 @@ class TemperatureSlider(QWidget):
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(MIN_KELVIN // 100, MAX_KELVIN // 100)  # steps of 100 K
         self.slider.setPageStep(5)
+        self.slider.setInvertedAppearance(True)  # high (cool) values on the left
+        self.slider.setInvertedControls(True)
         self._label = QLabel()
         self._label.setMinimumWidth(60)
         self._label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(QLabel("Warm"))
+        layout.addWidget(QLabel("Cool (no filter)"))
         layout.addWidget(self.slider, 1)
-        layout.addWidget(QLabel("Cool"))
+        layout.addWidget(QLabel("Warm"))
         layout.addWidget(self._label)
         self.slider.valueChanged.connect(self._on_changed)
         self._on_changed(self.slider.value())
@@ -99,19 +99,3 @@ class TemperatureSlider(QWidget):
     def _on_changed(self, steps: int) -> None:
         self._label.setText(f"{steps * 100} K")
         self.valueChanged.emit(steps * 100)
-
-
-def night_light_status(controller: NightLightController) -> str:
-    config, state = controller.config, controller.state
-    if not config.enabled:
-        return "Night Light is off"
-    if controller.inhibited:
-        return "Night Light is suspended"
-    if config.mode is Mode.ALWAYS:
-        return f"Night Light is on · {state.temperature} K"
-    next_at = state.next_change.strftime("%H:%M") if state.next_change else None
-    if state.transitioning:
-        return f"Transitioning · {state.temperature} K"
-    if state.night_factor >= 1.0:
-        return f"Night Light is on · {state.temperature} K" + (f" · Day light at {next_at}" if next_at else "")
-    return "Day light" + (f" · Night Light at {next_at}" if next_at else "")

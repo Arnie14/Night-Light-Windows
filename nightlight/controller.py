@@ -9,8 +9,8 @@ from datetime import datetime
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from nightlight.config import NightLightConfig
-from nightlight.core.colortemp import NEUTRAL_KELVIN, whitepoint
-from nightlight.core.schedule import NightLightState, compute_state
+from nightlight.core.colortemp import NEUTRAL_KELVIN
+from nightlight.core.schedule import NightLightState, Override, OverrideKind, compute_state
 from nightlight.hardware.gamma import GammaBackend
 
 log = logging.getLogger(__name__)
@@ -18,6 +18,17 @@ log = logging.getLogger(__name__)
 # Frequent enough for smooth transitions, and it re-applies the ramp after
 # sleep, resolution changes or fullscreen apps have reset it.
 TICK_MS = 10_000
+
+# Sudden changes (turning on, suspending, changing settings) are animated
+# instead of snapping, in steps of TEMPERATURE_STEP over QUICK_ADJUST_MS;
+# previews run PREVIEW_SPEEDUP times faster. Same values as KWin.
+QUICK_ADJUST_MS = 2000
+TEMPERATURE_STEP = 50
+PREVIEW_SPEEDUP = 8
+
+
+def step_towards(current: int, target: int, step: int = TEMPERATURE_STEP) -> int:
+    return min(current + step, target) if current < target else max(current - step, target)
 
 
 class NightLightController(QObject):
@@ -34,11 +45,14 @@ class NightLightController(QObject):
         self._gamma = gamma
         self._config = config
         self._clock = clock
-        self._inhibited = False  # "Suspend Night Light" from the tray
+        self._override: Override | None = None
         self._preview: int | None = None  # live preview while dragging a slider
-        self._last_applied: int | None = None
+        self._current: int | None = None  # what the displays show now
+        self._animation_target: int | None = None
         self.state: NightLightState = compute_state(config, clock())
 
+        self._animation = QTimer(self)
+        self._animation.timeout.connect(self._animation_step)
         self._timer = QTimer(self, interval=TICK_MS)
         self._timer.timeout.connect(self.update)
         self._timer.start()
@@ -49,47 +63,86 @@ class NightLightController(QObject):
         return self._config
 
     @property
-    def inhibited(self) -> bool:
-        return self._inhibited
+    def override(self) -> Override | None:
+        return self.state.override
 
     @property
-    def effective_temperature(self) -> int:
-        if self._preview is not None:
-            return self._preview
-        if self._inhibited:
-            return NEUTRAL_KELVIN
-        return self.state.temperature
+    def current_temperature(self) -> int:
+        return self._current if self._current is not None else NEUTRAL_KELVIN
+
+    @property
+    def target_temperature(self) -> int:
+        return self._preview if self._preview is not None else self.state.temperature
+
+    def now(self) -> datetime:
+        return self._clock()
 
     def set_config(self, config: NightLightConfig) -> None:
         self._config = config
         self.update()
 
-    def set_inhibited(self, inhibited: bool) -> None:
-        self._inhibited = inhibited
+    def set_override(self, kind: OverrideKind, until: datetime | None = None) -> None:
+        self._override = Override(kind, until)
+        self.update()
+
+    def clear_override(self) -> None:
+        self._override = None
         self.update()
 
     def preview(self, kelvin: int | None) -> None:
         """Show `kelvin` immediately, or pass None to return to the schedule."""
         self._preview = kelvin
-        self._apply()
+        self._retarget()
 
     def update(self) -> None:
-        self.state = compute_state(self._config, self._clock())
-        self._apply()
+        now = self._clock()
+        if self._override is not None and not self._override.active_at(now):
+            log.info("Night light override expired")
+            self._override = None
+        self.state = compute_state(self._config, now, self._override)
+        self._retarget(reapply=True)
         self.changed.emit()
 
     def shutdown(self) -> None:
         self._timer.stop()
+        self._animation.stop()
         self._gamma.reset()
 
-    def _apply(self) -> None:
-        kelvin = self.effective_temperature
-        # Don't keep stomping on neutral, so other tools (or Windows' own
-        # Night Light) aren't fought while ours is off.
-        if kelvin == NEUTRAL_KELVIN and self._last_applied == NEUTRAL_KELVIN:
+    def _retarget(self, reapply: bool = False) -> None:
+        target = self.target_temperature
+        # Backends that animate on their own (KWin) get the target directly.
+        if self._current is None or getattr(self._gamma, "animates", False) or abs(target - self._current) <= TEMPERATURE_STEP:
+            self._animation.stop()
+            self._set(target, reapply)
             return
+        if self._animation.isActive() and self._animation_target == target:
+            return
+        self._animation_target = target
+        steps = abs(target - self._current) / TEMPERATURE_STEP
+        duration = QUICK_ADJUST_MS / (PREVIEW_SPEEDUP if self._preview is not None else 1)
+        self._animation.start(max(1, int(duration / steps)))
+
+    def _animation_step(self) -> None:
+        target = self._animation_target
+        if target is None or self._current is None:
+            self._animation.stop()
+            return
+        if not self._set(step_towards(self._current, target)) or self._current == target:
+            self._animation.stop()
+
+    def _set(self, kelvin: int, reapply: bool = False) -> bool:
+        if kelvin == self._current and not reapply:
+            return True
         try:
-            self._gamma.apply(whitepoint(kelvin))
-            self._last_applied = kelvin
+            if kelvin == NEUTRAL_KELVIN:
+                # Reset rather than "apply 6500 K" and don't repeat it, so other
+                # tools (Windows Night Light, KWin's own) aren't fought while ours is idle.
+                if self._current != NEUTRAL_KELVIN:
+                    self._gamma.reset()
+            else:
+                self._gamma.apply(kelvin)
+            self._current = kelvin
+            return True
         except Exception:
             log.warning("Applying %d K failed", kelvin, exc_info=True)
+            return False

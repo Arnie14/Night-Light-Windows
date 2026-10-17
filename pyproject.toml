@@ -1,0 +1,11 @@
+[project]
+name = "night-light-windows"
+version = "0.1.0"
+description = "Per-monitor brightness and night light control for Windows, inspired by KDE Plasma"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
