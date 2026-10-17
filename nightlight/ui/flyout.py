@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QFrame,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from nightlight import APP_NAME
@@ -38,6 +39,7 @@ class Flyout(QFrame):
         self._rows: dict[int, MonitorBrightness] = {}
         self._linked = False
         self._hidden_at = 0.0
+        self._anchor: QRect | None = None  # the tray icon it opened from
         self._as_window = as_window
 
         self.setWindowTitle(APP_NAME)
@@ -109,12 +111,30 @@ class Flyout(QFrame):
 
     def show_near(self, anchor: QRect | None = None) -> None:
         self._monitors.reread_brightness()
+        self._anchor = anchor
+        # Size hints depend on fonts and styles that only apply once each
+        # widget is polished, normally on first show; polish first, so the
+        # first opening is placed with its real size.
+        for widget in (self, *self.findChildren(QWidget)):
+            widget.ensurePolished()
         self.adjustSize()
-        if not self._as_window:
-            self.move(self._popup_position(anchor))
+        self._place()
         self.show()
         self.raise_()
         self.activateWindow()
+        QTimer.singleShot(0, self._place)  # in case the size still settled while showing
+
+    def resizeEvent(self, event) -> None:
+        # The panel can change size while open (monitors detected after it
+        # opened, a status line wrapping): stay against the taskbar corner
+        # rather than growing off the screen from the top-left.
+        super().resizeEvent(event)
+        if self.isVisible():
+            self._place()
+
+    def _place(self) -> None:
+        if not self._as_window:
+            self.move(self._popup_position(self._anchor))
 
     def hideEvent(self, event) -> None:
         self._hidden_at = time.monotonic()
@@ -123,7 +143,8 @@ class Flyout(QFrame):
     def _popup_position(self, anchor: QRect | None) -> QPoint:
         point = anchor.center() if anchor and anchor.isValid() else QCursor.pos()
         screen = QGuiApplication.screenAt(point) or QGuiApplication.primaryScreen()
-        return flyout_position(self.sizeHint(), screen.geometry(), screen.availableGeometry(), anchor)
+        size = self.size() if self.isVisible() else self.sizeHint()
+        return flyout_position(size, screen.geometry(), screen.availableGeometry(), anchor)
 
     def _refresh(self) -> None:
         self._monitor_status.setText("Detecting monitors…")

@@ -81,3 +81,28 @@ def test_laptop_panel_slider_stops_at_one_percent(flyout):
     flyout, _ = flyout
     assert flyout._rows[1].slider.minimum() == 1
     assert flyout._rows[0].slider.minimum() == 0
+
+
+def test_popup_that_grows_while_open_stays_on_screen():
+    """The first opening can happen before monitors are detected; when they
+    arrive the panel grows, and must stay inside the screen's corner."""
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtTest import QTest
+
+    controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    monitors = FakeMonitors()
+    monitors.monitors = []
+    popup = Flyout(monitors, controller, as_window=False)
+    popup.show_near(None)
+    QTest.qWait(20)
+    small = popup.geometry()
+    monitors.monitors = [MonitorInfo(i, f"Monitor {i}", True, key=f"M{i}") for i in range(4)]
+    monitors.brightness = {i: 50 for i in range(4)}
+    monitors.monitorsChanged.emit(monitors.monitors)
+    QTest.qWait(20)
+    area = QGuiApplication.primaryScreen().availableGeometry()
+    assert popup.height() > small.height()
+    assert area.contains(popup.geometry()), (popup.geometry(), area)
+    assert popup.geometry().bottom() == small.bottom()  # still against the taskbar edge
+    popup.hide()
+    controller.shutdown()

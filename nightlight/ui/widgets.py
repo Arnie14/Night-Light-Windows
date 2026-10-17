@@ -75,10 +75,17 @@ class Separator(QWidget):
         self.setFixedHeight(1)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
+    # How far from the background towards the text colour. A faint line
+    # reads well on a dark background but disappears on a light one.
+    STRENGTH_LIGHT = 0.3
+    STRENGTH_DARK = 0.24
+
     def paintEvent(self, event) -> None:
         palette = self.palette()
+        window = palette.color(QPalette.ColorRole.Window)
+        strength = self.STRENGTH_DARK if window.lightnessF() < 0.5 else self.STRENGTH_LIGHT
         painter = QPainter(self)
-        painter.fillRect(self.rect(), blend(palette.color(QPalette.ColorRole.Window), palette.color(QPalette.ColorRole.WindowText), 0.2))
+        painter.fillRect(self.rect(), blend(window, palette.color(QPalette.ColorRole.WindowText), strength))
 
 
 class GlyphButton(QToolButton):
