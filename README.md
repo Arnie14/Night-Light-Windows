@@ -18,13 +18,13 @@ This list is the plan for the project; the status column is kept up to date as w
 | Feature | Status | Notes |
 |---|---|---|
 | Custom GUI built with Python and Qt | ✅ Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings. Runs on Linux. |
-| Per-monitor brightness adjustment (DDC/CI for external monitors, WMI for built-in laptop panels) | 🚧 In progress | DDC/CI is built but untested on a real external monitor (🧪). WMI for laptop panels is 📋 planned. |
-| Night light with an adjustable color temperature slider (warm color shift) | 🧪 Needs Windows testing | Color maths, slider, live preview and animated changes are tested. The Windows gamma-ramp output has never run on Windows. |
+| Per-monitor brightness adjustment (DDC/CI for external monitors, WMI for built-in laptop panels) | 🧪 Needs Windows testing | Both are built, using the Windows APIs directly the way Monitorian and Twinkle Tray do, and tested against a fake of those APIs. Not yet run on real monitors. |
+| Night light with an adjustable color temperature slider (warm color shift) | 🧪 Needs Windows testing | Color maths, slider, live preview and animated changes are tested. The Windows gamma ramp keeps a monitor's calibration, works around Windows' limit on very warm ramps, and skips HDR displays; this has only run against a fake. |
 | Scheduling: manual times and sunrise/sunset, with gradual transitions | ✅ Ready | Custom times, and sunrise/sunset from typed-in coordinates. Temporary Suspend/Activate is included. Automatic location is 📋 planned. |
-| Multi-display support with automatic detection of connected or disconnected monitors | 🚧 In progress | Multiple monitors are supported. Automatic detection of plugging/unplugging is 📋 planned (there is a manual refresh button). |
-| System tray integration with a quick-access flyout | 🧪 Needs Windows testing | Works on Linux. On Windows the flyout is a popup next to the tray, which has not been seen yet. |
+| Multi-display support with automatic detection of connected or disconnected monitors | 🧪 Needs Windows testing | Plugging, unplugging, display changes and waking from sleep trigger re-detection and re-apply night light. Works on Linux. |
+| System tray integration with a quick-access flyout | 🧪 Needs Windows testing | Works on Linux. On Windows the flyout opens against the taskbar, next to the tray icon, which has not been seen yet. A second launch opens the running copy's flyout. |
 | Settings persistence | ✅ Ready | JSON in the user's config folder. Corrupt or hand-edited files fall back to defaults. |
-| Clear "not supported" state for monitors that don't expose DDC/CI | ✅ Ready | Shown in the panel; checked with the fake backend. |
+| Clear "not supported" state for monitors that don't expose DDC/CI | ✅ Ready | Shown in the panel, with the reason when it is known (for example a DisplayLink dock). Checked with the fake backends. |
 
 ## 🎯 Goals
 
@@ -46,8 +46,9 @@ This project addresses those gaps with DDC/CI for hardware brightness and softwa
 |---|---|
 | Language | Python 3.12+ |
 | GUI | PySide6 (Qt for Python) |
-| External monitor brightness | `monitorcontrol` (DDC/CI) |
-| Laptop panel brightness | `wmi` (fallback for built-in displays) |
+| External monitor brightness | DDC/CI through Windows' Monitor Configuration API (`dxva2`) via `ctypes`; `monitorcontrol` on Linux |
+| Display names, connectors, HDR state | `QueryDisplayConfig` via `ctypes` |
+| Laptop panel brightness | `wmi` (WMI `WmiMonitorBrightness`) |
 | Night light | Windows gamma ramp via `ctypes` (optional DDC/CI RGB gain later) |
 | System tray | `QSystemTrayIcon` (built into Qt) |
 | Scheduling | `QTimer` + `astral` (sunrise/sunset) |
@@ -58,12 +59,16 @@ On a KDE Plasma desktop the app drives Plasma's own brightness and Night Light s
 
 ## ⚠️ Known Challenges
 
-- DDC/CI support varies by monitor, cable, and dock, and some monitors have it disabled in their on-screen menu.
-- DDC/CI calls are slow, so they run off the UI thread and are debounced.
-- Gamma ramps can be reset by sleep, resolution changes, or fullscreen apps, so they are reapplied on display events.
-- Gamma-based tinting may not work properly in HDR mode.
-- Running alongside Windows Night Light or f.lux may cause conflicts.
-- Some monitors report malformed DDC/CI capability data, so capability queries are handled defensively.
+Most of these were learned from [Monitorian](https://github.com/emoacht/Monitorian) and [Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray); [docs/windows-notes.md](docs/windows-notes.md) has the details and what this app does about each.
+
+- DDC/CI support varies by monitor, cable, and dock. Some monitors have it disabled in their on-screen menu, and DisplayLink-based USB docks can't pass it at all.
+- DDC/CI calls are slow and sometimes fail for a moment, so they run off the UI thread, are retried on transient errors, and only the latest slider value is sent.
+- Monitors often don't answer DDC/CI for several seconds after being plugged in or waking from sleep, so detection runs again a few times.
+- Requesting a monitor's DDC/CI capabilities string is slow and can hang on some monitors, so the Windows backend never asks for it; names come from the EDID.
+- Windows refuses gamma ramps that are too far from neutral, which limits how warm night light can go unless the `GdiIcmGammaRange` registry value is raised.
+- Gamma ramps can be reset by sleep, resolution changes, or fullscreen apps, so they are re-applied on display events.
+- Gamma ramps don't apply to displays in HDR mode, so night light skips them.
+- Running alongside Windows Night Light, f.lux or GPU color settings (such as AMD's "Custom Colors") may cause conflicts.
 
 ## 🗺️ Roadmap
 
@@ -76,6 +81,8 @@ On a KDE Plasma desktop the app drives Plasma's own brightness and Night Light s
 
 ## 🔗 Related Projects
 
+- **[Monitorian](https://github.com/emoacht/Monitorian):** a Windows tray app for adjusting the brightness of multiple monitors over DDC/CI and WMI. Its handling of monitor detection, fallbacks and flyout placement shaped this project's Windows backend.
+- **[Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray):** a Windows tray app for monitor brightness with a Windows-style flyout, scheduling and DDC/CI features. Its notes on DDC/CI reliability and gamma ramps shaped the night light and error handling here.
 - **PowerToys Power Display:** Microsoft's PowerToys includes a monitor control utility that uses DDC/CI. This project aims to be a lighter, simpler tool with a focus on night light and scheduling.
 - **f.lux / Windows Night Light:** existing color temperature tools that this project complements or replaces for per-monitor control.
 
@@ -122,19 +129,33 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
+Other options:
+
+- `python main.py --probe` prints what each Windows API reports about every display, and saves it as `probe.txt` in the log folder. Use it when a monitor misbehaves.
+- `--allow-multiple` lets a second copy start. Normally a second launch just opens the running copy's flyout.
+
+Logs go to the terminal and to `night-light.log` in the user's log folder (`%LOCALAPPDATA%\night-light\Logs` on Windows).
+
+Testing on Windows follows [docs/windows-testing.md](docs/windows-testing.md).
+
 ### Project layout
 
 ```
-main.py                  entry point and command line
+main.py                  entry point, command line and logging
 nightlight/
   app.py                 wires services to the UI
   config.py              settings and JSON storage
   controller.py          applies the schedule to the displays (animation, overrides)
   monitors.py            runs slow monitor calls on a background thread
+  watcher.py             notices display changes, hotplug and waking from sleep
+  single_instance.py     keeps one copy running
+  probe.py               the --probe diagnostic report
   core/                  pure logic, no Qt or hardware: colortemp.py, schedule.py
-  hardware/              brightness.py, gamma.py (+ Windows), kde.py (Linux dev backend)
-  ui/                    tray, flyout, settings_window, widgets, night_light_text, icons
-tests/                   pytest suite for core, config and controller
+  hardware/              backend interfaces (brightness.py, gamma.py), windows.py + win32.py
+                         (Windows APIs), kde.py (Linux dev backend)
+  ui/                    tray, flyout, placement, settings_window, widgets, night_light_text, icons
+docs/                    Windows research notes and test plan
+tests/                   pytest suite (Windows backends run against a fake of the Windows APIs)
 ```
 
 ## 📄 License
@@ -146,5 +167,6 @@ This project is licensed under the **GNU General Public License v3.0**. See [LIC
 Behavior, wording and some data are based on the open-source work of other projects, used under licenses compatible with the GPL-3.0:
 
 - **[KDE Plasma](https://kde.org/plasma-desktop/)**: the design of the Brightness and Color panel and the Night Light settings page, KWin's Night Light transition behavior and timings, and the schedule rules from [knighttime](https://invent.kde.org/plasma/knighttime). KWin and PowerDevil are GPL-2.0-or-later; knighttime is LGPL.
+- **[Monitorian](https://github.com/emoacht/Monitorian)** (MIT) and **[Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray)** (MIT): how the Windows display, DDC/CI, WMI and gamma APIs are used, the order of fallbacks, flyout placement and tray behavior, retry and re-detection timings, and many Windows quirks. No code is copied; the approach is re-implemented in Python, as described in [docs/windows-notes.md](docs/windows-notes.md).
 - **[Redshift](https://github.com/jonls/redshift)** (GPL-3.0) and KWin: the blackbody color table by Ingo Thies (2013) used in [nightlight/core/colortemp.py](nightlight/core/colortemp.py).
-- Python libraries: [PySide6](https://doc.qt.io/qtforpython-6/) (LGPL-3.0), [monitorcontrol](https://github.com/newAM/monitorcontrol) (MIT), [astral](https://github.com/sffjunkie/astral) (Apache-2.0), [platformdirs](https://github.com/tox-dev/platformdirs) (MIT), [jeepney](https://gitlab.com/takluyver/jeepney) (MIT).
+- Python libraries: [PySide6](https://doc.qt.io/qtforpython-6/) (LGPL-3.0), [monitorcontrol](https://github.com/newAM/monitorcontrol) (MIT), [WMI](https://github.com/tjguk/wmi) (MIT) with [pywin32](https://github.com/mhammond/pywin32) (PSF), [astral](https://github.com/sffjunkie/astral) (Apache-2.0), [platformdirs](https://github.com/tox-dev/platformdirs) (MIT), [jeepney](https://gitlab.com/takluyver/jeepney) (MIT).
