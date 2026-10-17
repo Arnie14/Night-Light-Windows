@@ -68,8 +68,18 @@ class SingleInstance(QObject):
 
     def _on_connection(self) -> None:
         while self._server is not None and (socket := self._server.nextPendingConnection()) is not None:
+            # The command may already be waiting (on Windows it usually is, as
+            # the client sends it and hangs up at once), and readyRead only
+            # reports data that arrives later. So read now, again on new data,
+            # and once more at hang-up before the socket is deleted.
+            socket.readyRead.connect(lambda socket=socket: self._read(socket))
+            socket.disconnected.connect(lambda socket=socket: self._read(socket))
             socket.disconnected.connect(socket.deleteLater)
-            socket.readyRead.connect(lambda socket=socket: self._on_command(bytes(socket.readAll().data())))
+            self._read(socket)
+
+    def _read(self, socket: QLocalSocket) -> None:
+        if socket.bytesAvailable() > 0:
+            self._on_command(bytes(socket.readAll().data()))
 
     def _on_command(self, data: bytes) -> None:
         if b"quit" in data:
