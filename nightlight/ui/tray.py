@@ -4,6 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import QRect, Signal
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+from nightlight import APP_NAME
 from nightlight.controller import NightLightController
 from nightlight.ui import icons
 from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status
@@ -22,7 +23,7 @@ class Tray(QSystemTrayIcon):
         self._override_menu = QMenu()
         self._override_action = self._menu.addAction("")
         self._override_action.triggered.connect(controller.clear_override)
-        self._menu.addAction("Configure Night Light…", self.configureRequested)
+        self._menu.addAction("Settings…", self.configureRequested)
         self._menu.addSeparator()
         self._menu.addAction("Quit", self.quitRequested)
         self._menu.aboutToShow.connect(self._update_menu)
@@ -40,7 +41,7 @@ class Tray(QSystemTrayIcon):
     def _update(self) -> None:
         controller = self._controller
         self.setIcon(icons.night_icon() if is_night_light_on(controller) else icons.day_icon())
-        self.setToolTip(f"Brightness and Color\nNight Light: {night_light_status(controller)}")
+        self.setToolTip(f"{APP_NAME}\nNight Light: {night_light_status(controller)}")
 
     def _update_menu(self) -> None:
         # "Suspend ▸" / "Activate ▸" with KDE's durations, or "Resume" / "Turn Off".

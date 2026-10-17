@@ -18,7 +18,7 @@ Always create `.venv` on the machine that uses it. Git ignores it, but if the pr
 
 Before testing night light:
 
-- Turn off **Windows Night Light** (Settings > System > Display), f.lux, and the AMD "Custom Colors" or NVIDIA color settings, if you use them. They are tested together with this app in §7.
+- Turn off **Windows Night Light** (Settings > System > Display), f.lux, and the AMD "Custom Colors" or NVIDIA color settings, if you use them. They are tested together with this app in §8.
 - Turn on **DDC/CI** in each external monitor's on-screen menu. It is sometimes off by default.
 
 ## 1. Automated tests
@@ -57,12 +57,12 @@ The log is also written to `%LOCALAPPDATA%\night-light\Logs\night-light.log`, an
 
 - [ ] A sun or moon icon appears in the tray. Check it's sharp at your display scaling, and readable on a light and a dark taskbar.
 - [ ] If the icon is hidden in the overflow (^) area, drag it onto the taskbar for the next checks, then repeat them from the overflow area.
-- [ ] Hover over the icon: the tooltip shows the Night Light status.
+- [ ] Hover over the icon: the tooltip is two lines, "Winlight" and then "Night Light: …" with the status. Nothing about "Brightness and Color".
 - [ ] Left-click: the flyout opens just above the taskbar, its right edge in line with the icon (or in the corner by the clock), with a gap of about 12 px.
 - [ ] Click the icon again: the flyout closes and doesn't reopen.
 - [ ] Open it, then click on the desktop or another window: the flyout closes. **If it stays open, note it**; this is the known Windows foreground-window quirk.
 - [ ] Open it and press Esc: it closes.
-- [ ] Right-click: the menu shows Suspend/Activate, Configure Night Light… and Quit.
+- [ ] Right-click: the menu shows Suspend/Activate, Settings… and Quit.
 - [ ] Move the taskbar to the top, left or right (Windows 10), or set it to auto-hide, and check the flyout opens next to it each time.
 - [ ] Restart Explorer (Task Manager > Windows Explorer > Restart): the tray icon comes back.
 
@@ -104,10 +104,35 @@ In Configure Night Light, choose "Always on":
 Schedule:
 
 - [ ] Custom times a few minutes ahead: the transition starts and ends on time, and the tray icon and status follow.
-- [ ] Sunrise/sunset with your coordinates: the times shown match a sunrise/sunset table.
+- [ ] Sunrise and sunset at location, picked by city: in Location, type part of your city (e.g. "lond"). A list of matches drops down; pick yours. No latitude/longitude fields are shown, and after Apply the times shown match a sunrise/sunset table for that city.
+- [ ] Click **Detect**: the city of your Windows time zone is picked (Settings > Time & language > Date & time). If it says the time zone isn't in the list, note the zone it names.
+- [ ] Type nonsense in Location and press Tab: the box goes back to the previous city.
+- [ ] Choose **Custom location** (top of the list): Latitude and Longitude appear, filled with the last city's coordinates. Change them, Apply: the times follow your coordinates.
+- [ ] Close and reopen the settings (and restart the app): the city or custom location you applied is still selected.
 - [ ] Suspend for 1 hour, then Resume, from both the tray menu and the flyout.
 
-## 6. Changes, sleep and hotplug
+## 6. Startup
+
+In Settings > General:
+
+- [ ] Tick **Start Winlight when I sign in** and Apply. Task Manager > Startup apps lists Winlight. In `regedit`, `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` has a `Winlight` value whose command uses `pythonw.exe` and the full path to `main.py`.
+- [ ] Sign out and in (or restart): Winlight starts, with **no console window**, and only its tray icon shows.
+- [ ] Untick it and Apply: the `Winlight` value is gone from the Run key.
+- [ ] Untick **Start minimized in the system tray** and Apply, quit and start again: the settings window opens at start. Tick it again: only the tray icon appears.
+- [ ] With both ticked, sign out and in: still only the tray icon.
+
+Brightness options, also in Settings > General:
+
+- [ ] **Remember each display's brightness** (on by default): set each display to a distinctive level in the flyout (e.g. 23% and 61%), quit and start again: they come back to those levels within a few seconds. The log says "Restoring … brightness".
+- [ ] Change a monitor with **its own buttons**, then wait a minute with Winlight running: Winlight doesn't change it back.
+- [ ] Sleep the PC, wake it: each display returns to its Winlight level within about 30 s, even if it woke at another one.
+- [ ] Unplug a monitor, change its brightness with its buttons, plug it back in: it returns to the Winlight level. Then move it to **another port** (or HDMI ↔ DisplayPort): it is still recognised and restored.
+- [ ] Laptop: drag the built-in display's slider fully left: it stops at 1%, the screen doesn't go black.
+- [ ] Turn the option off and Apply, change levels, restart: nothing is restored.
+- [ ] `%LOCALAPPDATA%\night-light\brightness.json` lists each display by a short code such as `DEL41A2`. Note any that look odd (two monitors sharing one, or an empty one).
+- [ ] **Change all displays together**: dragging one slider moves every display's slider and brightness, smoothly.
+
+## 7. Changes, sleep and hotplug
 
 - [ ] Unplug an external monitor: within a few seconds the flyout no longer lists it.
 - [ ] Plug it back in: it reappears within about 10 s, with working brightness.
@@ -115,19 +140,22 @@ Schedule:
 - [ ] Sleep the PC for over a minute, then wake it: night light is still applied, and within about 30 s brightness works on every monitor. The log shows "Woke up after…".
 - [ ] Lock and unlock (Win+L), and turn a monitor off and on with its power button: note anything that stops working.
 
-## 7. Running alongside other tools
+## 8. Running alongside other tools
 
 - [ ] Start `python main.py` a second time: no second tray icon; the first copy's flyout opens instead.
 - [ ] With Windows Night Light on as well as this app: do the tints stack (extra warm) or does one win? Note what you see.
 - [ ] With f.lux running: the log notes the ramp being changed by something else. Expect the two to fight; just note how bad it looks.
 
-## 8. Display scaling and layout
+## 9. Display scaling and layout
 
 - [ ] Two monitors with different scaling (for example 100% and 150%): the flyout opens at the right place and size on the one with the taskbar.
-- [ ] The settings window and flyout look right in the Windows dark and light themes.
+- [ ] The settings window and flyout look right in the Windows dark and light themes: all text readable (including the grey status and hint text), nothing cut off or overlapping, the wide fields in the settings ending on one vertical line.
+- [ ] The settings window resizes itself when switching between Always off, Always on, location and custom times, without leaving empty space or clipping rows.
+- [ ] Take screenshots of the flyout and the settings window in both themes and send them back.
 
 ## What to send back
 
 - `probe.txt` and `night-light.log`, both from `%LOCALAPPDATA%\night-light\Logs\`.
+- The screenshots from §9.
 - The failing checklist items, with what happened instead.
 - The output of `pytest`, if anything failed.

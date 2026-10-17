@@ -13,17 +13,19 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QPushButton,
-    QToolButton,
     QVBoxLayout,
 )
 
+from nightlight import APP_NAME
 from nightlight.controller import NightLightController
 from nightlight.hardware.brightness import MonitorInfo
 from nightlight.monitors import MonitorManager
 from nightlight.ui import icons
 from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status
 from nightlight.ui.placement import flyout_position
-from nightlight.ui.widgets import MonitorBrightness
+from nightlight.ui.widgets import GlyphButton, MonitorBrightness, SecondaryLabel, Separator, set_font
+
+WIDTH = 340
 
 
 class Flyout(QFrame):
@@ -34,52 +36,55 @@ class Flyout(QFrame):
         self._monitors = monitors
         self._controller = controller
         self._rows: dict[int, MonitorBrightness] = {}
+        self._linked = False
         self._hidden_at = 0.0
         self._as_window = as_window
 
-        self.setWindowTitle("Brightness and Color")
+        self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.WindowType.Window if as_window else Qt.WindowType.Popup)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setMinimumWidth(360)
+        self.setFixedWidth(WIDTH)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 14, 14, 16)
+        layout.setSpacing(14)
 
         header = QHBoxLayout()
         title = QLabel("Brightness and Color")
-        font = QFont(title.font())
-        font.setPointSizeF(font.pointSizeF() * 1.2)
-        font.setBold(True)
-        title.setFont(font)
-        refresh = QToolButton(text="⟳", toolTip="Detect monitors again")
+        set_font(title, 1.15, QFont.Weight.DemiBold)
+        refresh = GlyphButton(icons.refresh_glyph, "Detect monitors again")
         refresh.clicked.connect(self._refresh)
         header.addWidget(title, 1)
         header.addWidget(refresh)
         layout.addLayout(header)
 
-        self._monitor_status = QLabel("Detecting monitors…")
+        self._monitor_status = SecondaryLabel("Detecting monitors…")
         self._monitor_status.setWordWrap(True)
-        self._monitor_status.setEnabled(False)
         layout.addWidget(self._monitor_status)
         self._monitor_layout = QVBoxLayout()
-        self._monitor_layout.setSpacing(12)
+        self._monitor_layout.setContentsMargins(0, 0, 4, 0)  # line up with the header's right edge
+        self._monitor_layout.setSpacing(14)
         layout.addLayout(self._monitor_layout)
 
-        line = QFrame(frameShape=QFrame.Shape.HLine, frameShadow=QFrame.Shadow.Sunken)
-        layout.addWidget(line)
+        layout.addSpacing(2)
+        layout.addWidget(Separator())
+        layout.addSpacing(2)
 
         night = QHBoxLayout()
+        night.setSpacing(10)
         self._night_icon = QLabel()
         night_labels = QVBoxLayout()
         night_labels.setSpacing(0)
-        night_labels.addWidget(QLabel("Night Light"))
-        self._night_text = QLabel()
+        night_title = QLabel("Night Light")
+        set_font(night_title, weight=QFont.Weight.DemiBold)
+        night_labels.addWidget(night_title)
+        self._night_text = SecondaryLabel(scale=0.92)
         self._night_text.setWordWrap(True)
-        self._night_text.setEnabled(False)
         night_labels.addWidget(self._night_text)
         self._override_menu = QMenu(self)
         self._toggle = QPushButton()
         self._toggle.clicked.connect(self._on_toggle_clicked)
-        configure = QToolButton(text="⚙", toolTip="Configure Night Light…")
+        configure = GlyphButton(icons.gear_glyph, "Settings")
         configure.clicked.connect(self.configureRequested)
         night.addWidget(self._night_icon)
         night.addLayout(night_labels, 1)
@@ -131,7 +136,7 @@ class Flyout(QFrame):
         self._rows.clear()
         for info in monitors:
             row = MonitorBrightness(info)
-            row.brightnessRequested.connect(self._monitors.set_brightness)
+            row.brightnessRequested.connect(self._on_brightness_requested)
             if info.index in self._monitors.brightness:
                 row.set_brightness(self._monitors.brightness[info.index])
             self._monitor_layout.addWidget(row)
@@ -143,13 +148,25 @@ class Flyout(QFrame):
             self._monitor_status.show()
         self.adjustSize()
 
+    def set_linked(self, linked: bool) -> None:
+        """Whether moving one monitor's slider moves them all, like Monitorian's
+        "unison" and Twinkle Tray's "linked levels"."""
+        self._linked = linked
+
+    def _on_brightness_requested(self, index: int, value: int) -> None:
+        self._monitors.set_brightness(index, value)
+        if self._linked:
+            for other in self._rows.values():
+                if other.info.index != index and other.info.supported:
+                    self._monitors.set_brightness(other.info.index, other.clamp(value))
+
     def _on_brightness(self, index: int, value: int | None) -> None:
         if row := self._rows.get(index):
             row.set_brightness(value)
 
     def _update_night_light(self) -> None:
         controller = self._controller
-        self._night_icon.setPixmap((icons.night_icon() if is_night_light_on(controller) else icons.day_icon()).pixmap(22, 22))
+        self._night_icon.setPixmap((icons.night_icon() if is_night_light_on(controller) else icons.day_icon()).pixmap(26, 26))
         self._night_text.setText(night_light_status(controller))
         if self._override_menu.isVisible():
             return  # don't rebuild the menu under the user's cursor

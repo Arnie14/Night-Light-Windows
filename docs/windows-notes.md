@@ -23,7 +23,7 @@ Both projects combine several APIs, because no single one gives everything:
 | WMI `root\wmi` `WmiMonitorBrightness` / `WmiMonitorBrightnessMethods` | Built-in laptop panel brightness and its supported levels | Both |
 | WinRT `DisplayMonitor` | Better names, connection kind | Monitorian, on Windows 10 1803+ |
 
-- ✅ `nightlight/hardware/win32.py` binds `QueryDisplayConfig`, `EnumDisplayMonitors`, dxva2 and GDI with ctypes. Names come from the EDID via `QueryDisplayConfig`, not from the DDC/CI capabilities string (see §5).
+- ✅ `nightlight/hardware/win32.py` binds `QueryDisplayConfig`, `EnumDisplayMonitors`, dxva2 and GDI with ctypes. Names come from the EDID via `QueryDisplayConfig`, not from the DDC/CI capabilities string (see §6).
 - ✅ The device path converts to a PnP instance id (`DISPLAY\BOE0812\4&...&UID265988`), which is how both projects match a WMI instance to a display.
 - ✅ The connector type marks built-in panels (LVDS, embedded DisplayPort or UDI, "internal") and "indirect" displays (DisplayLink/USB, Miracast, virtual), which have no DDC/CI channel.
 - ➖ WinRT `DisplayMonitor`: `QueryDisplayConfig` names have been good enough.
@@ -116,9 +116,25 @@ Twinkle Tray adds gamma-based software dimming for monitors with no hardware con
   - ✅ The sun and moon are coloured, so they work on both.
   - ✅ They're now drawn at each tray size (16–64 px) instead of being scaled down from 64 px.
 - **Start with Windows.** Monitorian uses the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry key, or the MSIX `StartupTask` when installed from the Store. Twinkle Tray uses Electron's login items.
-  - 📋 Add once there is an installer.
+  - ✅ `autostart.py` writes the `Run` value (with `pythonw.exe`, so no console opens), and re-writes or removes it at every start to match the setting, so a moved folder doesn't leave a broken entry. An MSIX `StartupTask` is for when there is a Store package.
 
-## 5. Quirks and issues they ran into
+## 5. Brightness features users like
+
+From Twinkle Tray's settings (its `en.json` strings) and Monitorian's README:
+
+- **Restore brightness.** Twinkle Tray's "Apply brightness at startup" restores each display's last known level, and its "Auto-apply brightness" re-applies it after a monitor is turned off and on or reconnected. Its own warning: "If your monitor responds strangely after turning it off/on or disconnecting/connecting hardware, disabling this may help", and it lets you skip specific monitors.
+  - ✅ `brightness_memory.py`, on by default and switchable in Settings > General. Restores at start, after waking and when a display reappears; never while a display stays connected, so the monitor's own buttons and Windows' adaptive and battery brightness aren't fought. Only levels set in the app are remembered: a monitor that wakes at the wrong level can't overwrite the remembered one. A restore waits until the monitor answers, and is retried at the later detections.
+  - 📋 Skipping specific monitors, if a monitor turns out to misbehave.
+- **All monitors together.** Monitorian's "unison" and Twinkle Tray's "linked levels" move every slider at once.
+  - ✅ "Change all displays together" in Settings > General.
+  - 📋 Twinkle Tray's "normalize brightness" (a min/max per monitor, so linked levels look alike on different panels).
+- **Never black out a laptop panel.** On some laptops 0 turns the backlight off, so the screen looks dead. KDE keeps the built-in display above zero.
+  - ✅ The built-in display's slider, linked changes and restores stop at 1%.
+- **Update rate.** Twinkle Tray offers rates from "Ludicrous" to 2 s, because some monitors flicker when written to quickly.
+  - ✅ A fixed 100 ms throttle with only the latest value sent. 📋 Make it a setting if testing finds a monitor that flickers.
+- 📋 **Later:** hide and rename displays, reorder them (both); hotkeys and an on-screen overlay (Twinkle Tray, and Monitorian as a paid add-on); brightness by time of day and dimming when idle (Twinkle Tray); contrast and min/max range per monitor (Monitorian); scrolling over the tray icon (needs a native event filter, see §4).
+
+## 6. Quirks and issues they ran into
 
 - **Monitors aren't ready straight after a change.** After a display change, resume or sign-in, monitors often don't answer DDC/CI for several seconds.
   - Monitorian's timers tick at gaps of 1, 4, 5 and 10 s after a display settings change, so it re-scans 1, 5, 10 and 20 s afterwards. After resume it re-scans at 5, 10, 20, 30 and 60 s; after the display turns on at 5 and 10 s; and after sign-in at 30 and 60 s. It ignores display changes while the display is off.
@@ -133,7 +149,7 @@ Twinkle Tray adds gamma-based software dimming for monitors with no hardware con
 - **There's no documented order between a source's physical monitors and its targets** (Twinkle Tray), so clone mode can mix up names.
   - ✅ Handles that answer DDC/CI go to external targets in order, and the laptop panel never gets a DDC handle.
 - **Identifiers change with the port.** Monitorian's README: the same monitor on a different connector, or over USB-C, gets a new device instance id.
-  - 📋 Matters once per-monitor settings are stored.
+  - ✅ Remembered brightness is keyed by the EDID manufacturer and product code from the device path (`DEL41A2`), which doesn't change with the port; identical monitors are told apart by order (`DEL41A2#2`).
 - **Docks and adapters.**
   - Twinkle Tray's README warns that USB, Thunderbolt and Surface docks with HDMI or DisplayPort may not be compatible.
   - Monitorian's README says converters aren't compatible, Thunderbolt/USB-C cables generally are, and Surface Dock 1 and 2 are known to work.

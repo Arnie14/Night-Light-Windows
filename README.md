@@ -20,10 +20,13 @@ This list is the plan for the project; the status column is kept up to date as w
 | Custom GUI built with Python and Qt | ✅ Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings. Runs on Linux. |
 | Per-monitor brightness adjustment (DDC/CI for external monitors, WMI for built-in laptop panels) | 🧪 Needs Windows testing | Both are built, using the Windows APIs directly the way Monitorian and Twinkle Tray do, and tested against a fake of those APIs. Not yet run on real monitors. |
 | Night light with an adjustable color temperature slider (warm color shift) | 🧪 Needs Windows testing | Color maths, slider, live preview and animated changes are tested. The Windows gamma ramp keeps a monitor's calibration, works around Windows' limit on very warm ramps, and skips HDR displays; this has only run against a fake. |
-| Scheduling: manual times and sunrise/sunset, with gradual transitions | ✅ Ready | Custom times, and sunrise/sunset from typed-in coordinates. Temporary Suspend/Activate is included. Automatic location is 📋 planned. |
+| Scheduling: manual times and sunrise/sunset, with gradual transitions | ✅ Ready | Custom times, and sunrise/sunset for a city picked from the time zone list (searchable, with Detect for this PC's time zone) or a custom latitude and longitude. Temporary Suspend/Activate is included. Automatic location is 📋 planned. |
 | Multi-display support with automatic detection of connected or disconnected monitors | 🧪 Needs Windows testing | Plugging, unplugging, display changes and waking from sleep trigger re-detection and re-apply night light. Works on Linux. |
 | System tray integration with a quick-access flyout | 🧪 Needs Windows testing | Works on Linux. On Windows the flyout opens against the taskbar, next to the tray icon, which has not been seen yet. A second launch opens the running copy's flyout. |
 | Settings persistence | ✅ Ready | JSON in the user's config folder. Corrupt or hand-edited files fall back to defaults. |
+| Remember brightness | 🧪 Needs Windows testing | Each display's level is restored when the app starts, after sleep and when a display is reconnected, as Twinkle Tray does; can be turned off. Laptop panels never go to 0%. Tested against fake monitors. |
+| Change all displays together | 🧪 Needs Windows testing | One slider moves every display, like Monitorian's "unison" and Twinkle Tray's "linked levels". |
+| Start at sign-in and start minimized in the tray | 🧪 Needs Windows testing | Uses the current user's Run registry key, like Monitorian and Twinkle Tray; no administrator rights needed. Tested against a fake registry. |
 | Clear "not supported" state for monitors that don't expose DDC/CI | ✅ Ready | Shown in the panel, with the reason when it is known (for example a DisplayLink dock). Checked with the fake backends. |
 
 ## 🎯 Goals

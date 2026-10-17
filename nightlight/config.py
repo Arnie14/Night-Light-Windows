@@ -44,6 +44,7 @@ class NightLightConfig:
     day_start: str = "06:00"  # HH:MM, when the morning transition begins
     latitude: float = 0.0
     longitude: float = 0.0
+    timezone: str = ""  # IANA zone the location was picked from; "" for a custom location
 
     def normalized(self) -> NightLightConfig:
         defaults = NightLightConfig()
@@ -60,8 +61,17 @@ class NightLightConfig:
 
 
 @dataclass(frozen=True)
+class GeneralConfig:
+    start_with_windows: bool = False  # start when the user signs in
+    start_minimized: bool = True  # start in the tray only, without opening the settings
+    remember_brightness: bool = True  # restore each monitor's level after start, sleep and reconnecting
+    link_brightness: bool = False  # one slider moves every monitor's brightness
+
+
+@dataclass(frozen=True)
 class AppConfig:
     night_light: NightLightConfig = field(default_factory=NightLightConfig)
+    general: GeneralConfig = field(default_factory=GeneralConfig)
 
 
 def parse_hhmm(text: str) -> time:
@@ -83,7 +93,10 @@ def load(path: Path) -> AppConfig:
     if not isinstance(raw, dict):
         log.warning("Ignoring malformed settings file %s", path)
         return AppConfig()
-    return AppConfig(night_light=_night_light_from_dict(raw.get("night_light")))
+    return AppConfig(
+        night_light=_from_dict(NightLightConfig, "night_light", raw.get("night_light")).normalized(),
+        general=_from_dict(GeneralConfig, "general", raw.get("general")),
+    )
 
 
 def save(config: AppConfig, path: Path) -> None:
@@ -95,19 +108,20 @@ def save(config: AppConfig, path: Path) -> None:
     os.replace(tmp, path)
 
 
-def _night_light_from_dict(data: object) -> NightLightConfig:
-    defaults = NightLightConfig()
+def _from_dict[T](cls: type[T], section: str, data: object) -> T:
+    """`cls` from a JSON object, keeping the default for each missing or invalid value."""
+    defaults = cls()
     if not isinstance(data, dict):
         return defaults
     values = {}
-    for f in fields(NightLightConfig):
+    for f in fields(cls):
         if f.name not in data:
             continue
         try:
             values[f.name] = _coerce(f.name, data[f.name], getattr(defaults, f.name))
         except (TypeError, ValueError):
-            log.warning("Ignoring invalid setting night_light.%s=%r", f.name, data[f.name])
-    return replace(defaults, **values).normalized()
+            log.warning("Ignoring invalid setting %s.%s=%r", section, f.name, data[f.name])
+    return replace(defaults, **values)
 
 
 def _coerce(name: str, value: object, default: object) -> object:

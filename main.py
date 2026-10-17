@@ -9,7 +9,7 @@ from pathlib import Path
 import platformdirs
 from PySide6.QtWidgets import QApplication
 
-from nightlight import config
+from nightlight import APP_NAME, config
 from nightlight.app import NightLightApp
 from nightlight.hardware import BACKENDS, create_backends
 from nightlight.single_instance import SingleInstance
@@ -19,7 +19,7 @@ log = logging.getLogger("nightlight")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Night Light for Windows")
+    parser = argparse.ArgumentParser(description="Winlight: brightness and night light for Windows")
     parser.add_argument(
         "--backend",
         choices=BACKENDS,
@@ -43,7 +43,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Night Light")
+    app.setApplicationName(APP_NAME)
     app.setWindowIcon(icons.night_icon())
 
     if args.probe:
