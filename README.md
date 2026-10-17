@@ -1,33 +1,45 @@
-# 🌙 Night Light for Windows
+# 🌙 Winlight
 
-A lightweight Windows app that gives users control over screen brightness and night light settings across all connected displays, including external monitors, with scheduling and a clean, intuitive GUI.
+Brightness and night light for every display on Windows: external monitors, TVs and the laptop panel, from one tray panel, with a night light schedule. Inspired by KDE Plasma's display controls, for multi-monitor setups where Windows' own controls fall short.
 
-Inspired by the display controls in KDE Plasma on Linux, this app brings similar functionality to Windows, especially for multi-monitor setups where native support falls short.
+<p align="center">
+  <img src="docs/screenshots/flyout-light.png" alt="The Winlight panel in light mode: a slider per display and Night Light" width="340">
+  &nbsp;
+  <img src="docs/screenshots/flyout-dark.png" alt="The Winlight panel in dark mode" width="340">
+</p>
 
-## ✨ Features (Planned & In Progress)
+- **Every display gets a slider.** DDC/CI for external monitors, the laptop's own control for its panel, Windows' SDR brightness for HDR displays, and software dimming for TVs and anything else.
+- **Night light** with a warm color shift, by custom times or sunrise and sunset at your city, with smooth transitions.
+- **Remembers each display's brightness** and puts it back after restarting, sleep, or reconnecting a monitor.
+- **Small and native:** a tray icon and a panel, light and dark mode, starts with Windows if you like.
 
-This list is the plan for the project; the status column is kept up to date as work lands.
+<p align="center">
+  <img src="docs/screenshots/settings-light.png" alt="Winlight settings: Night Light schedule and temperatures, startup and brightness options" width="520">
+</p>
+
+[⬇️ Download the latest release](https://github.com/Arnie14/Night-Light-Windows/releases) · Windows 10 and 11, 64-bit
+
+## ✨ Features
 
 | Status | Meaning |
 |---|---|
-| ✅ Ready | Built and tested |
-| 🧪 Needs Windows testing | Built and unit-tested, or checked against a KDE Plasma desktop, but not yet run on Windows or real monitors |
-| 🚧 In progress | Partly built |
+| ✅ Ready | Built, and tested on Windows |
+| 🧪 Needs Windows testing | Built and unit-tested against a fake of the Windows APIs, not yet run on that hardware |
 | 📋 Planned | Not started |
 
 | Feature | Status | Notes |
 |---|---|---|
-| Custom GUI built with Python and Qt | ✅ Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings. Runs on Linux. |
-| Per-monitor brightness adjustment (DDC/CI for external monitors, WMI for built-in laptop panels) | 🧪 Needs Windows testing | Both are built, using the Windows APIs directly the way Monitorian and Twinkle Tray do, and tested against a fake of those APIs. Not yet run on real monitors. |
-| Night light with an adjustable color temperature slider (warm color shift) | 🧪 Needs Windows testing | Color maths, slider, live preview and animated changes are tested. The Windows gamma ramp keeps a monitor's calibration, works around Windows' limit on very warm ramps, and skips HDR displays; this has only run against a fake. |
-| Scheduling: manual times and sunrise/sunset, with gradual transitions | ✅ Ready | Custom times, and sunrise/sunset for a city picked from the time zone list (searchable, with Detect for this PC's time zone) or a custom latitude and longitude. Temporary Suspend/Activate is included. Automatic location is 📋 planned. |
-| Multi-display support with automatic detection of connected or disconnected monitors | 🧪 Needs Windows testing | Plugging, unplugging, display changes and waking from sleep trigger re-detection and re-apply night light. Works on Linux. |
-| System tray integration with a quick-access flyout | 🧪 Needs Windows testing | Works on Linux. On Windows the flyout opens against the taskbar, next to the tray icon, which has not been seen yet. A second launch opens the running copy's flyout. |
-| Settings persistence | ✅ Ready | JSON in the user's config folder. Corrupt or hand-edited files fall back to defaults. |
-| Remember brightness | 🧪 Needs Windows testing | Each display's level is restored when the app starts, after sleep and when a display is reconnected, as Twinkle Tray does; can be turned off. Laptop panels never go to 0%. Tested against fake monitors. |
-| Change all displays together | 🧪 Needs Windows testing | One slider moves every display, like Monitorian's "unison" and Twinkle Tray's "linked levels". |
-| Start at sign-in and start minimized in the tray | 🧪 Needs Windows testing | Uses the current user's Run registry key, like Monitorian and Twinkle Tray; no administrator rights needed. Tested against a fake registry. |
-| Clear "not supported" state for monitors that don't expose DDC/CI | ✅ Ready | Shown in the panel, with the reason when it is known (for example a DisplayLink dock). Checked with the fake backends. |
+| Tray icon and quick-access panel, settings window | ✅ Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings. Light and dark mode follow Windows. |
+| Night light with an adjustable color temperature | ✅ Ready | Tested on a laptop panel. Keeps a monitor's calibration, works around Windows' limit on very warm colors, and skips HDR displays (Windows ignores gamma there). |
+| Scheduling: custom times, or sunrise and sunset at a city or coordinates | ✅ Ready | Cities from the time zone list (searchable, with Detect), with gradual transitions and temporary Suspend/Activate. |
+| Laptop panel brightness | ✅ Ready | Through WMI. Never goes fully dark. |
+| External monitor brightness over DDC/CI | 🧪 Needs Windows testing | The Windows APIs are used directly, the way Monitorian and Twinkle Tray do. Sleeping and hung monitors are handled carefully (see [docs/windows-notes.md](docs/windows-notes.md)). |
+| SDR brightness for HDR displays | 🧪 Needs Windows testing | Windows' "SDR content brightness" (80–480 nits), as in Monitorian and Twinkle Tray, for HDR displays without DDC/CI. |
+| Software dimming for TVs and displays without brightness control | 🧪 Needs Windows testing | Dims the colors through the gamma ramp, together with night light, using Twinkle Tray's driver-safe curve. Can be turned off. |
+| Remember brightness, change all displays together | 🧪 Needs Windows testing | Restored after start, sleep and reconnecting, as Twinkle Tray does; linked sliders like Monitorian's "unison". |
+| Multi-display detection, hotplug and sleep | 🧪 Needs Windows testing | Re-detection after display changes and waking, several times, as monitors are often slow to answer. |
+| Start at sign-in, start minimized | ✅ Ready | The current user's Run registry key; no administrator rights. |
+| Installer, portable zip, uninstaller | ✅ Ready | Per-user, built by GitHub Actions. |
 
 ## 🎯 Goals
 
@@ -41,7 +53,7 @@ This list is the plan for the project; the status column is kept up to date as w
 - **Brightness:** Windows has no native brightness control for most external monitors connected via HDMI, DisplayPort, or USB-C. The built-in slider mainly works for internal laptop screens, so external monitors usually require their physical buttons or on-screen menu.
 - **Night light:** Windows' built-in Night Light works on many external monitors, but it is unreliable in some setups, such as certain docking stations (e.g. DisplayLink) and some Arm-based laptops. It also offers limited per-monitor control.
 
-This project addresses those gaps with DDC/CI for hardware brightness and software gamma adjustment for night light, all from a single GUI.
+This project addresses those gaps with DDC/CI for hardware brightness, Windows' SDR brightness for HDR displays, and the gamma ramp for night light and for dimming displays that have no brightness control, all from a single GUI.
 
 ## 🛠️ Built With
 
@@ -52,7 +64,8 @@ This project addresses those gaps with DDC/CI for hardware brightness and softwa
 | External monitor brightness | DDC/CI through Windows' Monitor Configuration API (`dxva2`) via `ctypes`; `monitorcontrol` on Linux |
 | Display names, connectors, HDR state | `QueryDisplayConfig` via `ctypes` |
 | Laptop panel brightness | `wmi` (WMI `WmiMonitorBrightness`) |
-| Night light | Windows gamma ramp via `ctypes` (optional DDC/CI RGB gain later) |
+| HDR displays | Windows' SDR white level (`DisplayConfigSetDeviceInfo`) via `ctypes` |
+| Night light, software dimming | Windows gamma ramp via `ctypes`, one composed ramp per display |
 | System tray | `QSystemTrayIcon` (built into Qt) |
 | Scheduling | `QTimer` + `astral` (sunrise/sunset) |
 | Settings | JSON stored with `platformdirs` |
@@ -70,17 +83,18 @@ Most of these were learned from [Monitorian](https://github.com/emoacht/Monitori
 - Requesting a monitor's DDC/CI capabilities string is slow and can hang on some monitors, so the Windows backend never asks for it; names come from the EDID.
 - Windows refuses gamma ramps that are too far from neutral, which limits how warm night light can go unless the `GdiIcmGammaRange` registry value is raised.
 - Gamma ramps can be reset by sleep, resolution changes, or fullscreen apps, so they are re-applied on display events.
-- Gamma ramps don't apply to displays in HDR mode, so night light skips them.
+- Gamma ramps don't apply to displays in HDR mode, so night light skips them, and their brightness uses Windows' SDR level instead.
+- Software dimming can't go as dark as a backlight (Windows rejects very dark ramps), and saves no power: it's for displays with no other control.
+- Most TVs don't support DDC/CI.
 - Running alongside Windows Night Light, f.lux or GPU color settings (such as AMD's "Custom Colors") may cause conflicts.
 
 ## 🗺️ Roadmap
 
-1. Brightness control for a single external monitor
-2. Multi-monitor support and hotplug detection
-3. Gamma-based night light with temperature slider
-4. Manual and sunrise/sunset scheduling with smooth transitions
-5. Tray flyout and settings persistence
-6. Packaging and testing on different hardware
+1. ✅ Night light, scheduling, tray panel and settings
+2. ✅ Laptop panel brightness, installer, first beta
+3. 🧪 External monitors, TVs and HDR displays: testing now ([test plan](docs/windows-testing.md))
+4. 📋 Code signing, then a 1.0 release
+5. 📋 Hide and rename displays, hotkeys, brightness by time of day
 
 ## 🔗 Related Projects
 
@@ -100,7 +114,7 @@ It is also a learning-focused project designed to:
 - Handle cross-device compatibility (DDC/CI, multi-monitor)
 - Use AI tools (like ChatGPT or Copilot) effectively in software development
 
-## ⬇️ Download
+## ⬇️ Download details
 
 Get the latest build from [Releases](https://github.com/Arnie14/Night-Light-Windows/releases) (Windows 10 and 11, 64-bit):
 
@@ -156,6 +170,8 @@ pip install -r requirements-dev.txt -r requirements-build.txt
 python packaging/build.py --version 0.1.0-beta.1
 ```
 
+The README screenshots come from `python tools/screenshots.py` (demo displays, light and dark); run it on Windows for the native look.
+
 This writes `dist\Winlight\` (the app), the portable zip and the installer. [`packaging/`](packaging/) has the PyInstaller spec (one folder, no UPX, unused Qt modules left out), the Inno Setup script and the icon generator.
 
 Releases are built by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)): pushing a tag such as `v0.1.0-beta.1` runs the tests, builds on Windows and publishes a release (a pre-release when the tag has a `-`). Running the workflow by hand from the Actions tab builds the files without a release.
@@ -184,7 +200,8 @@ nightlight/
   brightness_memory.py   remembers and restores each monitor's brightness
   data/                  time zone table for picking a location (from tools/make_timezones.py)
 packaging/               Windows build: PyInstaller spec, Inno Setup script, icon, build.py
-docs/                    Windows research notes and test plan
+tools/                   screenshots.py (README images), make_timezones.py
+docs/                    Windows research notes and test plan; screenshots/
 tests/                   pytest suite (Windows backends run against a fake of the Windows APIs)
 ```
 
@@ -196,7 +213,7 @@ This project is licensed under the **GNU General Public License v3.0**. See [LIC
 
 Behavior, wording and some data are based on the open-source work of other projects, used under licenses compatible with the GPL-3.0:
 
-- **[KDE Plasma](https://kde.org/plasma-desktop/)**: the design of the Brightness and Color panel and the Night Light settings page, KWin's Night Light transition behavior and timings, and the schedule rules from [knighttime](https://invent.kde.org/plasma/knighttime). KWin and PowerDevil are GPL-2.0-or-later; knighttime is LGPL.
-- **[Monitorian](https://github.com/emoacht/Monitorian)** (MIT) and **[Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray)** (MIT): how the Windows display, DDC/CI, WMI and gamma APIs are used, the order of fallbacks, flyout placement and tray behavior, retry and re-detection timings, and many Windows quirks. No code is copied; the approach is re-implemented in Python, as described in [docs/windows-notes.md](docs/windows-notes.md).
+- **[KDE Plasma](https://kde.org/plasma-desktop/)**: the design of the Brightness and Color panel and the Night Light settings page, KWin's Night Light transition behavior and timings, KWin's composition of brightness and color temperature into one transform per display, and the schedule rules from [knighttime](https://invent.kde.org/plasma/knighttime). KWin and PowerDevil are GPL-2.0-or-later; knighttime is LGPL.
+- **[Monitorian](https://github.com/emoacht/Monitorian)** (MIT) and **[Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray)** (MIT): how the Windows display, DDC/CI, WMI, SDR white level and gamma APIs are used, one class per kind of brightness control, the order of fallbacks, Twinkle Tray's driver-safe software dimming curve, flyout placement and tray behavior, retry and re-detection timings, and many Windows quirks. No code is copied; the approach is re-implemented in Python, as described in [docs/windows-notes.md](docs/windows-notes.md).
 - **[Redshift](https://github.com/jonls/redshift)** (GPL-3.0) and KWin: the blackbody color table by Ingo Thies (2013) used in [nightlight/core/colortemp.py](nightlight/core/colortemp.py).
 - Python libraries: [PySide6](https://doc.qt.io/qtforpython-6/) (LGPL-3.0), [monitorcontrol](https://github.com/newAM/monitorcontrol) (MIT), [WMI](https://github.com/tjguk/wmi) (MIT) with [pywin32](https://github.com/mhammond/pywin32) (PSF), [astral](https://github.com/sffjunkie/astral) (Apache-2.0), [platformdirs](https://github.com/tox-dev/platformdirs) (MIT), [jeepney](https://gitlab.com/takluyver/jeepney) (MIT).
