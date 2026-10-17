@@ -44,7 +44,6 @@ class NightLightConfig:
     day_start: str = "06:00"  # HH:MM, when the morning transition begins
     latitude: float = 0.0
     longitude: float = 0.0
-    timezone: str = ""  # IANA zone the location was picked from; "" for typed coordinates
 
     def normalized(self) -> NightLightConfig:
         defaults = NightLightConfig()
@@ -71,11 +70,6 @@ def parse_hhmm(text: str) -> time:
 
 def default_path() -> Path:
     return Path(platformdirs.user_config_dir("night-light", appauthor=False)) / "settings.json"
-
-
-def log_dir() -> Path:
-    """Where night-light.log and probe.txt go: one folder to collect after testing."""
-    return Path(platformdirs.user_log_dir("night-light", appauthor=False))
 
 
 def load(path: Path) -> AppConfig:

@@ -11,7 +11,7 @@ def test_missing_file_gives_defaults(tmp_path):
 
 def test_round_trip(tmp_path):
     path = tmp_path / "sub" / "settings.json"
-    original = AppConfig(NightLightConfig(enabled=True, mode=Mode.LOCATION, night_temperature=3200, latitude=40.7, longitude=-74.0, timezone="America/New_York"))
+    original = AppConfig(NightLightConfig(enabled=True, mode=Mode.LOCATION, night_temperature=3200, latitude=40.7, longitude=-74.0))
     config.save(original, path)
     assert config.load(path) == original
 

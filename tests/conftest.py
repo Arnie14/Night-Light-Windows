@@ -6,11 +6,11 @@ import pytest
 # No windows are shown, so tests also run without a display (CI, SSH).
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtGui import QGuiApplication  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
 def qapp():
     # One application for the whole run: Qt allows only one per process, and
-    # some tests need a QApplication (widgets) or screens, not just a QCoreApplication.
-    return QApplication.instance() or QApplication([])
+    # some tests need a QGuiApplication (screens), not just a QCoreApplication.
+    return QGuiApplication.instance() or QGuiApplication([])

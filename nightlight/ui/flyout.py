@@ -5,18 +5,16 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QCursor, QGuiApplication
+from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtGui import QCursor, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QFrame,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QMenu,
     QPushButton,
     QToolButton,
     QVBoxLayout,
-    QWidget,
 )
 
 from nightlight.controller import NightLightController
@@ -25,16 +23,10 @@ from nightlight.monitors import MonitorManager
 from nightlight.ui import icons
 from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status
 from nightlight.ui.placement import flyout_position
-from nightlight.ui.theme import theme
 from nightlight.ui.widgets import MonitorBrightness
 
-# Room around the card for its shadow. It also is the gap to the taskbar, since
-# the flyout is placed flush against it.
-SHADOW = 12
-GLYPH = QSize(18, 18)
 
-
-class Flyout(QWidget):
+class Flyout(QFrame):
     configureRequested = Signal()
 
     def __init__(self, monitors: MonitorManager, controller: NightLightController, as_window: bool) -> None:
@@ -46,74 +38,54 @@ class Flyout(QWidget):
         self._as_window = as_window
 
         self.setWindowTitle("Brightness and Color")
-        if as_window:
-            self.setWindowFlags(Qt.WindowType.Window)
-        else:
-            # A rounded card with a soft shadow, drawn on a see-through window.
-            self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
-            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setProperty("windowed", as_window)
+        self.setWindowFlags(Qt.WindowType.Window if as_window else Qt.WindowType.Popup)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setMinimumWidth(360)
 
-        outer = QVBoxLayout(self)
-        margin = 0 if as_window else SHADOW
-        outer.setContentsMargins(margin, margin, margin, margin)
-        card = QFrame(objectName="card")
-        card.setProperty("windowed", as_window)
-        card.setMinimumWidth(360)
-        if not as_window:
-            shadow = QGraphicsDropShadowEffect(card, blurRadius=2 * SHADOW, xOffset=0, yOffset=3)
-            shadow.setColor(QColor(0, 0, 0, 110))
-            card.setGraphicsEffect(shadow)
-        outer.addWidget(card)
-
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(14)
+        layout = QVBoxLayout(self)
 
         header = QHBoxLayout()
         title = QLabel("Brightness and Color")
-        title.setProperty("title", True)
-        self._refresh_button = QToolButton(toolTip="Detect monitors again", iconSize=GLYPH)
-        self._refresh_button.clicked.connect(self._refresh)
+        font = QFont(title.font())
+        font.setPointSizeF(font.pointSizeF() * 1.2)
+        font.setBold(True)
+        title.setFont(font)
+        refresh = QToolButton(text="⟳", toolTip="Detect monitors again")
+        refresh.clicked.connect(self._refresh)
         header.addWidget(title, 1)
-        header.addWidget(self._refresh_button)
+        header.addWidget(refresh)
         layout.addLayout(header)
 
         self._monitor_status = QLabel("Detecting monitors…")
         self._monitor_status.setWordWrap(True)
-        self._monitor_status.setProperty("dim", True)
+        self._monitor_status.setEnabled(False)
         layout.addWidget(self._monitor_status)
         self._monitor_layout = QVBoxLayout()
-        self._monitor_layout.setSpacing(16)
+        self._monitor_layout.setSpacing(12)
         layout.addLayout(self._monitor_layout)
 
-        section = QFrame(objectName="section")
-        night = QHBoxLayout(section)
-        night.setContentsMargins(14, 12, 12, 12)
-        night.setSpacing(12)
+        line = QFrame(frameShape=QFrame.Shape.HLine, frameShadow=QFrame.Shadow.Sunken)
+        layout.addWidget(line)
+
+        night = QHBoxLayout()
         self._night_icon = QLabel()
         night_labels = QVBoxLayout()
-        night_labels.setSpacing(1)
-        night_title = QLabel("Night Light")
-        night_title.setProperty("heading", True)
-        night_labels.addWidget(night_title)
+        night_labels.setSpacing(0)
+        night_labels.addWidget(QLabel("Night Light"))
         self._night_text = QLabel()
         self._night_text.setWordWrap(True)
-        self._night_text.setProperty("dim", True)
+        self._night_text.setEnabled(False)
         night_labels.addWidget(self._night_text)
         self._override_menu = QMenu(self)
         self._toggle = QPushButton()
         self._toggle.clicked.connect(self._on_toggle_clicked)
-        self._configure_button = QToolButton(toolTip="Configure Night Light…", iconSize=GLYPH)
-        self._configure_button.clicked.connect(self.configureRequested)
+        configure = QToolButton(text="⚙", toolTip="Configure Night Light…")
+        configure.clicked.connect(self.configureRequested)
         night.addWidget(self._night_icon)
         night.addLayout(night_labels, 1)
         night.addWidget(self._toggle)
-        night.addWidget(self._configure_button)
-        layout.addWidget(section)
-
-        theme.changed.connect(self._update_glyphs)
-        self._update_glyphs()
+        night.addWidget(configure)
+        layout.addLayout(night)
 
         monitors.monitorsChanged.connect(self._rebuild)
         monitors.brightnessChanged.connect(self._on_brightness)
@@ -146,13 +118,7 @@ class Flyout(QWidget):
     def _popup_position(self, anchor: QRect | None) -> QPoint:
         point = anchor.center() if anchor and anchor.isValid() else QCursor.pos()
         screen = QGuiApplication.screenAt(point) or QGuiApplication.primaryScreen()
-        # No extra margin: the window's own shadow border is the gap.
-        return flyout_position(self.sizeHint(), screen.geometry(), screen.availableGeometry(), anchor, margin=0)
-
-    def _update_glyphs(self) -> None:
-        color = theme.tokens.text_dim
-        self._refresh_button.setIcon(icons.refresh_glyph(color))
-        self._configure_button.setIcon(icons.gear_glyph(color))
+        return flyout_position(self.sizeHint(), screen.geometry(), screen.availableGeometry(), anchor)
 
     def _refresh(self) -> None:
         self._monitor_status.setText("Detecting monitors…")
@@ -183,15 +149,12 @@ class Flyout(QWidget):
 
     def _update_night_light(self) -> None:
         controller = self._controller
-        self._night_icon.setPixmap((icons.night_icon() if is_night_light_on(controller) else icons.day_icon()).pixmap(30, 30))
+        self._night_icon.setPixmap((icons.night_icon() if is_night_light_on(controller) else icons.day_icon()).pixmap(22, 22))
         self._night_text.setText(night_light_status(controller))
         if self._override_menu.isVisible():
             return  # don't rebuild the menu under the user's cursor
         self._toggle.setText(build_override_menu(controller, self._override_menu))
-        has_menu = not self._override_menu.isEmpty()
-        self._toggle.setMenu(self._override_menu if has_menu else None)
-        self._toggle.setProperty("menu", has_menu)
-        self._toggle.style().polish(self._toggle)  # the stylesheet depends on the property
+        self._toggle.setMenu(None if self._override_menu.isEmpty() else self._override_menu)
 
     def _on_toggle_clicked(self) -> None:
         # Only reached without a menu, i.e. while an override is active.

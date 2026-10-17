@@ -6,8 +6,7 @@ import signal
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
+import platformdirs
 from PySide6.QtWidgets import QApplication
 
 from nightlight import config
@@ -15,7 +14,6 @@ from nightlight.app import NightLightApp
 from nightlight.hardware import BACKENDS, create_backends
 from nightlight.single_instance import SingleInstance
 from nightlight.ui import icons
-from nightlight.ui.theme import theme
 
 log = logging.getLogger("nightlight")
 
@@ -36,12 +34,8 @@ def main() -> int:
         help="print a report of what Windows says about each display, then exit. Read-only, "
         "except that it briefly tints each display to find the warmest night light Windows allows",
     )
-    parser.add_argument("--open-logs", action="store_true", help="open the folder with the log and probe report, then exit")
     parser.add_argument("--allow-multiple", action="store_true", help="don't stop a second copy from starting")
     args = parser.parse_args()
-
-    if args.open_logs:
-        return open_folder(config.log_dir())
 
     log_file = setup_logging(args.debug)
 
@@ -51,7 +45,6 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Night Light")
     app.setWindowIcon(icons.night_icon())
-    theme.install(app)
 
     if args.probe:
         from nightlight import probe
@@ -72,13 +65,6 @@ def main() -> int:
     return exit_code
 
 
-def open_folder(folder: Path) -> int:
-    folder.mkdir(parents=True, exist_ok=True)
-    print(folder)
-    app = QApplication(sys.argv)  # QDesktopServices needs one
-    return 0 if QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))) else 1
-
-
 def setup_logging(debug: bool) -> Path | None:
     """Log to the terminal, if there is one, and to a file in the user's log folder.
 
@@ -94,9 +80,9 @@ def setup_logging(debug: bool) -> Path | None:
         console.setFormatter(formatter)
         root.addHandler(console)
     try:
-        folder = config.log_dir()
-        folder.mkdir(parents=True, exist_ok=True)
-        path = folder / "night-light.log"
+        log_dir = Path(platformdirs.user_log_dir("night-light", appauthor=False))
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / "night-light.log"
         handler = logging.handlers.RotatingFileHandler(path, maxBytes=1_000_000, backupCount=2, encoding="utf-8")
     except OSError:
         log.warning("Could not open a log file", exc_info=True)

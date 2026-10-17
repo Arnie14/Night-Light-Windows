@@ -6,8 +6,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices, QGuiApplication
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from nightlight import config
@@ -54,7 +53,6 @@ class NightLightApp:
             self.tray = Tray(self.controller)
             self.tray.flyoutRequested.connect(self.flyout.toggle)
             self.tray.configureRequested.connect(self.show_settings)
-            self.tray.openLogsRequested.connect(self.open_log_folder)
             self.tray.quitRequested.connect(qapp.quit)
             self.tray.show()
             qapp.setQuitOnLastWindowClosed(False)
@@ -71,11 +69,6 @@ class NightLightApp:
 
     def show_panel(self) -> None:
         self.flyout.show_near(self.tray.geometry() if self.tray else None)
-
-    def open_log_folder(self) -> None:
-        folder = config.log_dir()
-        folder.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def show_settings(self) -> None:
         if self._settings is None:
