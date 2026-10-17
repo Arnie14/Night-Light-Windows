@@ -12,6 +12,7 @@ from nightlight.ui.night_light_text import build_override_menu, is_night_light_o
 class Tray(QSystemTrayIcon):
     flyoutRequested = Signal(QRect)  # the icon's on-screen geometry, may be empty
     configureRequested = Signal()
+    openLogsRequested = Signal()
     quitRequested = Signal()
 
     def __init__(self, controller: NightLightController) -> None:
@@ -24,6 +25,7 @@ class Tray(QSystemTrayIcon):
         self._override_action.triggered.connect(controller.clear_override)
         self._menu.addAction("Configure Night Light…", self.configureRequested)
         self._menu.addSeparator()
+        self._menu.addAction("Open Log Folder", self.openLogsRequested)
         self._menu.addAction("Quit", self.quitRequested)
         self._menu.aboutToShow.connect(self._update_menu)
         self.setContextMenu(self._menu)
@@ -40,7 +42,7 @@ class Tray(QSystemTrayIcon):
     def _update(self) -> None:
         controller = self._controller
         self.setIcon(icons.night_icon() if is_night_light_on(controller) else icons.day_icon())
-        self.setToolTip(f"Brightness and Color\nNight Light: {night_light_status(controller)}")
+        self.setToolTip(f"Night Light: {night_light_status(controller)}")
 
     def _update_menu(self) -> None:
         # "Suspend ▸" / "Activate ▸" with KDE's durations, or "Resume" / "Turn Off".

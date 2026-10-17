@@ -17,10 +17,10 @@ This list is the plan for the project; the status column is kept up to date as w
 
 | Feature | Status | Notes |
 |---|---|---|
-| Custom GUI built with Python and Qt | ✅ Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings. Runs on Linux. |
+| Custom GUI built with Python and Qt | ✅ Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings, with rounded cards, thin sliders and light/dark themes that follow the system. Runs on Linux. |
 | Per-monitor brightness adjustment (DDC/CI for external monitors, WMI for built-in laptop panels) | 🧪 Needs Windows testing | Both are built, using the Windows APIs directly the way Monitorian and Twinkle Tray do, and tested against a fake of those APIs. Not yet run on real monitors. |
 | Night light with an adjustable color temperature slider (warm color shift) | 🧪 Needs Windows testing | Color maths, slider, live preview and animated changes are tested. The Windows gamma ramp keeps a monitor's calibration, works around Windows' limit on very warm ramps, and skips HDR displays; this has only run against a fake. |
-| Scheduling: manual times and sunrise/sunset, with gradual transitions | ✅ Ready | Custom times, and sunrise/sunset from typed-in coordinates. Temporary Suspend/Activate is included. Automatic location is 📋 planned. |
+| Scheduling: manual times and sunrise/sunset, with gradual transitions | ✅ Ready | Custom times, and sunrise/sunset for a place picked by city/time zone (searchable list) or typed-in coordinates. Temporary Suspend/Activate is included. Automatic location is 📋 planned. |
 | Multi-display support with automatic detection of connected or disconnected monitors | 🧪 Needs Windows testing | Plugging, unplugging, display changes and waking from sleep trigger re-detection and re-apply night light. Works on Linux. |
 | System tray integration with a quick-access flyout | 🧪 Needs Windows testing | Works on Linux. On Windows the flyout opens against the taskbar, next to the tray icon, which has not been seen yet. A second launch opens the running copy's flyout. |
 | Settings persistence | ✅ Ready | JSON in the user's config folder. Corrupt or hand-edited files fall back to defaults. |

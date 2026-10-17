@@ -55,14 +55,15 @@ python main.py --debug
 
 The log is also written to `%LOCALAPPDATA%\night-light\Logs\night-light.log`, and its path is printed at startup.
 
-- [ ] A sun or moon icon appears in the tray. Check it's sharp at your display scaling, and readable on a light and a dark taskbar.
+- [ ] A sun or moon icon appears in the tray (a warm sun by day, a crescent with a star at night). Check it's sharp at your display scaling, and readable on a light and a dark taskbar.
 - [ ] If the icon is hidden in the overflow (^) area, drag it onto the taskbar for the next checks, then repeat them from the overflow area.
-- [ ] Hover over the icon: the tooltip shows the Night Light status.
+- [ ] Hover over the icon: the tooltip is one line, "Night Light: …" with the status, and nothing else.
+- [ ] The flyout is a rounded card with a soft shadow and no square window behind it (translucent popup), in both light and dark mode. Switch Windows between light and dark while the app runs: the app follows.
 - [ ] Left-click: the flyout opens just above the taskbar, its right edge in line with the icon (or in the corner by the clock), with a gap of about 12 px.
 - [ ] Click the icon again: the flyout closes and doesn't reopen.
 - [ ] Open it, then click on the desktop or another window: the flyout closes. **If it stays open, note it**; this is the known Windows foreground-window quirk.
 - [ ] Open it and press Esc: it closes.
-- [ ] Right-click: the menu shows Suspend/Activate, Configure Night Light… and Quit.
+- [ ] Right-click: the menu shows Suspend/Activate, Configure Night Light…, Open Log Folder and Quit. Open Log Folder opens Explorer on the logs folder.
 - [ ] Move the taskbar to the top, left or right (Windows 10), or set it to auto-hide, and check the flyout opens next to it each time.
 - [ ] Restart Explorer (Task Manager > Windows Explorer > Restart): the tray icon comes back.
 
@@ -105,6 +106,7 @@ Schedule:
 
 - [ ] Custom times a few minutes ahead: the transition starts and ends on time, and the tray icon and status follow.
 - [ ] Sunrise/sunset with your coordinates: the times shown match a sunrise/sunset table.
+- [ ] Under "Sunrise and sunset at location", type part of a city in the Location box (e.g. "kyi"): matching places are suggested, picking one fills the schedule. "Use system" picks your Windows time zone (note what it does if the city isn't the one you expect, and which time zone Windows is set to). "Custom coordinates" shows the latitude and longitude fields.
 - [ ] Suspend for 1 hour, then Resume, from both the tray menu and the flyout.
 
 ## 6. Changes, sleep and hotplug
@@ -128,6 +130,6 @@ Schedule:
 
 ## What to send back
 
-- `probe.txt` and `night-light.log`, both from `%LOCALAPPDATA%\night-light\Logs\`.
+- Everything in `%LOCALAPPDATA%\night-light\Logs\` (`night-light.log`, `probe.txt` and the older rotated logs). That is the one folder to send. Open it from the tray menu ("Open Log Folder"), with `python main.py --open-logs`, or by pasting the path into Explorer.
 - The failing checklist items, with what happened instead.
 - The output of `pytest`, if anything failed.
