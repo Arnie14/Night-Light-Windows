@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """KDE Plasma backends, for developing on a Linux laptop.
 
 Plasma already does what this app does on Windows, and exposes it on D-Bus:

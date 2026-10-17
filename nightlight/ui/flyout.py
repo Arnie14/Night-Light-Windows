@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """The quick-access panel opened from the tray, like Plasma's "Brightness and Color" applet."""
 
 from __future__ import annotations

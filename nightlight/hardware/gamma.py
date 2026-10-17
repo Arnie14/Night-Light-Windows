@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Gamma backends: apply a night light colour temperature to the displays.
 
 Night light is global, as in KDE: the same ramp goes to every display.

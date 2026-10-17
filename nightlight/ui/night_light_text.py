@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Night Light status text and override menus.
 
 Wording follows KDE Plasma's Brightness and Color applet and Night Light page.

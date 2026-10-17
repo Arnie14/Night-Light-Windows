@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Picks the hardware backends for the current platform."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Wires the services (monitors, night light) to the UI (tray, flyout, settings)."""
 
 from __future__ import annotations

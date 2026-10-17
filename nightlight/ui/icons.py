@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Icons drawn in code, so the app looks the same without an icon theme (Windows has none)."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Night Light settings, modelled on KDE System Settings > Display & Monitor > Night Light."""
 
 from __future__ import annotations

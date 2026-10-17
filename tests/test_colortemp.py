@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 from nightlight.core.colortemp import NEUTRAL_KELVIN, gamma_ramp, whitepoint
 
 

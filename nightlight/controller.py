@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Keeps the displays' colour temperature in line with the schedule."""
 
 from __future__ import annotations

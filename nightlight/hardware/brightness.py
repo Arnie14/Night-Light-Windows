@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Brightness backends: the layer that actually talks to monitor hardware.
 
 Every backend exposes the same small interface so the UI never needs to know

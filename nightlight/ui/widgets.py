@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Small reusable widgets shared by the flyout and the settings window."""
 
 from __future__ import annotations

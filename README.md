@@ -4,20 +4,27 @@ A lightweight Windows app that gives users control over screen brightness and ni
 
 Inspired by the display controls in KDE Plasma on Linux, this app brings similar functionality to Windows, especially for multi-monitor setups where native support falls short.
 
-## ✨ Features
+## ✨ Features (Planned & In Progress)
 
-Status: ✅ built and tested on Linux · 🧪 built, untested on Windows · 📋 planned
+This list is the plan for the project; the status column is kept up to date as work lands.
 
-- ✅ Custom GUI built with Python and Qt, modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings
-- 🧪 Per-monitor brightness adjustment (DDC/CI for external monitors)
-- 📋 Laptop panel brightness via WMI
-- 🧪 Night light with an adjustable color temperature (warm color shift) and a live preview while dragging the slider
-- ✅ Scheduling: custom times or sunrise/sunset at a manual location, with gradual transitions
-- ✅ Suspend or activate Night Light temporarily (1 hour, until the next change, or until turned off)
-- 🧪 System tray integration with a quick-access flyout
-- ✅ Settings persistence
-- ✅ Clear "not supported" state for monitors that don't expose DDC/CI
-- 📋 Automatic detection of monitors being connected or disconnected (currently a manual refresh button)
+| Status | Meaning |
+|---|---|
+| ✅ Ready | Built and tested |
+| 🧪 Needs Windows testing | Built and unit-tested, or checked against a KDE Plasma desktop, but not yet run on Windows or real monitors |
+| 🚧 In progress | Partly built |
+| 📋 Planned | Not started |
+
+| Feature | Status | Notes |
+|---|---|---|
+| Custom GUI built with Python and Qt | ✅ Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings. Runs on Linux. |
+| Per-monitor brightness adjustment (DDC/CI for external monitors, WMI for built-in laptop panels) | 🚧 In progress | DDC/CI is built but untested on a real external monitor (🧪). WMI for laptop panels is 📋 planned. |
+| Night light with an adjustable color temperature slider (warm color shift) | 🧪 Needs Windows testing | Color maths, slider, live preview and animated changes are tested. The Windows gamma-ramp output has never run on Windows. |
+| Scheduling: manual times and sunrise/sunset, with gradual transitions | ✅ Ready | Custom times, and sunrise/sunset from typed-in coordinates. Temporary Suspend/Activate is included. Automatic location is 📋 planned. |
+| Multi-display support with automatic detection of connected or disconnected monitors | 🚧 In progress | Multiple monitors are supported. Automatic detection of plugging/unplugging is 📋 planned (there is a manual refresh button). |
+| System tray integration with a quick-access flyout | 🧪 Needs Windows testing | Works on Linux. On Windows the flyout is a popup next to the tray, which has not been seen yet. |
+| Settings persistence | ✅ Ready | JSON in the user's config folder. Corrupt or hand-edited files fall back to defaults. |
+| Clear "not supported" state for monitors that don't expose DDC/CI | ✅ Ready | Shown in the panel; checked with the fake backend. |
 
 ## 🎯 Goals
 
@@ -132,7 +139,7 @@ tests/                   pytest suite for core, config and controller
 
 ## 📄 License
 
-This project is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
+This project is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE). Source files carry an `SPDX-License-Identifier: GPL-3.0-only` header, and the license is also declared in [pyproject.toml](pyproject.toml).
 
 ## 🙏 Acknowledgements
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """User settings, stored as JSON in the platform's config directory.
 
 Loading is deliberately forgiving: a missing, corrupt or hand-edited file

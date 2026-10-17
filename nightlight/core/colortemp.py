@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Colour temperature maths: Kelvin -> RGB whitepoint -> gamma ramp.
 
 Night light works by scaling each colour channel's gamma ramp. 6500 K is

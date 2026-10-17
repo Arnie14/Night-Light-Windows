@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 from datetime import datetime, timezone
 
 import pytest

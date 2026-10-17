@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Runs all brightness backend calls on a background thread.
 
 DDC/CI calls can take hundreds of milliseconds, so they must never run on the

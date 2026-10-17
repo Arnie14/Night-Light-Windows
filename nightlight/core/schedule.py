@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Decides what colour temperature night light should use at a given moment.
 
 Pure logic with no Qt or hardware, so it is easy to test. The model follows
