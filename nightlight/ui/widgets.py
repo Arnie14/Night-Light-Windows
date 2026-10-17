@@ -9,8 +9,11 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 from nightlight.core.colortemp import MAX_KELVIN, MIN_KELVIN
 from nightlight.hardware.brightness import MonitorInfo
 
-# Wait this long after the slider stops moving before sending a DDC/CI write.
-BRIGHTNESS_DEBOUNCE_MS = 150
+# While the slider moves, send at most one brightness change per this long,
+# so the monitor follows the drag (as in Monitorian and Twinkle Tray) without
+# flooding a slow DDC/CI link. The final position is always sent.
+BRIGHTNESS_THROTTLE_MS = 100
+NOT_SUPPORTED = "Brightness control not supported (DDC/CI unavailable or disabled in the monitor's menu)"
 
 
 class MonitorBrightness(QWidget):
@@ -26,7 +29,7 @@ class MonitorBrightness(QWidget):
         layout.addWidget(QLabel(info.name))
 
         if not info.supported:
-            label = QLabel("Brightness control not supported (DDC/CI unavailable or disabled in the monitor's menu)")
+            label = QLabel(info.reason or NOT_SUPPORTED)
             label.setWordWrap(True)
             label.setEnabled(False)
             layout.addWidget(label)
@@ -43,13 +46,14 @@ class MonitorBrightness(QWidget):
         row.addWidget(self.value_label)
         layout.addLayout(row)
 
-        self._debounce = QTimer(self, singleShot=True, interval=BRIGHTNESS_DEBOUNCE_MS)
-        self._debounce.timeout.connect(self._send)
+        self._unsent = False
+        self._throttle = QTimer(self, singleShot=True, interval=BRIGHTNESS_THROTTLE_MS)
+        self._throttle.timeout.connect(self._on_throttle)
         self.slider.valueChanged.connect(self._on_slider_changed)
 
     def set_brightness(self, value: int | None) -> None:
-        if not self.info.supported:
-            return
+        if not self.info.supported or self.slider.isSliderDown():
+            return  # a fresh reading mustn't yank the slider while it's held
         if value is None:
             self.value_label.setText("?")
             return
@@ -61,7 +65,17 @@ class MonitorBrightness(QWidget):
 
     def _on_slider_changed(self, value: int) -> None:
         self.value_label.setText(f"{value}%")
-        self._debounce.start()
+        if self._throttle.isActive():
+            self._unsent = True
+        else:
+            self._send()
+            self._throttle.start()
+
+    def _on_throttle(self) -> None:
+        if self._unsent:
+            self._unsent = False
+            self._send()
+            self._throttle.start()
 
     def _send(self) -> None:
         self.brightnessRequested.emit(self.info.index, self.slider.value())

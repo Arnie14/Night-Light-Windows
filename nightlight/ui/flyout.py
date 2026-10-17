@@ -22,6 +22,7 @@ from nightlight.hardware.brightness import MonitorInfo
 from nightlight.monitors import MonitorManager
 from nightlight.ui import icons
 from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status
+from nightlight.ui.placement import flyout_position
 from nightlight.ui.widgets import MonitorBrightness
 
 
@@ -102,6 +103,7 @@ class Flyout(QFrame):
         self.show_near(anchor)
 
     def show_near(self, anchor: QRect | None = None) -> None:
+        self._monitors.reread_brightness()
         self.adjustSize()
         if not self._as_window:
             self.move(self._popup_position(anchor))
@@ -116,14 +118,7 @@ class Flyout(QFrame):
     def _popup_position(self, anchor: QRect | None) -> QPoint:
         point = anchor.center() if anchor and anchor.isValid() else QCursor.pos()
         screen = QGuiApplication.screenAt(point) or QGuiApplication.primaryScreen()
-        area = screen.availableGeometry()
-        size = self.sizeHint()
-        x = point.x() - size.width() // 2
-        # Open away from the screen edge the tray sits on.
-        y = point.y() - size.height() - 8 if point.y() > area.center().y() else point.y() + 8
-        x = max(area.left(), min(x, area.right() - size.width()))
-        y = max(area.top(), min(y, area.bottom() - size.height()))
-        return QPoint(x, y)
+        return flyout_position(self.sizeHint(), screen.geometry(), screen.availableGeometry(), anchor)
 
     def _refresh(self) -> None:
         self._monitor_status.setText("Detecting monitors…")
