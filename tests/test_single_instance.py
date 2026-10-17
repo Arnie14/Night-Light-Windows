@@ -1,39 +1,89 @@
 # SPDX-License-Identifier: GPL-3.0-only
-import uuid
+"""A second launch reaching the running copy.
 
+The second launch runs as its own process, as it does in use. Sending from
+the same thread can't work on Windows: the pipe is unbuffered, so the
+sender's write waits for the receiver to read, and the receiver can't read
+while that same thread waits (see single_instance.py).
+"""
+
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+import pytest
 from PySide6.QtTest import QTest
 
 from nightlight.single_instance import SingleInstance
 
+ROOT = Path(__file__).resolve().parent.parent
 
-def test_second_launch_reaches_the_first():
-    name = f"night-light-test-{uuid.uuid4().hex}"
-    first = SingleInstance(name)
-    assert first.notify_running() is False
-    activated = []
-    first.activated.connect(lambda: activated.append(True))
-    assert SingleInstance(name).notify_running() is True
-    for _ in range(100):
-        if activated:
+# A second launch: exit code 0 if it found the running copy, 3 if not.
+SECOND_LAUNCH = """
+import sys
+from PySide6.QtCore import QCoreApplication
+app = QCoreApplication([])
+from nightlight.single_instance import SingleInstance
+name, command = sys.argv[1], sys.argv[2]
+instance = SingleInstance(name)
+found = instance.notify_running() if command == "launch" else instance.send(command.encode())
+sys.exit(0 if found else 3)
+"""
+
+
+def second_launch(name: str, command: str) -> subprocess.Popen:
+    return subprocess.Popen([sys.executable, "-c", SECOND_LAUNCH, name, command], cwd=ROOT)
+
+
+def wait_for(condition, process: subprocess.Popen, timeout_ms: int = 15000) -> int:
+    """Run the event loop until `condition()` and the process has exited; its exit code."""
+    for _ in range(timeout_ms // 10):
+        if condition() and process.poll() is not None:
             break
         QTest.qWait(10)
-    assert activated == [True]
+    try:
+        return process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        pytest.fail("the second launch didn't finish")
 
 
-def test_quit_command_reaches_the_first():
-    name = f"night-light-test-{uuid.uuid4().hex}"
-    first = SingleInstance(name)
-    assert first.notify_running() is False
-    quit_requested, activated = [], []
-    first.quitRequested.connect(lambda: quit_requested.append(True))
-    first.activated.connect(lambda: activated.append(True))
-    assert SingleInstance(name).send(b"quit") is True
-    for _ in range(100):
-        if quit_requested:
-            break
-        QTest.qWait(10)
-    assert quit_requested == [True] and activated == []
+@pytest.fixture
+def first():
+    instance = SingleInstance(f"night-light-test-{uuid.uuid4().hex}")
+    assert instance.notify_running() is False  # nothing running yet: it listens
+    received = {"show": 0, "quit": 0}
+    instance.activated.connect(lambda: received.__setitem__("show", received["show"] + 1))
+    instance.quitRequested.connect(lambda: received.__setitem__("quit", received["quit"] + 1))
+    instance.received = received
+    return instance
 
 
-def test_quit_with_nothing_running():
+def test_second_launch_shows_the_first(first):
+    exit_code = wait_for(lambda: first.received["show"], second_launch(first._name, "launch"))
+    assert exit_code == 0  # the second launch knew to exit
+    assert first.received == {"show": 1, "quit": 0}
+
+
+def test_quit_reaches_the_first(first):
+    exit_code = wait_for(lambda: first.received["quit"], second_launch(first._name, "quit"))
+    assert exit_code == 0
+    assert first.received == {"show": 0, "quit": 1}
+
+
+def test_several_launches_each_get_through(first):
+    for n in range(1, 4):
+        # Waiting runs the event loop, so the first copy keeps reading.
+        assert wait_for(lambda: first.received["show"] == n, second_launch(first._name, "launch")) == 0
+    assert first.received == {"show": 3, "quit": 0}
+
+
+def test_with_nothing_running():
     assert SingleInstance(f"night-light-test-{uuid.uuid4().hex}").send(b"quit") is False
+
+
+@pytest.mark.parametrize(("data", "signal"), [(b"show\n", "show"), (b"quit\n", "quit"), (b"", "show")])
+def test_commands(first, data, signal):
+    first._on_command(data)
+    assert first.received[signal] == 1

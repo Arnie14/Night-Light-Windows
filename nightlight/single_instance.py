@@ -5,6 +5,14 @@ A second copy would add a second tray icon and fight the first over the gamma
 ramps, so, as Monitorian and Twinkle Tray do, a second launch asks the running
 copy to show its panel and then exits. Uses a local socket (a named pipe on
 Windows), named per user so separate sign-ins don't see each other.
+
+The second launch sends one line, "show" or "quit" (`--quit`, used by the
+installer). On Windows, Qt makes the pipe unbuffered so nothing is lost if
+the sender hangs up early, which means a write only completes once the
+running copy has read it. The sender therefore waits for the write to finish
+before hanging up. Both ends must be separate processes (as they always are
+in use, and in the tests): in one thread, the sender's wait would stop the
+receiver from ever reading.
 """
 
 from __future__ import annotations
@@ -18,6 +26,9 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 log = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT_MS = 500
+# The running copy reads the command from its event loop, which may be busy
+# for a moment (detecting monitors, starting up), so allow it some time.
+WRITE_TIMEOUT_MS = 3000
 
 
 def default_name() -> str:
@@ -45,15 +56,21 @@ class SingleInstance(QObject):
         return self._listen()
 
     def send(self, command: bytes) -> bool:
-        """Send `command` ("show" or "quit") to a running copy; False if none runs."""
+        """Send `command` ("show" or "quit") to a running copy. True when one
+        is running (even if it didn't take the command), False if none is."""
         socket = QLocalSocket()
         socket.connectToServer(self._name)
-        if socket.waitForConnected(CONNECT_TIMEOUT_MS):
-            socket.write(command + b"\n")
-            socket.waitForBytesWritten(CONNECT_TIMEOUT_MS)
-            socket.disconnectFromServer()
-            return True
-        return False
+        if not socket.waitForConnected(CONNECT_TIMEOUT_MS):
+            return False
+        socket.write(command + b"\n")
+        # Don't hang up before the running copy has read it: on Windows the
+        # unbuffered pipe drops unread data when the sender disconnects.
+        if not socket.waitForBytesWritten(WRITE_TIMEOUT_MS):
+            log.warning("The running copy didn't take the %r command: %s", command.decode(), socket.errorString())
+        socket.disconnectFromServer()
+        if socket.state() != QLocalSocket.LocalSocketState.UnconnectedState:
+            socket.waitForDisconnected(CONNECT_TIMEOUT_MS)
+        return True
 
     def _listen(self) -> bool:
         # Nobody answered. On Linux a crashed copy can leave its socket file behind.
