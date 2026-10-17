@@ -29,6 +29,12 @@ def blend(a: QColor, b: QColor, amount: float) -> QColor:
     return QColor.fromRgbF(*(x + (y - x) * amount for x, y in zip(a.getRgbF()[:3], b.getRgbF()[:3])))
 
 
+# Large headings are Bold, not DemiBold: on Windows, Qt can draw DemiBold
+# Segoe UI Variable with its much thinner Semilight face, which looks washed
+# out as dark text on a light background.
+HEADING_WEIGHT = QFont.Weight.Bold
+
+
 def set_font(widget: QWidget, scale: float = 1.0, weight: QFont.Weight | None = None) -> None:
     font = QFont(widget.font())
     font.setPointSizeF(font.pointSizeF() * scale)

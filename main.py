@@ -42,6 +42,7 @@ def main() -> int:
     # Let Ctrl+C in the terminal quit; Qt's event loop otherwise swallows it.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    set_app_id()
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(icons.night_icon())
@@ -63,6 +64,27 @@ def main() -> int:
     exit_code = app.exec()
     del night_light  # kept alive until here: Qt objects it owns must outlive the event loop
     return exit_code
+
+
+APP_USER_MODEL_ID = "Winlight.Winlight"
+
+
+def set_app_id() -> None:
+    """Give the process its own identity on the Windows taskbar.
+
+    Run from source, the process is python.exe/pythonw.exe, and Windows groups
+    its windows under Python's taskbar button and icon. An explicit
+    AppUserModelID makes them a separate app that shows the window icon set
+    below. It must be set before any window exists.
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    except (AttributeError, OSError):
+        log.warning("Could not set the taskbar identity; windows may show Python's icon", exc_info=True)
 
 
 def setup_logging(debug: bool) -> Path | None:

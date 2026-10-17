@@ -23,7 +23,7 @@ from nightlight.monitors import MonitorManager
 from nightlight.ui import icons
 from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status
 from nightlight.ui.placement import flyout_position
-from nightlight.ui.widgets import GlyphButton, MonitorBrightness, SecondaryLabel, Separator, set_font
+from nightlight.ui.widgets import HEADING_WEIGHT, GlyphButton, MonitorBrightness, SecondaryLabel, Separator, set_font
 
 WIDTH = 340
 
@@ -51,7 +51,7 @@ class Flyout(QFrame):
 
         header = QHBoxLayout()
         title = QLabel("Brightness and Color")
-        set_font(title, 1.15, QFont.Weight.DemiBold)
+        set_font(title, 1.15, HEADING_WEIGHT)
         refresh = GlyphButton(icons.refresh_glyph, "Detect monitors again")
         refresh.clicked.connect(self._refresh)
         header.addWidget(title, 1)

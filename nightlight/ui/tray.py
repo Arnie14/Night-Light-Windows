@@ -23,9 +23,9 @@ class Tray(QSystemTrayIcon):
         self._override_menu = QMenu()
         self._override_action = self._menu.addAction("")
         self._override_action.triggered.connect(controller.clear_override)
-        self._menu.addAction("Settings…", self.configureRequested)
+        self._menu.addAction("Settings…", self.configureRequested.emit)
         self._menu.addSeparator()
-        self._menu.addAction("Quit", self.quitRequested)
+        self._menu.addAction("Quit", self.quitRequested.emit)
         self._menu.aboutToShow.connect(self._update_menu)
         self.setContextMenu(self._menu)
 

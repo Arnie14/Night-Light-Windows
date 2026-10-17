@@ -35,7 +35,7 @@ from nightlight.core import locations
 from nightlight.core.schedule import OverrideKind
 from nightlight.ui import icons
 from nightlight.ui.night_light_text import is_night_light_on, night_light_status, schedule_description
-from nightlight.ui.widgets import SecondaryLabel, Separator, TemperatureSlider, set_font
+from nightlight.ui.widgets import HEADING_WEIGHT, SecondaryLabel, Separator, TemperatureSlider, set_font
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class SettingsWindow(QWidget):
         header_text = QVBoxLayout()
         header_text.setSpacing(2)
         title = QLabel(APP_NAME)
-        set_font(title, 1.45, QFont.Weight.DemiBold)
+        set_font(title, 1.45, HEADING_WEIGHT)
         header_text.addWidget(title)
         header_text.addWidget(SecondaryLabel("Brightness and night light for every display"))
         header.addWidget(self._header_icon, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -345,7 +345,7 @@ def _section(title: str, description: str = "") -> QWidget:
     layout.setContentsMargins(0, 0, 0, 4)
     layout.setSpacing(2)
     heading = QLabel(title)
-    set_font(heading, 1.1, QFont.Weight.DemiBold)
+    set_font(heading, 1.1, HEADING_WEIGHT)
     layout.addWidget(heading)
     if description:
         layout.addWidget(SecondaryLabel(description))

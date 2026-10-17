@@ -10,7 +10,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QTransform
 
 _SIZE = 64  # drawing coordinates
-_PIXMAP_SIZES = (16, 20, 24, 32, 40, 48, 64)
+_PIXMAP_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)  # tray sizes up to taskbar and Alt+Tab
 
 
 def night_icon() -> QIcon:
