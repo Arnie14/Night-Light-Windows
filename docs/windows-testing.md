@@ -153,6 +153,21 @@ Brightness options, also in Settings > General:
 - [ ] The settings window resizes itself when switching between Always off, Always on, location and custom times, without leaving empty space or clipping rows.
 - [ ] Take screenshots of the flyout and the settings window in both themes and send them back.
 
+## 10. The installed app
+
+With a build from [Releases](https://github.com/Arnie14/Night-Light-Windows/releases), or the Actions tab's `winlight-windows` artifact. Quit any copy run from source first.
+
+- [ ] Run `Winlight-<version>-setup.exe`. SmartScreen may warn ("More info → Run anyway"); note whether it does. There is **no administrator prompt**, and it installs to `%LOCALAPPDATA%\Programs\Winlight`.
+- [ ] The installer, the Start menu entry and `Winlight.exe` in Explorer all show the Winlight moon icon. Right-click `Winlight.exe` > Properties > Details: product name Winlight and the version.
+- [ ] "Launch Winlight" at the end starts it: tray icon only, **no console window**. The taskbar button (open Settings) shows the Winlight icon, not Python's.
+- [ ] Settings > Location: the city list is filled (the time zone table was bundled).
+- [ ] The app looks like the source version (native Windows 11 style, not a plainer fallback look).
+- [ ] Start at sign-in from the installed app: the Run key's command is `"…\Programs\Winlight\Winlight.exe"` (no `pythonw.exe`), and it starts after signing out and in.
+- [ ] With night light on, run the installer again (an upgrade): the running copy quits by itself, the screen goes back to normal colors before the files are replaced, and the settings are kept.
+- [ ] Uninstall from Settings > Apps: Winlight quits first (colors back to normal), its files and Start menu entry are gone, and the `Winlight` value is gone from the Run key. `%LOCALAPPDATA%\night-light` (settings) stays.
+- [ ] Portable zip: unzip to another folder, run `Winlight.exe`: it works the same.
+- [ ] Note the installer's size, and how long the app takes to start.
+
 ## What to send back
 
 - `probe.txt` and `night-light.log`, both from `%LOCALAPPDATA%\night-light\Logs\`.

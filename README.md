@@ -100,7 +100,16 @@ It is also a learning-focused project designed to:
 - Handle cross-device compatibility (DDC/CI, multi-monitor)
 - Use AI tools (like ChatGPT or Copilot) effectively in software development
 
-## 🚀 Getting Started
+## ⬇️ Download
+
+Get the latest build from [Releases](https://github.com/Arnie14/Night-Light-Windows/releases) (Windows 10 and 11, 64-bit):
+
+- **`Winlight-<version>-setup.exe`**: installs for your user only (no administrator rights), with a Start menu entry and an uninstaller.
+- **`Winlight-<version>-portable.zip`**: unzip anywhere and run `Winlight.exe`.
+
+Builds are beta and not yet code-signed, so Windows SmartScreen may show "Windows protected your PC". Choose **More info → Run anyway**. External monitors need DDC/CI switched on in their own on-screen menu.
+
+## 🚀 Getting Started (from source)
 
 ```bash
 # Clone the repo
@@ -136,6 +145,20 @@ Other options:
 
 - `python main.py --probe` prints what each Windows API reports about every display, and saves it as `probe.txt` in the log folder. Use it when a monitor misbehaves.
 - `--allow-multiple` lets a second copy start. Normally a second launch just opens the running copy's flyout.
+- `--quit` asks the running copy to quit cleanly (restoring normal colors). The installer uses it before upgrading or uninstalling.
+
+### Building the Windows app
+
+On Windows, with [Inno Setup 6](https://jrsoftware.org/isdl.php) installed for the installer:
+
+```powershell
+pip install -r requirements-dev.txt -r requirements-build.txt
+python packaging/build.py --version 0.1.0-beta.1
+```
+
+This writes `dist\Winlight\` (the app), the portable zip and the installer. [`packaging/`](packaging/) has the PyInstaller spec (one folder, no UPX, unused Qt modules left out), the Inno Setup script and the icon generator.
+
+Releases are built by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)): pushing a tag such as `v0.1.0-beta.1` runs the tests, builds on Windows and publishes a release (a pre-release when the tag has a `-`). Running the workflow by hand from the Actions tab builds the files without a release.
 
 Logs go to the terminal and to `night-light.log` in the user's log folder (`%LOCALAPPDATA%\night-light\Logs` on Windows).
 
@@ -157,6 +180,10 @@ nightlight/
   hardware/              backend interfaces (brightness.py, gamma.py), windows.py + win32.py
                          (Windows APIs), kde.py (Linux dev backend)
   ui/                    tray, flyout, placement, settings_window, widgets, night_light_text, icons
+  autostart.py           starting at sign-in (Run key)
+  brightness_memory.py   remembers and restores each monitor's brightness
+  data/                  time zone table for picking a location (from tools/make_timezones.py)
+packaging/               Windows build: PyInstaller spec, Inno Setup script, icon, build.py
 docs/                    Windows research notes and test plan
 tests/                   pytest suite (Windows backends run against a fake of the Windows APIs)
 ```

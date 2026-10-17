@@ -2,6 +2,7 @@
 """Layouts of the Windows API structures, and smoke tests that only run on Windows."""
 
 import ctypes
+import os
 import sys
 
 import pytest
@@ -9,6 +10,8 @@ import pytest
 from nightlight.hardware import win32
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="needs Windows")
+# Build machines (GitHub Actions sets CI) run without a desktop or monitors.
+real_display = pytest.mark.skipif(bool(os.environ.get("CI")), reason="needs a real display, not a CI runner")
 
 
 def test_instance_id_from_device_path():
@@ -43,6 +46,7 @@ def test_ddc_error_classification():
 
 
 @windows_only
+@real_display
 def test_display_configuration_lists_this_machines_displays():
     targets = win32.display_targets()
     assert targets, "QueryDisplayConfig found no active displays"
@@ -51,6 +55,7 @@ def test_display_configuration_lists_this_machines_displays():
 
 
 @windows_only
+@real_display
 def test_gamma_ramps_can_be_read():
     for name in win32.attached_display_names():
         ramp = win32.get_gamma_ramp(name)
@@ -58,6 +63,7 @@ def test_gamma_ramps_can_be_read():
 
 
 @windows_only
+@real_display
 def test_physical_monitor_handles_open_and_close():
     for monitor in win32.physical_monitors():
         win32.destroy_physical_monitor(monitor.handle)

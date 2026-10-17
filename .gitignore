@@ -5,6 +5,7 @@ venv/
 build/
 dist/
 *.spec
+!packaging/winlight.spec
 .idea/
 .vscode/
 

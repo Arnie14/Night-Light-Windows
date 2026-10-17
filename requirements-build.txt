@@ -1,0 +1,3 @@
+# Building the Windows app (packaging/build.py). Inno Setup 6 is installed
+# separately for the installer: https://jrsoftware.org/isdl.php
+pyinstaller>=6.10
