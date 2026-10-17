@@ -70,9 +70,11 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           body: |
-            **Beta.** Unsigned, so Windows SmartScreen may say "Windows protected your PC": choose **More info → Run anyway**.
+            **Beta** — not code-signed yet. If SmartScreen warns, choose **More info → Run anyway**.
 
-            - **Installer** (`…-setup.exe`): installs for your user only, no administrator rights, with a Start menu entry and an uninstaller.
-            - **Portable** (`…-portable.zip`): unzip anywhere and run `Winlight.exe`.
+            | File | |
+            |---|---|
+            | `…-setup.exe` | Installer. No admin rights needed. |
+            | `…-portable.zip` | Unzip and run `Winlight.exe`. |
 
-            Brightness control for external monitors needs DDC/CI turned on in the monitor's own menu. Please report problems with the files in `%LOCALAPPDATA%\night-light\Logs` (paste the path into Explorer).
+            External monitors need **DDC/CI** turned on in their on-screen menu. Found a problem? [Open an issue](https://github.com/Arnie14/Night-Light-Windows/issues) and attach the files from `%LOCALAPPDATA%\night-light\Logs`.
