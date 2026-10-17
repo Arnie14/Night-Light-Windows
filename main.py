@@ -69,6 +69,7 @@ def main() -> int:
     night_light = NightLightApp(app, brightness, gamma, args.config or config.default_path())
     instance.activated.connect(night_light.show_panel)
     instance.quitRequested.connect(app.quit)
+    app.aboutToQuit.connect(instance.close)
     exit_code = app.exec()
     if night_light.monitors.hung:
         # A display's DDC/CI call never returned and can't be interrupted;

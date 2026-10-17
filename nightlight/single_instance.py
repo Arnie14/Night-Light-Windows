@@ -85,14 +85,22 @@ class SingleInstance(QObject):
 
     def _on_connection(self) -> None:
         while self._server is not None and (socket := self._server.nextPendingConnection()) is not None:
-            # The command may already be waiting (on Windows it usually is, as
-            # the client sends it and hangs up at once), and readyRead only
-            # reports data that arrives later. So read now, again on new data,
-            # and once more at hang-up before the socket is deleted.
+            # Read whatever is already waiting, then whatever arrives. The
+            # sender waits until its command has been read before hanging up,
+            # so nothing needs reading at hang-up, when Qt is tearing the
+            # socket down (touching it then crashed on Windows).
             socket.readyRead.connect(lambda socket=socket: self._read(socket))
-            socket.disconnected.connect(lambda socket=socket: self._read(socket))
             socket.disconnected.connect(socket.deleteLater)
             self._read(socket)
+
+    def close(self) -> None:
+        """Stop listening (at exit, and between tests): closing explicitly
+        lets Qt finish its pending pipe operations instead of the server
+        being destroyed under them."""
+        if self._server is not None:
+            self._server.close()
+            self._server.deleteLater()
+            self._server = None
 
     def _read(self, socket: QLocalSocket) -> None:
         if socket.bytesAvailable() > 0:

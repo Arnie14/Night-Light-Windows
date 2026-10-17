@@ -57,7 +57,9 @@ def first():
     instance.activated.connect(lambda: received.__setitem__("show", received["show"] + 1))
     instance.quitRequested.connect(lambda: received.__setitem__("quit", received["quit"] + 1))
     instance.received = received
-    return instance
+    yield instance
+    instance.close()
+    QTest.qWait(50)  # let Qt finish closing the pipe before the next test
 
 
 def test_second_launch_shows_the_first(first):
