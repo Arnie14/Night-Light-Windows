@@ -2,7 +2,6 @@
 from datetime import datetime, timezone
 
 import pytest
-from PySide6.QtCore import QCoreApplication
 from PySide6.QtTest import QTest
 
 from nightlight import controller as controller_module
@@ -24,11 +23,6 @@ class RecordingGamma:
 
     def reset(self) -> None:
         self.resets += 1
-
-
-@pytest.fixture(scope="module", autouse=True)
-def qapp():
-    return QCoreApplication.instance() or QCoreApplication([])
 
 
 @pytest.fixture(autouse=True)
