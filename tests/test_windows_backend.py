@@ -174,7 +174,7 @@ def test_built_in_panel_is_marked_internal(monkeypatch):
     path = r"\\?\DISPLAY#BOE0812#4&2a6&0&UID26#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
     FakeDdc([], {}).install(monkeypatch, [target(r"\\.\DISPLAY1", "", INTERNAL, path=path)])
     [panel] = backend_with(FakeWmi([(r"DISPLAY\BOE0812\4&2a6&0&UID26_0", 80, [])])).list_monitors()
-    assert (panel.key, panel.internal) == ("BOE0812", True)
+    assert (panel.key, panel.internal, panel.minimum) == ("BOE0812", True, 1)
 
 
 def test_internal_panel_without_wmi_explains_why(monkeypatch):
@@ -314,3 +314,148 @@ def test_driver_that_ignores_ramps_does_not_cause_rebasing(monkeypatch):
     gamma.displays_changed()
     gamma.apply(4000)
     assert gamma._displays[r"\\.\DISPLAY1"].base is None
+
+
+# --- Software dimming and SDR brightness ------------------------------------
+
+D1 = r"\\.\DISPLAY1"
+
+
+def mid(gdi, name=D1, channel=0):
+    return gdi.ramps[name][channel][128] / 65535
+
+
+def test_dimming_and_night_light_share_one_ramp(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "TV")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.set_dimming(D1, 50)
+    dimmed_red, dimmed_blue = mid(gdi), mid(gdi, channel=2)
+    assert dimmed_red < 0.45  # darker than the identity's 0.5
+    gamma.apply(4500)  # night light on top keeps the dimming
+    assert mid(gdi) == pytest.approx(dimmed_red, abs=0.01)
+    assert mid(gdi, channel=2) == pytest.approx(dimmed_blue * whitepoint(4500)[2], abs=0.01)
+
+
+def test_night_light_off_keeps_dimming_and_quitting_undims(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "TV")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.set_dimming(D1, 50)
+    gamma.apply(4500)
+    gamma.reset()
+    assert gamma.dimmed and mid(gdi) < 0.45
+    assert gdi.ramps[D1][0] == gdi.ramps[D1][2]  # neutral again: no tint
+    gamma.release()
+    assert gdi.ramps[D1] == identity_ramp()
+
+
+def test_dimming_comes_back_after_windows_resets_the_ramp(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "TV")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.set_dimming(D1, 50)
+    gdi.ramps[D1] = identity_ramp()  # a display change resets it
+    gamma.displays_changed()
+    assert mid(gdi) < 0.45
+
+
+def test_reset_leaves_displays_it_never_changed_alone(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.reset()
+    assert gdi.sets == 0  # e.g. Windows Night Light keeps working while ours is off
+
+
+def test_dimming_that_windows_refuses_settles_at_the_darkest_accepted(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.9)  # stricter than the driver-safe 0.7 peak
+    gdi.install(monkeypatch, [target(D1, "TV")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.set_dimming(D1, 20)
+    assert gdi.ramps[D1][0][-1] >= 0.9 * 65535
+    assert gdi.ramps[D1] != identity_ramp()  # still dimmed, as far as Windows allows
+
+
+def test_hdr_displays_cannot_be_dimmed_in_software(monkeypatch):
+    FakeGdi({D1: identity_ramp()}).install(monkeypatch, [target(D1, "HDR", hdr=True)])
+    assert not windows.WindowsGammaBackend().can_dim(D1)
+
+
+def install_sdr(monkeypatch, nits=240.0, accept=True):
+    state = {"nits": nits, "sets": []}
+    monkeypatch.setattr(win32, "get_sdr_white_level", lambda t: state["nits"])
+
+    def set_level(t, value):
+        state["sets"].append(value)
+        if accept:
+            state["nits"] = value
+        return accept
+
+    monkeypatch.setattr(win32, "set_sdr_white_level", set_level)
+    return state
+
+
+def test_hdr_display_without_ddc_gets_sdr_brightness(monkeypatch):
+    FakeDdc([PhysicalMonitor(D1, 7, "x")], {}).install(monkeypatch, [target(D1, "HDR TV", hdr=True)])
+    state = install_sdr(monkeypatch, nits=280)
+    backend = backend_with()
+    [info] = backend.list_monitors()
+    assert (info.supported, info.control, info.reason) == (True, "sdr", "")
+    assert backend.get_brightness(0) == 50  # 280 nits is halfway along 80-480
+    backend.set_brightness(0, 100)
+    assert state["sets"] == [480]
+
+
+def test_refused_sdr_brightness_is_an_error(monkeypatch):
+    FakeDdc([PhysicalMonitor(D1, 7, "x")], {}).install(monkeypatch, [target(D1, "HDR TV", hdr=True)])
+    install_sdr(monkeypatch, accept=False)
+    backend = backend_with()
+    backend.list_monitors()
+    with pytest.raises(OSError):
+        backend.set_brightness(0, 30)
+
+
+def test_ddc_wins_over_sdr_on_an_hdr_monitor(monkeypatch):
+    FakeDdc([PhysicalMonitor(D1, 7, "x")], {7: (40, 100)}).install(monkeypatch, [target(D1, "HDR monitor", hdr=True)])
+    install_sdr(monkeypatch)
+    [info] = backend_with().list_monitors()
+    assert info.control == "hardware"
+
+
+def software_backend(monkeypatch, targets, ramps=None):
+    gdi = FakeGdi(ramps or {t.gdi_name: identity_ramp() for t in targets}, min_peak=0.0)
+    FakeDdc([PhysicalMonitor(t.gdi_name, i, "x") for i, t in enumerate(targets)], {}).install(monkeypatch, targets)
+    monkeypatch.setattr(win32, "get_gamma_ramp", lambda name: [list(c) for c in gdi.ramps[name]])
+    monkeypatch.setattr(win32, "set_gamma_ramp", gdi.set)
+    gamma = windows.WindowsGammaBackend()
+    backend = windows.WindowsBrightnessBackend(gamma)
+    backend._wmi = FakeWmi([])
+    return backend, gamma, gdi
+
+
+def test_display_without_ddc_gets_software_dimming(monkeypatch):
+    backend, gamma, gdi = software_backend(monkeypatch, [target(D1, "TV")])
+    [info] = backend.list_monitors()
+    assert (info.supported, info.control, info.minimum) == (True, "software", 20)
+    assert backend.get_brightness(0) == 100
+    backend.set_brightness(0, 40)
+    assert gamma.dimming(D1) == 40 and mid(gdi) < 0.4
+    assert backend.get_brightness(0) == 40
+    assert backend.is_powered_on(0) is None
+
+
+def test_software_dimming_turned_off(monkeypatch):
+    backend, gamma, gdi = software_backend(monkeypatch, [target(D1, "TV")])
+    backend.list_monitors()
+    backend.set_brightness(0, 40)
+    backend.set_software_dimming(False)
+    assert gamma.dimming(D1) == 100 and gdi.ramps[D1] == identity_ramp()  # undimmed at once
+    [info] = backend.list_monitors()
+    assert not info.supported and "DDC/CI" in info.reason
+
+
+def test_without_a_gamma_backend_there_is_no_software_dimming(monkeypatch):
+    FakeDdc([PhysicalMonitor(D1, 7, "x")], {}).install(monkeypatch, [target(D1, "TV")])
+    [info] = backend_with().list_monitors()
+    assert not info.supported

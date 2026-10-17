@@ -93,6 +93,9 @@ def _display_config(out) -> None:
     for target in targets:
         out(f"{target.gdi_name}: {target.friendly_name or '(no EDID name)'}")
         out(f"  connector {target.connector}{', built-in' if target.internal else ''}, HDR {'on' if target.hdr else 'off'}")
+        if target.hdr:
+            nits = win32.get_sdr_white_level(target)
+            out(f"  SDR content brightness: {f'{nits:.0f} nits' if nits is not None else 'unavailable'}")
         out(f"  instance {target.instance_id or '?'}")
 
 
@@ -203,7 +206,7 @@ def _backend(out, kind: str) -> None:
             out("No monitors")
         for info in monitors:
             kind = "built-in" if info.internal else "external"
-            out(f"{info.index}: {info.name} [{info.key or 'no id'}, {kind}]")
+            out(f"{info.index}: {info.name} [{info.key or 'no id'}, {kind}, control: {info.control if info.supported else 'none'}]")
             if info.supported:
                 power = getattr(brightness, "is_powered_on", lambda index: None)(info.index)
                 awake = {True: "on", False: "asleep", None: "unknown"}[power]

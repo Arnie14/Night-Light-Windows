@@ -27,6 +27,8 @@ def test_layouts_without_strings():
     assert ctypes.sizeof(win32.DISPLAYCONFIG_DEVICE_INFO_HEADER) == 20
     assert ctypes.sizeof(win32.DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO) == 32
     assert ctypes.sizeof(win32.DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2) == 36
+    assert ctypes.sizeof(win32.DISPLAYCONFIG_SDR_WHITE_LEVEL) == 24
+    assert ctypes.sizeof(win32.DISPLAYCONFIG_SET_SDR_WHITE_LEVEL) == 28  # 25 bytes, padded like the C struct
 
 
 @windows_only

@@ -107,7 +107,8 @@ class NightLightController(QObject):
     def shutdown(self) -> None:
         self._timer.stop()
         self._animation.stop()
-        self._gamma.reset()
+        # Undo everything, software dimming included, where the backend can.
+        getattr(self._gamma, "release", self._gamma.reset)()
 
     def _retarget(self, reapply: bool = False) -> None:
         target = self.target_temperature
@@ -138,7 +139,9 @@ class NightLightController(QObject):
             if kelvin == NEUTRAL_KELVIN:
                 # Reset rather than "apply 6500 K" and don't repeat it, so other
                 # tools (Windows Night Light, KWin's own) aren't fought while ours is idle.
-                if self._current != NEUTRAL_KELVIN:
+                # Displays dimmed in software keep their (dimmed) ramp,
+                # which Windows may reset meanwhile; re-apply that one.
+                if self._current != NEUTRAL_KELVIN or (reapply and getattr(self._gamma, "dimmed", False)):
                     self._gamma.reset()
             else:
                 self._gamma.apply(kelvin)

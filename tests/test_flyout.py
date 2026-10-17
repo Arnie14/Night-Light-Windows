@@ -11,7 +11,7 @@ from nightlight.ui.flyout import Flyout
 
 MONITORS = [
     MonitorInfo(0, "DELL", True, key="DEL"),
-    MonitorInfo(1, "Built-in display", True, key="BOE", internal=True),
+    MonitorInfo(1, "Built-in display", True, key="BOE", internal=True, minimum=1),
     MonitorInfo(2, "Old monitor", False, key="ACI"),
 ]
 
@@ -106,3 +106,16 @@ def test_popup_that_grows_while_open_stays_on_screen():
     assert popup.geometry().bottom() == small.bottom()  # still against the taskbar edge
     popup.hide()
     controller.shutdown()
+
+
+def test_displays_say_how_their_brightness_is_controlled():
+    from nightlight.ui.widgets import MonitorBrightness, SecondaryLabel
+
+    def captions(info):
+        row = MonitorBrightness(info)  # kept alive while its labels are read
+        return [label.text() for label in row.findChildren(SecondaryLabel) if label.text() != "…"]
+
+    assert captions(MonitorInfo(0, "DELL", True)) == []
+    assert captions(MonitorInfo(0, "HDR monitor", True, control="sdr")) == ["HDR · SDR content brightness"]
+    assert captions(MonitorInfo(0, "TV", True, control="software", minimum=20)) == ["Software dimming"]
+    assert MonitorBrightness(MonitorInfo(0, "TV", True, control="software", minimum=20)).slider.minimum() == 20

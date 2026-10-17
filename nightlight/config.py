@@ -66,6 +66,7 @@ class GeneralConfig:
     start_minimized: bool = True  # start in the tray only, without opening the settings
     remember_brightness: bool = True  # restore each monitor's level after start, sleep and reconnecting
     link_brightness: bool = False  # one slider moves every monitor's brightness
+    software_dimming: bool = True  # dim displays without brightness control (TVs) through the gamma ramp
 
 
 @dataclass(frozen=True)

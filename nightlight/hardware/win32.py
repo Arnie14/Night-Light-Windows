@@ -33,6 +33,13 @@ DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME = 2
 DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO = 9
 DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2 = 15  # Windows 11 24H2+
 DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR = 2
+# Windows' "SDR content brightness" for displays in HDR mode. Getting it is
+# documented; setting it is not, and uses the type Monitorian and Twinkle
+# Tray both use. Values are thousandths of 80 nits (1000 = 80 nits).
+DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL = 11
+DISPLAYCONFIG_DEVICE_INFO_SET_SDR_WHITE_LEVEL = 0xFFFFFFEE
+SDR_MIN_NITS = 80  # the ends of Windows' own slider (Monitorian's limits too)
+SDR_MAX_NITS = 480
 
 # DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY values.
 OUTPUT_TECHNOLOGIES = {
@@ -161,6 +168,15 @@ class DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2(ctypes.Structure):
     ]
 
 
+class DISPLAYCONFIG_SDR_WHITE_LEVEL(ctypes.Structure):
+    _fields_ = [("header", DISPLAYCONFIG_DEVICE_INFO_HEADER), ("SDRWhiteLevel", ctypes.c_uint32)]
+
+
+class DISPLAYCONFIG_SET_SDR_WHITE_LEVEL(ctypes.Structure):
+    # Undocumented; the flag is 1 in both Monitorian and Twinkle Tray.
+    _fields_ = [("header", DISPLAYCONFIG_DEVICE_INFO_HEADER), ("SDRWhiteLevel", ctypes.c_uint32), ("finalValue", ctypes.c_ubyte)]
+
+
 @dataclass(frozen=True)
 class DisplayTarget:
     """One active display, as Windows' display configuration describes it."""
@@ -170,6 +186,8 @@ class DisplayTarget:
     device_path: str  # "\\?\DISPLAY#DEL41A2#5&...#{e6f07b5f-...}"
     output_technology: int
     hdr: bool
+    adapter: tuple[int, int] = (0, 0)  # the adapter's LUID (low, high), for per-target queries
+    target_id: int = 0
 
     @property
     def internal(self) -> bool:
@@ -317,6 +335,8 @@ if sys.platform == "win32":
     _user32.QueryDisplayConfig.restype = wintypes.LONG
     _user32.DisplayConfigGetDeviceInfo.argtypes = [ctypes.POINTER(DISPLAYCONFIG_DEVICE_INFO_HEADER)]
     _user32.DisplayConfigGetDeviceInfo.restype = wintypes.LONG
+    _user32.DisplayConfigSetDeviceInfo.argtypes = [ctypes.POINTER(DISPLAYCONFIG_DEVICE_INFO_HEADER)]
+    _user32.DisplayConfigSetDeviceInfo.restype = wintypes.LONG
 
     _MONITORENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
     _user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.POINTER(wintypes.RECT), _MONITORENUMPROC, wintypes.LPARAM]
@@ -414,6 +434,8 @@ def display_targets() -> list[DisplayTarget]:
                 device_path=target.monitorDevicePath,
                 output_technology=path.targetInfo.outputTechnology,
                 hdr=_hdr_enabled(path.targetInfo.adapterId, path.targetInfo.id),
+                adapter=(path.targetInfo.adapterId.LowPart, path.targetInfo.adapterId.HighPart),
+                target_id=path.targetInfo.id,
             )
         )
     return targets
@@ -459,6 +481,24 @@ def _hdr_enabled(adapter: LUID, target_id: int) -> bool:
     if _device_info(info.header) == ERROR_SUCCESS:
         return bool(info.value & 0x2)
     return False
+
+
+def get_sdr_white_level(target: DisplayTarget) -> float | None:
+    """The SDR content brightness of an HDR display, in nits, or None."""
+    level = DISPLAYCONFIG_SDR_WHITE_LEVEL()
+    _fill_header(level.header, DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL, level, LUID(*target.adapter), target.target_id)
+    if _device_info(level.header) != ERROR_SUCCESS or level.SDRWhiteLevel == 0:
+        return None
+    return level.SDRWhiteLevel * 80 / 1000
+
+
+def set_sdr_white_level(target: DisplayTarget, nits: float) -> bool:
+    """Set the SDR content brightness, as Windows' slider does. Twinkle Tray
+    rounds to multiples of 4 nits, which Windows' own slider uses too."""
+    nits = max(SDR_MIN_NITS, min(SDR_MAX_NITS, round(nits / 4) * 4))
+    level = DISPLAYCONFIG_SET_SDR_WHITE_LEVEL(SDRWhiteLevel=round(nits * 1000 / 80), finalValue=1)
+    _fill_header(level.header, DISPLAYCONFIG_DEVICE_INFO_SET_SDR_WHITE_LEVEL, level, LUID(*target.adapter), target.target_id)
+    return _user32.DisplayConfigSetDeviceInfo(ctypes.byref(level.header)) == ERROR_SUCCESS
 
 
 def attached_display_names() -> list[str]:

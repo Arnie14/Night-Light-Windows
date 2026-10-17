@@ -72,3 +72,40 @@ def test_suspend_returns_to_neutral_with_reset():
     assert controller.current_temperature == 6500
     controller.clear_override()
     assert gamma.applied[-1] == 4500
+
+
+class DimmingGamma(RecordingGamma):
+    """A gamma backend with a display dimmed in software."""
+
+    dimmed = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.released = 0
+
+    def release(self) -> None:
+        self.released += 1
+
+
+def test_daytime_ticks_keep_a_dimmed_ramp_applied():
+    gamma = DimmingGamma()
+    controller = make(gamma)  # night light off: neutral
+    resets = gamma.resets
+    controller.update()  # a periodic tick, or after a display change
+    assert gamma.resets == resets + 1  # Windows may have reset the dimmed ramp
+    controller.shutdown()
+
+
+def test_daytime_ticks_leave_undimmed_displays_alone():
+    gamma = RecordingGamma()
+    controller = make(gamma)
+    resets = gamma.resets
+    controller.update()
+    assert gamma.resets == resets  # don't fight Windows Night Light while ours is idle
+    controller.shutdown()
+
+
+def test_quitting_releases_dimming_too():
+    gamma = DimmingGamma()
+    make(gamma).shutdown()
+    assert gamma.released == 1

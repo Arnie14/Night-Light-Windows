@@ -133,3 +133,10 @@ def test_brightness_options(window):
     general = window.current_config().general
     assert (general.remember_brightness, general.link_brightness) == (False, True)
     assert apply_button(window).isEnabled()
+
+
+def test_software_dimming_option(window):
+    assert window.software_dimming.isChecked()  # on by default
+    window.software_dimming.setChecked(False)
+    assert window.current_config().general.software_dimming is False
+    assert apply_button(window).isEnabled()

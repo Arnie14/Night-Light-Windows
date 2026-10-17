@@ -9,7 +9,7 @@ from nightlight.hardware.brightness import MonitorInfo, with_unique_keys
 
 DELL = MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2")
 LG = MonitorInfo(1, "LG 27GL850", True, key="GSM5B7F")
-PANEL = MonitorInfo(2, "Built-in display", True, key="BOE0812", internal=True)
+PANEL = MonitorInfo(2, "Built-in display", True, key="BOE0812", internal=True, minimum=1)
 NO_DDC = MonitorInfo(3, "Old monitor", False, key="ACI27A1")
 
 
@@ -124,7 +124,7 @@ def test_user_change_wins_over_a_pending_restore(tmp_path):
 def test_laptop_panel_is_never_restored_to_black(tmp_path):
     manager, _, _ = make(tmp_path, {"BOE0812": 0})
     manager.detect([PANEL], {2: 60})
-    assert manager.sent == [(2, brightness_memory.MIN_INTERNAL)]
+    assert manager.sent == [(2, 1)]
 
 
 def test_turned_off_neither_restores_nor_remembers(tmp_path):

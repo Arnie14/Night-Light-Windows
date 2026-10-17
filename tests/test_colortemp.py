@@ -1,5 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-only
-from nightlight.core.colortemp import NEUTRAL_KELVIN, gamma_ramp, identity_ramp, plausible_base, ramps_match, whitepoint
+import pytest
+
+from nightlight.core.colortemp import (
+    DRIVER_SAFE_PEAK,
+    NEUTRAL_KELVIN,
+    dimmed_ramp,
+    gamma_ramp,
+    identity_ramp,
+    plausible_base,
+    ramps_match,
+    whitepoint,
+)
 
 
 def test_neutral_is_identity():
@@ -61,3 +72,26 @@ def test_ramps_match_allows_driver_rounding():
     ramp = identity_ramp()
     assert ramps_match(ramp, [[min(65535, v + 200) for v in channel] for channel in ramp])
     assert not ramps_match(ramp, gamma_ramp(whitepoint(5000)))
+
+
+def test_full_brightness_leaves_the_ramp_alone():
+    base = identity_ramp()
+    base[0][-1] = 60000  # a calibration
+    assert dimmed_ramp(100, base=base) == base
+
+
+@pytest.mark.parametrize("percent", [20, 30, 45, 60, 80, 95])
+def test_dimming_stays_driver_safe_and_monotonic(percent):
+    ramp = dimmed_ramp(percent)
+    for channel in ramp:
+        assert channel[-1] >= DRIVER_SAFE_PEAK * 65535 - 1  # Windows rejects darker peaks
+        assert all(b >= a for a, b in zip(channel, channel[1:]))
+
+
+def test_dimming_darkens_mid_tones_in_order():
+    mid = [dimmed_ramp(p)[0][128] for p in (20, 40, 60, 80, 100)]
+    assert mid == sorted(mid) and mid[0] < mid[-1] * 0.65
+
+
+def test_dimming_below_the_minimum_is_clamped():
+    assert dimmed_ramp(0) == dimmed_ramp(20)

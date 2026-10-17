@@ -37,8 +37,9 @@ def create_backends(kind: str = "auto") -> tuple[BrightnessBackend, GammaBackend
     if sys.platform == "win32":
         from nightlight.hardware.windows import WindowsBrightnessBackend, WindowsGammaBackend
 
-        log.info("Using Windows (DDC/CI and WMI brightness, gamma ramp night light)")
-        return WindowsBrightnessBackend(), WindowsGammaBackend()
+        log.info("Using Windows (DDC/CI, WMI and SDR brightness, gamma ramp night light and dimming)")
+        gamma = WindowsGammaBackend()
+        return WindowsBrightnessBackend(gamma), gamma
     # DDC/CI works on Linux via i2c-dev, but gamma is Windows-only.
     log.warning("Gamma control is only implemented on Windows; night light will be simulated")
     return DdcBackend(), FakeGammaBackend()

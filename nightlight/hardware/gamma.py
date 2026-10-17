@@ -28,6 +28,26 @@ class FakeGammaBackend:
 
     def __init__(self) -> None:
         self.kelvin = NEUTRAL_KELVIN
+        self.dims: dict[str, int] = {}
+
+    @property
+    def dimmed(self) -> bool:
+        return any(dim < 100 for dim in self.dims.values())
+
+    def can_dim(self, name: str) -> bool:
+        return True
+
+    def dimming(self, name: str) -> int:
+        return self.dims.get(name, 100)
+
+    def set_dimming(self, name: str, percent: int) -> int:
+        log.info("Fake software dimming of %s -> %d%%", name, percent)
+        self.dims[name] = percent
+        return percent
+
+    def release(self) -> None:
+        self.dims.clear()
+        self.reset()
 
     @property
     def whitepoint(self) -> Whitepoint:

@@ -133,6 +133,11 @@ class SettingsWindow(QWidget):
         remember_hint = SecondaryLabel("Restored after starting, sleep and reconnecting a display", scale=0.92)
         remember_hint.setContentsMargins(self._checkbox_indent(), 0, 0, 0)
         self.link_brightness = QCheckBox("Change all displays together")
+        self.software_dimming = QCheckBox("Dim displays without brightness control")
+        self.software_dimming.setToolTip(
+            "For TVs and monitors without DDC/CI: their colors are dimmed instead,\n"
+            "as Twinkle Tray does. The backlight stays on, so it saves no power."
+        )
         if not can_autostart:
             self.start_with_windows.setEnabled(False)
             self.start_with_windows.setToolTip("Not available on this system")
@@ -160,6 +165,7 @@ class SettingsWindow(QWidget):
         self.form.addRow("Brightness:", self.remember_brightness)
         self.form.addRow("", remember_hint)
         self.form.addRow("", self.link_brightness)
+        self.form.addRow("", self.software_dimming)
 
         Button = QDialogButtonBox.StandardButton
         self.buttons = QDialogButtonBox(Button.RestoreDefaults | Button.Reset | Button.Apply)
@@ -195,6 +201,7 @@ class SettingsWindow(QWidget):
             self.start_minimized.toggled,
             self.remember_brightness.toggled,
             self.link_brightness.toggled,
+            self.software_dimming.toggled,
         ):
             signal.connect(self._on_changed)
         self.location.currentIndexChanged.connect(self._on_location_picked)
@@ -227,6 +234,7 @@ class SettingsWindow(QWidget):
             start_minimized=self.start_minimized.isChecked(),
             remember_brightness=self.remember_brightness.isChecked(),
             link_brightness=self.link_brightness.isChecked(),
+            software_dimming=self.software_dimming.isChecked(),
         )
         return AppConfig(night_light=night_light, general=general)
 
@@ -251,6 +259,7 @@ class SettingsWindow(QWidget):
         self.start_minimized.setChecked(general.start_minimized)
         self.remember_brightness.setChecked(general.remember_brightness)
         self.link_brightness.setChecked(general.link_brightness)
+        self.software_dimming.setChecked(general.software_dimming)
         self._on_changed()
 
     def _apply(self) -> None:

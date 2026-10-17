@@ -23,7 +23,7 @@ Both projects combine several APIs, because no single one gives everything:
 | WMI `root\wmi` `WmiMonitorBrightness` / `WmiMonitorBrightnessMethods` | Built-in laptop panel brightness and its supported levels | Both |
 | WinRT `DisplayMonitor` | Better names, connection kind | Monitorian, on Windows 10 1803+ |
 
-- ✅ `nightlight/hardware/win32.py` binds `QueryDisplayConfig`, `EnumDisplayMonitors`, dxva2 and GDI with ctypes. Names come from the EDID via `QueryDisplayConfig`, not from the DDC/CI capabilities string (see §7).
+- ✅ `nightlight/hardware/win32.py` binds `QueryDisplayConfig`, `EnumDisplayMonitors`, dxva2 and GDI with ctypes. Names come from the EDID via `QueryDisplayConfig`, not from the DDC/CI capabilities string (see §8).
 - ✅ The device path converts to a PnP instance id (`DISPLAY\BOE0812\4&...&UID265988`), which is how both projects match a WMI instance to a display.
 - ✅ The connector type marks built-in panels (LVDS, embedded DisplayPort or UDI, "internal") and "indirect" displays (DisplayLink/USB, Miracast, virtual), which have no DDC/CI channel.
 - ➖ WinRT `DisplayMonitor`: `QueryDisplayConfig` names have been good enough.
@@ -142,7 +142,7 @@ From Twinkle Tray's [display detection page](https://github.com/xanderfrangos/tw
 |---|---|---|
 | DDC/CI off in the monitor's menu, or blocked by a preset/mode | The most common cause (both FAQs) | ✅ The "not supported" text says to turn DDC/CI on, then to try another cable or port |
 | Hubs, converters, KVMs, MST and docks strip DDC/CI | Test without them; switching HDMI ↔ DisplayPort can help | ✅ Same advice in the "not supported" text; DisplayLink/USB displays get their own reason. 📋 Results by dock and adapter go in the test report |
-| TVs | "Most consumer TVs don't support it"; HDR TVs only have Windows' SDR brightness | ✅ HDMI displays that don't answer get "most TVs don't support it". 📋 SDR brightness for HDR displays (Monitorian, Twinkle Tray 1.17) and gamma "software dimming" for displays without DDC/CI (Twinkle Tray 1.18) |
+| TVs | "Most consumer TVs don't support it"; HDR TVs only have Windows' SDR brightness | ✅ HDR displays without DDC/CI get Windows' SDR brightness (as Monitorian and Twinkle Tray 1.17); other displays without control get software dimming (as Twinkle Tray 1.18). HDMI displays with neither say "most TVs don't support it" |
 | NVIDIA Surround / AMD Eyefinity | Incompatible: several monitors merged into one virtual display | ➖ Documented in the test plan |
 | Old AMD drivers, hub firmware | Known DDC/CI problems; update drivers and dock firmware | ➖ Advice for reports |
 | Monitors that hang during detection | Twinkle Tray 1.18 added a "safety system" and retries; capability strings are the worst offender | ✅ No capability strings. A watchdog reports a call stuck for 10 s in the log and the flyout ("A display isn't responding…"), and quitting no longer waits for it |
@@ -154,7 +154,25 @@ From Twinkle Tray's [display detection page](https://github.com/xanderfrangos/tw
 | Flicker when written to quickly | Twinkle Tray's update rate setting goes up to 2 s | ✅ 100 ms throttle, latest value only. 📋 A setting if testing finds flicker |
 | A monitor turned off with its button and back on | DisplayPort monitors disappear and come back (a display change); HDMI ones often stay listed | ✅ Display changes re-detect. 📋 Monitorian also re-checks when Windows turns the display on |
 
-## 7. Quirks and issues they ran into
+## 7. Design choices taken from their source code
+
+Reading [Monitorian](https://github.com/emoacht/Monitorian), [Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray) (both MIT) and [KWin](https://invent.kde.org/plasma/kwin) (GPL) for structure, not just behavior. No code is copied; the ideas are re-implemented.
+
+- **One class per way of controlling brightness** (Monitorian's `DdcMonitorItem`, `WmiMonitorItem`, `HdrMonitorItem`, `UnreachableMonitorItem` behind `IMonitor`).
+  - ✅ `hardware/windows.py`: `_VcpControl`, `_HighLevelControl`, `_WmiControl`, `_SdrControl`, `_SoftwareControl` behind `_Control` (read, write, power state, close). The backend picks one per display and never branches on the kind again; DDC/CI's "monitor gone" errors are translated in one place.
+- **Order of controls** (Monitorian's `MonitorManager`, plus Twinkle Tray's gamma fallback): hardware first, then SDR level on HDR displays, then software dimming, then "unreachable" with a reason.
+  - ✅ The same order. On an HDR monitor that answers DDC/CI, DDC/CI is kept (Twinkle Tray's default); 📋 testing will show whether HDR monitors ignore it, as some lock brightness in HDR mode, in which case SDR should win as in Monitorian.
+- **SDR white level** (Monitorian `DisplayConfig.cs`/`HdrMonitorItem.cs`, Twinkle Tray `windows-hdr.cc`): documented get (type 11), undocumented set (type `0xFFFFFFEE`, a flag byte of 1), thousandths of 80 nits, 80–480 nits mapped linearly to 0–100%, Twinkle Tray rounds to 4 nits.
+  - ✅ `win32.get_sdr_white_level`/`set_sdr_white_level`, same constants; the struct sizes are tested against the C layout.
+- **Software dimming** (Twinkle Tray `windows_display_brightness.cc`): a 20–100% range mapped to a 60–100% scale; the ramp's peak never below 70% because Windows rejects darker ramps; below that the exponent bends the curve so mid-tones still darken; always rebuilt from the stored base ramp so it never compounds; read back with a tolerance of 256.
+  - ✅ `colortemp.dimming_curve`/`dimmed_ramp`, the same numbers. If Windows still refuses, the backend settles at the darkest level it accepts and logs it once.
+- **Brightness and temperature in one transform** (KWin `ColorDevice::recalculateFactors`: brightness factors × temperature factors; setters only store a value and schedule one update).
+  - ✅ `WindowsGammaBackend` keeps each display's base ramp and dimming; night light and dimming both recompose base → dimmed → tinted, under a lock (night light comes from the UI thread, dimming from the monitor thread). Night light turning off keeps dimming; quitting (`release()`) undims and restores every ramp.
+- **Monitorian's 24H2 HDR check** (`ADVANCED_COLOR_INFO_2`, `activeColorMode == HDR`).
+  - ✅ Already used.
+- 📋 **Display power notifications** (Monitorian `PowerManagement.cs`: `RegisterPowerSettingNotification` for the console display state) would let the app restore brightness when a monitor turns back on without a display change, and avoid DDC/CI while displays are off. Worth doing if testing shows HDMI monitors coming back at the wrong level.
+
+## 8. Quirks and issues they ran into
 
 - **Monitors aren't ready straight after a change.** After a display change, resume or sign-in, monitors often don't answer DDC/CI for several seconds.
   - Monitorian's timers tick at gaps of 1, 4, 5 and 10 s after a display settings change, so it re-scans 1, 5, 10 and 20 s afterwards. After resume it re-scans at 5, 10, 20, 30 and 60 s; after the display turns on at 5 and 10 s; and after sign-in at 30 and 60 s. It ignores display changes while the display is off.

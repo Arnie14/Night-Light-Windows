@@ -41,10 +41,6 @@ from nightlight.monitors import MonitorManager
 log = logging.getLogger(__name__)
 
 SAVE_DELAY_MS = 2000
-# Laptop panels are never restored below this: on some laptops 0 turns the
-# backlight off completely, which looks like a dead screen (KDE keeps the
-# built-in display's minimum above zero for the same reason).
-MIN_INTERNAL = 1
 
 
 class BrightnessMemory(QObject):
@@ -105,9 +101,8 @@ class BrightnessMemory(QObject):
         if monitor is None or monitor.key not in self._due or value is None:
             return  # not due, or not answering yet: a later detection retries
         self._due.discard(monitor.key)
-        target = self.levels[monitor.key]
-        if monitor.internal:
-            target = max(target, MIN_INTERNAL)
+        # Never below what the monitor's slider allows (a laptop panel isn't restored to black).
+        target = max(self.levels[monitor.key], monitor.minimum)
         if value != target:
             log.info("Restoring %s brightness: %d%% -> %d%%", monitor.name, value, target)
             self._monitors.restore_brightness(index, target)

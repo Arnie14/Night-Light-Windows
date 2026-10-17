@@ -73,3 +73,12 @@ def test_brightness_settings_reach_the_memory_and_flyout(start):
 def test_brightness_file_sits_next_to_the_settings(start, tmp_path):
     night_light, _ = start(GeneralConfig())
     assert night_light.brightness_memory._path == tmp_path / "brightness.json"
+
+
+def test_turning_software_dimming_off_reaches_the_monitors(start, monkeypatch):
+    night_light, _ = start(GeneralConfig(software_dimming=True))
+    calls = []
+    monkeypatch.setattr(night_light.monitors, "set_software_dimming", calls.append)
+    night_light._apply_settings(AppConfig(general=GeneralConfig(software_dimming=False)))
+    night_light._apply_settings(AppConfig(general=GeneralConfig(software_dimming=False)))  # unchanged: nothing
+    assert calls == [False]

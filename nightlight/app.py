@@ -37,8 +37,10 @@ class NightLightApp:
         log.info("Settings file: %s", config_path)
 
         self._gamma = gamma
-        self.monitors = MonitorManager(brightness)
         general = self._config.general
+        if set_dimming := getattr(brightness, "set_software_dimming", None):
+            set_dimming(general.software_dimming)  # before the worker thread starts using it
+        self.monitors = MonitorManager(brightness)
         self.brightness_memory = BrightnessMemory(self.monitors, config_path.with_name("brightness.json"), general.remember_brightness)
         self.controller = NightLightController(gamma, self._config.night_light)
         self._settings: SettingsWindow | None = None
@@ -89,6 +91,7 @@ class NightLightApp:
         self._settings.activateWindow()
 
     def _apply_settings(self, new: config.AppConfig) -> None:
+        old_general = self._config.general
         self._config = new
         try:
             config.save(new, self._config_path)
@@ -97,6 +100,8 @@ class NightLightApp:
         self.controller.set_config(new.night_light)
         autostart.sync(self._autostart, new.general.start_with_windows)
         self.brightness_memory.set_enabled(new.general.remember_brightness)
+        if new.general.software_dimming != old_general.software_dimming:
+            self.monitors.set_software_dimming(new.general.software_dimming)
         self.flyout.set_linked(new.general.link_brightness)
 
     def _on_resumed(self) -> None:

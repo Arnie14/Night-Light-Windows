@@ -85,11 +85,20 @@ Per external monitor:
 - [ ] Note any **flicker** while dragging the slider, or a monitor that changes in visible steps instead of smoothly.
 - [ ] If the flyout ever shows "A display isn't responding", note which display and what you were doing, and send the log.
 
-TVs (over HDMI):
+TVs and displays without DDC/CI (software dimming):
 
-- [ ] The TV is listed. Most TVs don't support DDC/CI: it should show "not supported" with the TV hint, not an error. If it **does** have a working slider, note the brand and model.
+- [ ] The TV is listed with a slider and "Software dimming" under its name (Settings > General > "Dim displays without brightness control" is on by default). If it says "not supported" instead, send `probe.txt`.
+- [ ] Dragging its slider dims the picture smoothly down to 20%. Note how dark 20% looks, and any banding in dark gradients.
+- [ ] With night light on, the TV is both dimmed and warm; turning night light off keeps it dimmed.
+- [ ] Quit Winlight: the TV goes back to full brightness. Start it again: the dimming comes back (with "Remember each display's brightness" on).
+- [ ] Turn "Dim displays without brightness control" off and Apply: the TV goes back to full brightness at once and shows "not supported".
+- [ ] If a TV has a **real** brightness slider (DDC/CI works), note the brand and model.
 - [ ] Night light tints the TV like the other displays (unless HDR is on for it, where it is skipped and the log says so).
-- [ ] With HDR on for the TV (Settings > Display > Use HDR): note what the flyout shows and whether Windows' own "SDR content brightness" slider is available for it.
+HDR displays (Settings > Display > Use HDR):
+
+- [ ] An HDR display without DDC/CI shows "HDR · SDR content brightness". Its slider moves Windows' own "SDR content brightness" slider (Settings > Display > HDR) and the two agree after reopening the flyout.
+- [ ] An HDR monitor **with** DDC/CI keeps its normal slider: does moving it change the brightness while HDR is on? Note the model if it doesn't (some lock brightness in HDR mode).
+- [ ] Turn HDR off and on with Winlight running: the display switches between the two kinds of slider within a few seconds.
 - [ ] Note the TV's input mode (PC/Game mode or not) and whether that changes anything.
 
 Laptop panel:

@@ -11,10 +11,22 @@ docs/windows-notes.md for the quirks behind the details here.
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 
-from nightlight.core.colortemp import NEUTRAL_KELVIN, gamma_ramp, identity_ramp, plausible_base, ramps_match, whitepoint
+from nightlight.core.colortemp import (
+    NEUTRAL_KELVIN,
+    SOFTWARE_DIM_MIN,
+    dimmed_ramp,
+    gamma_ramp,
+    identity_ramp,
+    plausible_base,
+    ramps_match,
+    whitepoint,
+)
 from nightlight.hardware import win32
 from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo, nearest_level, to_percent, to_raw, valid_range, with_unique_keys
 
@@ -31,15 +43,135 @@ NO_DDC_REASON = (
 TV_HINT = " (most TVs don't support it)"
 
 
+class _Control:
+    """How one display's brightness is read and changed. Like Monitorian's
+    monitor item classes (DDC/CI, WMI, HDR, unreachable), each way is its own
+    class behind one interface, so the backend never branches on the kind.
+    DDC/CI errors pass through as win32.DdcError."""
+
+    kind = "none"  # for the log
+
+    def read(self) -> int | None:
+        return None
+
+    def write(self, value: int) -> None:
+        raise ValueError("this display has no brightness control")
+
+    def powered_on(self) -> bool | None:
+        """Whether the display says it is awake; None if it can't tell."""
+        return None
+
+    def close(self) -> None:
+        pass
+
+
+class _VcpControl(_Control):
+    """DDC/CI, reading and writing VCP 0x10 directly (Twinkle Tray's "fast" way)."""
+
+    kind = "vcp"
+
+    def __init__(self, handle: int, maximum: int) -> None:
+        self.handle = handle
+        self.maximum = maximum
+
+    def read(self) -> int | None:
+        current, maximum = win32.get_vcp(self.handle, win32.VCP_LUMINANCE)
+        if not valid_range(0, current, maximum):
+            return None
+        self.maximum = maximum
+        return to_percent(current, 0, maximum)
+
+    def write(self, value: int) -> None:
+        win32.set_vcp(self.handle, win32.VCP_LUMINANCE, to_raw(value, 0, self.maximum))
+
+    def powered_on(self) -> bool | None:
+        try:
+            mode, _maximum = win32.get_vcp(self.handle, win32.VCP_POWER_MODE)
+        except win32.DdcError as exc:
+            if exc.monitor_gone:
+                raise
+            return None  # many monitors don't report it
+        return mode == win32.POWER_ON
+
+    def close(self) -> None:
+        win32.destroy_physical_monitor(self.handle)
+
+
+class _HighLevelControl(_VcpControl):
+    """DDC/CI through GetMonitorBrightness, for monitors that reject plain VCP 0x10."""
+
+    kind = "high-level"
+
+    def __init__(self, handle: int, minimum: int, maximum: int) -> None:
+        super().__init__(handle, maximum)
+        self.minimum = minimum
+
+    def read(self) -> int | None:
+        minimum, current, maximum = win32.get_monitor_brightness(self.handle)
+        if not valid_range(minimum, current, maximum):
+            return None
+        self.minimum, self.maximum = minimum, maximum
+        return to_percent(current, minimum, maximum)
+
+    def write(self, value: int) -> None:
+        win32.set_monitor_brightness(self.handle, to_raw(value, self.minimum, self.maximum))
+
+
+class _WmiControl(_Control):
+    """A laptop's built-in panel through WMI."""
+
+    kind = "wmi"
+
+    def __init__(self, wmi: Callable[[], _Wmi], instance: str, levels: list[int]) -> None:
+        self._wmi = wmi
+        self.instance = instance
+        self.levels = levels
+
+    def read(self) -> int | None:
+        return self._wmi().get(self.instance)
+
+    def write(self, value: int) -> None:
+        self._wmi().set(self.instance, nearest_level(self.levels, value))
+
+
+class _SdrControl(_Control):
+    """Windows' SDR content brightness, for a display with HDR on."""
+
+    kind = "sdr"
+
+    def __init__(self, target: win32.DisplayTarget) -> None:
+        self.target = target
+
+    def read(self) -> int | None:
+        nits = win32.get_sdr_white_level(self.target)
+        return None if nits is None else _sdr_percent(nits)
+
+    def write(self, value: int) -> None:
+        nits = win32.SDR_MIN_NITS + value * (win32.SDR_MAX_NITS - win32.SDR_MIN_NITS) / 100
+        if not win32.set_sdr_white_level(self.target, nits):
+            raise OSError("Windows refused the SDR brightness (is HDR still on?)")
+
+
+class _SoftwareControl(_Control):
+    """Dimming the display's gamma ramp, together with night light."""
+
+    kind = "software"
+
+    def __init__(self, gamma: WindowsGammaBackend, gdi_name: str) -> None:
+        self.gamma = gamma
+        self.gdi_name = gdi_name
+
+    def read(self) -> int | None:
+        return self.gamma.dimming(self.gdi_name)
+
+    def write(self, value: int) -> None:
+        self.gamma.set_dimming(self.gdi_name, value)
+
+
 @dataclass
 class _Monitor:
     info: MonitorInfo
-    method: str = "none"  # "vcp", "high-level", "wmi" or "none"
-    handle: int | None = None  # physical monitor handle, for DDC/CI
-    minimum: int = 0
-    maximum: int = 100
-    wmi_instance: str = ""
-    levels: list[int] = field(default_factory=list)
+    control: _Control = field(default_factory=_Control)
     detected: int | None = None  # brightness read while detecting, handed out once
 
 
@@ -76,16 +208,34 @@ class _Wmi:
 
 
 class WindowsBrightnessBackend:
-    """External monitors over DDC/CI (dxva2) and built-in panels over WMI.
+    """Each display's brightness by the best means it has, in Monitorian's
+    order with Twinkle Tray's software fallback:
+
+    1. DDC/CI (dxva2) for external monitors, WMI for built-in panels: the
+       backlight itself.
+    2. Windows' SDR content brightness, for displays with HDR on.
+    3. Software dimming of the gamma ramp, shared with night light (see
+       WindowsGammaBackend), for the rest, such as most TVs. Needs `gamma`,
+       and can be turned off.
 
     Physical monitor handles stay open between calls, as Monitorian and Twinkle
     Tray keep them, and are released when monitors are detected again.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, gamma: WindowsGammaBackend | None = None) -> None:
         self._monitors: list[_Monitor] = []
         self._wmi: _Wmi | None = None
         self._wmi_problem = ""
+        self._gamma = gamma
+        self.software_dimming = gamma is not None
+
+    def set_software_dimming(self, enabled: bool) -> None:
+        """Takes effect at the next detection; turning it off undims at once."""
+        self.software_dimming = enabled and self._gamma is not None
+        if not self.software_dimming:
+            for monitor in self._monitors:
+                if isinstance(monitor.control, _SoftwareControl):
+                    monitor.control.write(100)
 
     def list_monitors(self) -> list[MonitorInfo]:
         self.close()
@@ -117,6 +267,8 @@ class WindowsBrightnessBackend:
                 else:
                     hdmi = target.output_technology == win32.OUTPUT_HDMI
                     monitor = _Monitor(MonitorInfo(0, name, False, NO_DDC_REASON + (TV_HINT if hdmi else "")))
+                if not monitor.info.supported:
+                    monitor = self._fallback(monitor, target)
                 monitor.info = replace(monitor.info, key=target.hardware_id, internal=target.internal)
                 monitors.append(monitor)
             monitors += responding  # more answering monitors than targets; shouldn't happen
@@ -126,14 +278,29 @@ class WindowsBrightnessBackend:
             for physical in physicals:
                 monitors.append(self._probe(physical) or _Monitor(MonitorInfo(0, physical.description, False)))
         for instance, current, levels in panels:
-            info = MonitorInfo(0, "Built-in display", True, key="internal", internal=True)
-            monitors.append(_Monitor(info, "wmi", wmi_instance=instance, levels=levels, detected=current))
+            info = MonitorInfo(0, "Built-in display", True, key="internal", internal=True, minimum=1)
+            monitors.append(_Monitor(info, _WmiControl(self._get_wmi, instance, levels), current))
 
         for monitor, info in zip(monitors, with_unique_keys([replace(m.info, index=i) for i, m in enumerate(monitors)])):
             monitor.info = info
-            log.info("Monitor %d: %s [%s] (%s)", info.index, info.name, info.key, monitor.method if info.supported else "not supported")
+            log.info("Monitor %d: %s [%s] (%s)", info.index, info.name, info.key, monitor.control.kind if info.supported else "not supported")
         self._monitors = monitors
         return [m.info for m in monitors]
+
+    def _fallback(self, monitor: _Monitor, target: win32.DisplayTarget) -> _Monitor:
+        """SDR brightness or software dimming for a display without hardware control."""
+        info = monitor.info
+        if target.hdr:
+            try:
+                nits = win32.get_sdr_white_level(target)
+            except OSError:
+                nits = None
+            if nits is not None:
+                return _Monitor(replace(info, supported=True, reason="", control="sdr"), _SdrControl(target), _sdr_percent(nits))
+        elif self.software_dimming and self._gamma is not None and self._gamma.can_dim(target.gdi_name):
+            info = replace(info, supported=True, reason="", control="software", minimum=SOFTWARE_DIM_MIN)
+            return _Monitor(info, _SoftwareControl(self._gamma, target.gdi_name))
+        return monitor
 
     def get_brightness(self, index: int) -> int | None:
         monitor = self._monitors[index]
@@ -141,63 +308,44 @@ class WindowsBrightnessBackend:
             value, monitor.detected = monitor.detected, None
             return value
         try:
-            if monitor.method == "vcp":
-                current, maximum = win32.get_vcp(monitor.handle, win32.VCP_LUMINANCE)
-                if valid_range(0, current, maximum):
-                    monitor.maximum = maximum
-                    return to_percent(current, 0, maximum)
-            elif monitor.method == "high-level":
-                minimum, current, maximum = win32.get_monitor_brightness(monitor.handle)
-                if valid_range(minimum, current, maximum):
-                    monitor.minimum, monitor.maximum = minimum, maximum
-                    return to_percent(current, minimum, maximum)
-            elif monitor.method == "wmi":
-                return self._get_wmi().get(monitor.wmi_instance)
-        except win32.DdcError as exc:
-            if exc.monitor_gone:
-                raise MonitorGoneError(monitor.info.name) from exc
-            log.warning("Failed to read brightness of %s: %s", monitor.info.name, exc)
+            with self._gone_if_unplugged(monitor):
+                return monitor.control.read()
         except MonitorGoneError:
             raise
+        except win32.DdcError as exc:
+            log.warning("Failed to read brightness of %s: %s", monitor.info.name, exc)
         except Exception:
             log.warning("Failed to read brightness of %s", monitor.info.name, exc_info=True)
         return None
 
     def set_brightness(self, index: int, value: int) -> None:
         monitor = self._monitors[index]
+        with self._gone_if_unplugged(monitor):
+            monitor.control.write(value)
+
+    def is_powered_on(self, index: int) -> bool | None:
+        """Whether a DDC/CI monitor says it is on (VCP 0xD6). None when it
+        can't tell: no answer, or not DDC/CI (a laptop panel is on while
+        Windows runs; SDR and software control don't talk to the display)."""
+        monitor = self._monitors[index]
+        with self._gone_if_unplugged(monitor):
+            return monitor.control.powered_on()
+
+    def close(self) -> None:
+        for monitor in self._monitors:
+            monitor.control.close()
+        self._monitors = []
+
+    @staticmethod
+    @contextmanager
+    def _gone_if_unplugged(monitor: _Monitor) -> Iterator[None]:
+        """Turn DDC/CI's "monitor no longer exists" errors into MonitorGoneError."""
         try:
-            if monitor.method == "vcp":
-                win32.set_vcp(monitor.handle, win32.VCP_LUMINANCE, to_raw(value, 0, monitor.maximum))
-            elif monitor.method == "high-level":
-                win32.set_monitor_brightness(monitor.handle, to_raw(value, monitor.minimum, monitor.maximum))
-            elif monitor.method == "wmi":
-                self._get_wmi().set(monitor.wmi_instance, nearest_level(monitor.levels, value))
-            else:
-                raise ValueError(f"{monitor.info.name} has no brightness control")
+            yield
         except win32.DdcError as exc:
             if exc.monitor_gone:
                 raise MonitorGoneError(monitor.info.name) from exc
             raise
-
-    def is_powered_on(self, index: int) -> bool | None:
-        """Whether a DDC/CI monitor says it is on (VCP 0xD6). None when it
-        can't tell: no answer, or a laptop panel (on while Windows runs)."""
-        monitor = self._monitors[index]
-        if monitor.handle is None or monitor.method not in ("vcp", "high-level"):
-            return None
-        try:
-            mode, _maximum = win32.get_vcp(monitor.handle, win32.VCP_POWER_MODE)
-        except win32.DdcError as exc:
-            if exc.monitor_gone:
-                raise MonitorGoneError(monitor.info.name) from exc
-            return None  # many monitors don't report it; treat as unknown
-        return mode == win32.POWER_ON
-
-    def close(self) -> None:
-        for monitor in self._monitors:
-            if monitor.handle is not None:
-                win32.destroy_physical_monitor(monitor.handle)
-        self._monitors = []
 
     def _probe(self, physical: win32.PhysicalMonitor) -> _Monitor | None:
         """A monitor that answers DDC/CI brightness requests, or None (and the handle is released).
@@ -211,7 +359,7 @@ class WindowsBrightnessBackend:
         try:
             current, maximum = win32.get_vcp(physical.handle, win32.VCP_LUMINANCE)
             if valid_range(0, current, maximum):
-                return _Monitor(info, "vcp", physical.handle, 0, maximum, detected=to_percent(current, 0, maximum))
+                return _Monitor(info, _VcpControl(physical.handle, maximum), to_percent(current, 0, maximum))
             log.info("%s on %s reported brightness %d of %d; ignoring it", name, physical.gdi_name, current, maximum)
         except win32.DdcError as exc:
             log.info("%s on %s: no DDC/CI brightness (%s)", name, physical.gdi_name, exc)
@@ -221,7 +369,7 @@ class WindowsBrightnessBackend:
         try:
             minimum, current, maximum = win32.get_monitor_brightness(physical.handle)
             if valid_range(minimum, current, maximum):
-                return _Monitor(info, "high-level", physical.handle, minimum, maximum, detected=to_percent(current, minimum, maximum))
+                return _Monitor(info, _HighLevelControl(physical.handle, minimum, maximum), to_percent(current, minimum, maximum))
         except win32.DdcError as exc:
             log.debug("%s on %s: GetMonitorBrightness failed too (%s)", name, physical.gdi_name, exc)
         win32.destroy_physical_monitor(physical.handle)
@@ -238,7 +386,7 @@ class WindowsBrightnessBackend:
             return _Monitor(MonitorInfo(0, name, False, reason))
         panels.remove(match)
         instance, current, levels = match
-        return _Monitor(MonitorInfo(0, name, True), "wmi", wmi_instance=instance, levels=levels, detected=current)
+        return _Monitor(MonitorInfo(0, name, True, minimum=1), _WmiControl(self._get_wmi, instance, levels), current)
 
     def _get_wmi(self) -> _Wmi:
         if self._wmi is None:
@@ -262,6 +410,12 @@ class WindowsBrightnessBackend:
         return panels
 
 
+def _sdr_percent(nits: float) -> int:
+    """SDR white level to 0-100 across Windows' 80-480 nit slider (as Monitorian)."""
+    span = win32.SDR_MAX_NITS - win32.SDR_MIN_NITS
+    return max(0, min(100, round((nits - win32.SDR_MIN_NITS) * 100 / span)))
+
+
 @dataclass
 class _GammaDisplay:
     name: str  # GDI name, "\\.\DISPLAY1"
@@ -269,6 +423,9 @@ class _GammaDisplay:
     base: win32.GammaRamp | None = None  # the ramp to tint, None for identity
     last_set: win32.GammaRamp | None = None
     warmest: int = 0  # warmest temperature Windows accepted here, once it refused one
+    dim: int = 100  # software dimming, percent (100: none)
+    dim_floor: int = 0  # darkest dimming Windows accepted here, once it refused one
+    leftover: bool = False  # found tinted (a crash, f.lux): put neutral back even if we never set it
 
 
 class WindowsGammaBackend:
@@ -276,6 +433,12 @@ class WindowsGammaBackend:
 
     The display's own ramp (usually its calibration) is kept as the base and
     tinted, rather than replaced with a flat one, and is put back by reset().
+
+    Night light and software dimming share the one ramp, so, like KWin's
+    ColorDevice (brightness x temperature), each display keeps its state
+    (base ramp, dimming) and every change composes the whole ramp again:
+    base, dimmed, then tinted. Night light is set from the UI thread and
+    dimming from the monitor thread, so a lock guards the state.
     """
 
     # How long the display list and their HDR state are trusted.
@@ -285,23 +448,85 @@ class WindowsGammaBackend:
         self._displays: dict[str, _GammaDisplay] = {}
         self._listed_at: float | None = None
         self._warned: set[tuple[str, str]] = set()
+        self._kelvin = NEUTRAL_KELVIN
+        self._lock = threading.RLock()
+
+    @property
+    def dimmed(self) -> bool:
+        """Some display is dimmed, so its ramp must be kept even while night light is off."""
+        return any(d.dim < 100 for d in self._displays.values())
 
     def displays_changed(self) -> None:
-        """Displays were added, removed or reconfigured: look at them again."""
-        self._listed_at = None
-        for display in self._displays.values():
-            display.warmest = 0
+        """Displays were added, removed or reconfigured: look at them again.
+        Windows resets gamma ramps then, so dimmed displays are dimmed again."""
+        with self._lock:
+            self._listed_at = None
+            for display in self._displays.values():
+                display.warmest = 0
+                display.dim_floor = 0
+            for display in self._current_displays():
+                if display.dim < 100:
+                    self._apply(display)
 
     def apply(self, kelvin: int) -> None:
-        for display in self._current_displays():
-            self._apply(display, kelvin)
+        with self._lock:
+            self._kelvin = kelvin
+            for display in self._current_displays():
+                self._apply(display)
 
     def reset(self) -> None:
-        for display in self._current_displays():
-            if not display.hdr:
-                self._set(display, display.base or identity_ramp(win32.RAMP_SIZE))
+        """Night light off: neutral colors, keeping any dimming. Displays the
+        app hasn't changed are left alone, so other color tools aren't fought."""
+        with self._lock:
+            self._kelvin = NEUTRAL_KELVIN
+            for display in self._current_displays():
+                if display.dim < 100:
+                    self._apply(display)
+                elif self._owned(display):
+                    base = display.base or identity_ramp(win32.RAMP_SIZE)
+                    if display.leftover or not ramps_match(display.last_set, base):
+                        self._set(display, base)
 
-    def _apply(self, display: _GammaDisplay, kelvin: int) -> None:
+    def release(self) -> None:
+        """Quitting: give every display back its own ramp, undimmed."""
+        with self._lock:
+            for display in self._current_displays():
+                if self._owned(display):
+                    self._set(display, display.base or identity_ramp(win32.RAMP_SIZE))
+
+    @staticmethod
+    def _owned(display: _GammaDisplay) -> bool:
+        """Whether resetting this display's ramp is ours to do."""
+        return not display.hdr and (display.last_set is not None or display.leftover)
+
+    def can_dim(self, gdi_name: str) -> bool:
+        """Whether software dimming can work here: an SDR display whose ramp can be read."""
+        with self._lock:
+            display = next((d for d in self._current_displays() if d.name == gdi_name), None)
+            if display is None or display.hdr:
+                return False
+            try:
+                return win32.get_gamma_ramp(gdi_name) is not None
+            except OSError:
+                return False
+
+    def dimming(self, gdi_name: str) -> int:
+        with self._lock:
+            display = self._displays.get(gdi_name)
+            return display.dim if display else 100
+
+    def set_dimming(self, gdi_name: str, percent: int) -> int:
+        """Dim a display to `percent`; returns the level it ended up at, which
+        is higher if Windows refused darker ramps."""
+        with self._lock:
+            display = next((d for d in self._current_displays() if d.name == gdi_name), None)
+            if display is None:
+                return 100
+            display.dim = max(SOFTWARE_DIM_MIN, min(100, percent)) if percent < 100 else 100
+            self._apply(display)
+            return display.dim
+
+    def _apply(self, display: _GammaDisplay) -> None:
         if display.hdr:
             self._warn_once(
                 display.name,
@@ -310,13 +535,15 @@ class WindowsGammaBackend:
                 display.name,
             )
             return
-        target = max(kelvin, display.warmest)
-        if self._set(display, gamma_ramp(whitepoint(target), win32.RAMP_SIZE, display.base)) or target >= NEUTRAL_KELVIN:
+        kelvin = max(self._kelvin, display.warmest)
+        dim = max(display.dim, display.dim_floor)
+        if self._try(display, kelvin, dim) or (kelvin >= NEUTRAL_KELVIN and dim >= 100):
             return
         # Windows rejects ramps far from identity unless the GdiIcmGammaRange
-        # registry value is raised; settle for the warmest one it accepts.
-        for warmer in range((target // 100 + 1) * 100, NEUTRAL_KELVIN + 1, 100):
-            if self._set(display, gamma_ramp(whitepoint(warmer), win32.RAMP_SIZE, display.base)):
+        # registry value is raised: keep the dimming and settle for the
+        # warmest tint it accepts, then, if needed, dim less.
+        for warmer in range((kelvin // 100 + 1) * 100, NEUTRAL_KELVIN + 1, 100):
+            if self._try(display, warmer, dim):
                 display.warmest = warmer
                 self._warn_once(
                     display.name,
@@ -327,7 +554,16 @@ class WindowsGammaBackend:
                     display.name,
                 )
                 return
+        for lighter in range(dim + 5, 101, 5):
+            if self._try(display, kelvin, lighter):
+                display.dim_floor = lighter
+                self._warn_once(display.name, "dim", "Windows refused to dim %s below %d%%", display.name, lighter)
+                return
         self._warn_once(display.name, "rejected", "Windows rejected every gamma ramp for %s", display.name)
+
+    def _try(self, display: _GammaDisplay, kelvin: int, dim: int) -> bool:
+        base = display.base if dim >= 100 else dimmed_ramp(dim, win32.RAMP_SIZE, display.base)
+        return self._set(display, gamma_ramp(whitepoint(kelvin), win32.RAMP_SIZE, base))
 
     def _set(self, display: _GammaDisplay, ramp: win32.GammaRamp) -> bool:
         try:
@@ -348,6 +584,7 @@ class WindowsGammaBackend:
             )
             ramp = applied
         display.last_set = ramp
+        display.leftover = False
         return True
 
     def _current_displays(self) -> list[_GammaDisplay]:
@@ -388,6 +625,7 @@ class WindowsGammaBackend:
         display.last_set = None
         if not plausible_base(current):
             display.base = None
+            display.leftover = True
             self._warn_once(
                 display.name,
                 "tinted",

@@ -137,6 +137,12 @@ class _Worker(QObject):
             log.warning("Restoring the brightness of %s failed; trying again later", name, exc_info=True)
             self.restoreDeferred.emit(index)
 
+    @Slot(bool)
+    def set_software_dimming(self, enabled: bool) -> None:
+        if set_dimming := getattr(self._backend, "set_software_dimming", None):
+            with self._calling("changing software dimming"):
+                set_dimming(enabled)
+
     @Slot()
     def close(self) -> None:
         if close := getattr(self._backend, "close", None):
@@ -159,6 +165,7 @@ class MonitorManager(QObject):
     _readRequested = Signal()
     _setBrightnessRequested = Signal(int)
     _restoreRequested = Signal(int, int)
+    _softwareDimmingRequested = Signal(bool)
     _closeRequested = Signal()
 
     def __init__(self, backend: BrightnessBackend, parent: QObject | None = None) -> None:
@@ -182,6 +189,7 @@ class MonitorManager(QObject):
         self._readRequested.connect(self._worker.read_brightness)
         self._setBrightnessRequested.connect(self._worker.set_brightness)
         self._restoreRequested.connect(self._worker.restore)
+        self._softwareDimmingRequested.connect(self._worker.set_software_dimming)
         self._closeRequested.connect(self._worker.close)
         self._worker.monitorsFound.connect(self._on_monitors_found)
         self._worker.brightnessRead.connect(self._on_brightness_read)
@@ -239,6 +247,12 @@ class MonitorManager(QObject):
             self._pending[index] = value
         if not queued:
             self._setBrightnessRequested.emit(index)
+
+    def set_software_dimming(self, enabled: bool) -> None:
+        """Turn software dimming of displays without brightness control on or
+        off, then detect monitors again so they're listed accordingly."""
+        self._softwareDimmingRequested.emit(enabled)
+        self.refresh()
 
     def restore_brightness(self, index: int, value: int) -> None:
         """Put back a remembered level if the monitor is awake (see

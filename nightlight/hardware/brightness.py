@@ -28,6 +28,14 @@ class MonitorInfo:
     # used where known. Identical monitors are told apart by order ("#2").
     key: str = ""
     internal: bool = False  # a laptop's built-in panel
+    # How brightness is changed: "hardware" (DDC/CI, or WMI for a laptop
+    # panel), "sdr" (Windows' SDR content brightness, for HDR displays) or
+    # "software" (dimming the gamma ramp, for displays without either).
+    control: str = "hardware"
+    # The lowest level the slider offers: 1 for laptop panels, which can go
+    # fully dark at 0 (KDE keeps them above zero too), and software dimming's
+    # floor, below which Windows rejects the ramp.
+    minimum: int = 0
 
 
 def with_unique_keys(monitors: list[MonitorInfo]) -> list[MonitorInfo]:
@@ -133,16 +141,24 @@ class FakeBrightnessBackend:
 
     def __init__(self, latency: float = 0.15) -> None:
         self._latency = latency
+        # One of each kind of control, and one display without any.
         self._monitors = [
-            MonitorInfo(0, "Fake Monitor 1 (DELL U2720Q)", True, key="DEL41A2"),
-            MonitorInfo(1, "Fake Monitor 2 (LG 27GL850)", True, key="GSM5B7F"),
-            MonitorInfo(2, "Fake Monitor 3 (no DDC/CI)", False, key="ACI27A1"),
+            MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2"),
+            MonitorInfo(1, "LG 27GP950 (HDR)", True, key="GSM5BBF", control="sdr"),
+            MonitorInfo(2, "Living room TV", True, key="SAM7136", control="software", minimum=20),
+            MonitorInfo(3, "Old projector", False, key="EPS0000", reason="Didn't answer over DDC/CI. Turn DDC/CI on in the display's own menu"),
         ]
-        self._brightness = {0: 70, 1: 40}
+        self._brightness = {0: 70, 1: 40, 2: 100}
+        self.software_dimming = True
+
+    def set_software_dimming(self, enabled: bool) -> None:
+        self.software_dimming = enabled
 
     def list_monitors(self) -> list[MonitorInfo]:
         time.sleep(self._latency * len(self._monitors))
-        return list(self._monitors)
+        if self.software_dimming:
+            return list(self._monitors)
+        return [replace(m, supported=False, control="hardware", reason="No brightness control") if m.control == "software" else m for m in self._monitors]
 
     def get_brightness(self, index: int) -> int | None:
         time.sleep(self._latency)

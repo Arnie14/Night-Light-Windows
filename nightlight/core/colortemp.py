@@ -7,6 +7,8 @@ neutral (no change); lower temperatures dim blue and green to warm the image.
 
 from __future__ import annotations
 
+import math
+
 MIN_KELVIN = 1000
 MAX_KELVIN = 6500
 NEUTRAL_KELVIN = 6500
@@ -100,6 +102,38 @@ def gamma_ramp(wp: Whitepoint, size: int = 256, base: list[list[int]] | None = N
     if base is None:
         base = identity_ramp(size)
     return [[min(65535, round(value * factor)) for value in channel] for channel, factor in zip(base, wp)]
+
+
+# Software dimming through the gamma ramp, for displays without hardware
+# brightness control. Windows rejects ramps far from identity, so, as Twinkle
+# Tray does, the ramp's peak never drops below DRIVER_SAFE_PEAK; darker levels
+# bend the curve so the mid-tones reach the requested level instead. Its
+# range 20-100% maps to a 60-100% scale, which Twinkle Tray found reliable.
+SOFTWARE_DIM_MIN = 20
+_DIM_SCALE_AT_MIN = 0.6
+DRIVER_SAFE_PEAK = 0.7
+
+
+def dimming_curve(percent: float) -> tuple[float, float]:
+    """(peak, exponent) of the dimming curve output = peak * input ** exponent."""
+    percent = max(SOFTWARE_DIM_MIN, min(100, percent))
+    scale = _DIM_SCALE_AT_MIN + (percent - SOFTWARE_DIM_MIN) * (1 - _DIM_SCALE_AT_MIN) / (100 - SOFTWARE_DIM_MIN)
+    if scale >= DRIVER_SAFE_PEAK:
+        return scale, 1.0
+    # Keep the peak driver-safe, and pick the exponent that puts half input at `scale` of half output.
+    return DRIVER_SAFE_PEAK, math.log(scale * 0.5 / DRIVER_SAFE_PEAK) / math.log(0.5)
+
+
+def dimmed_ramp(percent: float, size: int = 256, base: list[list[int]] | None = None) -> list[list[int]]:
+    """`base` (the identity by default) dimmed to `percent`; 100 returns it unchanged.
+    Scaling the base, rather than replacing it, keeps a monitor's calibration."""
+    if base is None:
+        base = identity_ramp(size)
+    if percent >= 100:
+        return [list(channel) for channel in base]
+    peak, exponent = dimming_curve(percent)
+    factors = [0.0] + [peak * (i / (size - 1)) ** (exponent - 1) for i in range(1, size)]
+    return [[min(65535, round(value * factor)) for value, factor in zip(channel, factors)] for channel in base]
 
 
 def identity_ramp(size: int = 256) -> list[list[int]]:

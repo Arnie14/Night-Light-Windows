@@ -22,6 +22,15 @@ from nightlight.hardware.brightness import MonitorInfo
 # flooding a slow DDC/CI link. The final position is always sent.
 BRIGHTNESS_THROTTLE_MS = 100
 NOT_SUPPORTED = "Brightness control not supported (DDC/CI unavailable or disabled in the monitor's menu)"
+# Said under the name when brightness isn't the display's own backlight.
+CONTROL_CAPTIONS = {
+    "sdr": ("HDR · SDR content brightness", "HDR is on, so this sets Windows' brightness for SDR content, like Settings > Display > HDR."),
+    "software": (
+        "Software dimming",
+        "This display has no brightness control Windows can reach, so its colors are dimmed instead. "
+        "Blacks stay black but the backlight stays on, so it saves no power.",
+    ),
+}
 
 
 def blend(a: QColor, b: QColor, amount: float) -> QColor:
@@ -125,6 +134,11 @@ class MonitorBrightness(QWidget):
         set_font(name, weight=QFont.Weight.DemiBold)
         top.addWidget(name, 1)
         layout.addLayout(top)
+        if caption := CONTROL_CAPTIONS.get(info.control):
+            text, tooltip = caption
+            label = SecondaryLabel(text, scale=0.88)
+            label.setToolTip(tooltip)
+            layout.addWidget(label)
 
         if not info.supported:
             label = SecondaryLabel(info.reason or NOT_SUPPORTED, scale=0.92)
@@ -137,9 +151,7 @@ class MonitorBrightness(QWidget):
         self.value_label.setMinimumWidth(self.value_label.fontMetrics().horizontalAdvance("100%"))
         top.addWidget(self.value_label)
         self.slider = QSlider(Qt.Orientation.Horizontal)
-        # A laptop panel at 0 can be fully dark on some models, which looks
-        # broken; KDE keeps the built-in display above zero too.
-        self.slider.setRange(1 if info.internal else 0, 100)
+        self.slider.setRange(info.minimum, 100)  # e.g. above 0 for laptop panels, see MonitorInfo
         self.slider.setPageStep(10)
         self.slider.setEnabled(False)  # until the current value has been read
         layout.addWidget(self.slider)
