@@ -144,7 +144,8 @@ class SingleInstance(QObject):
                 socket.write(json.dumps(answer).encode() + b"\n")
                 socket.flush()
 
-        log.info("Command line: %s", payload)
+        # The command only: its arguments can hold the user's own display names.
+        log.info("Command line: %s", payload.get("command") if isinstance(payload, dict) else "?")
         self.requestReceived.emit(payload, reply)
 
     def _on_command(self, data: bytes) -> None:

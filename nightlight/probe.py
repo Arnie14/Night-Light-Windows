@@ -23,6 +23,7 @@ from PySide6.QtCore import qVersion
 from PySide6.QtGui import QGuiApplication
 
 from nightlight import __version__
+from nightlight.privacy import scrub
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ def run(backend: str, out_dir: Path | None) -> int:
         section("Gamma ramps (night light)", _gamma)
     section(f"What the app sees (--backend {backend})", lambda out: _backend(out, backend))
 
-    report = "\n".join(lines) + "\n"
+    report = scrub("\n".join(lines) + "\n")  # shared in bug reports: see privacy.py
     print(report)
     if out_dir is not None:
         path = out_dir / "probe.txt"

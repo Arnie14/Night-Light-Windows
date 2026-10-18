@@ -9,8 +9,13 @@ light's state, and the logs and settings.
 
 It's quick and safe to run any time: it reads what the app already knows and
 cheap display queries, but doesn't scan DDC/CI or tint displays (that's
-`--probe`, whose report is included if one was made). The location in the
-settings is rounded to whole degrees.
+`--probe`, whose report is included if one was made).
+
+Reports get posted publicly, so nothing personal goes in (see privacy.py):
+no location, city or time zone, no custom display names (only that a
+display was renamed), no names of apps listed for pausing night light (only
+how many), and every file, logs included, is scrubbed of the user name,
+computer name, home folder and email addresses.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ import sys
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import PySide6
@@ -30,6 +35,8 @@ from PySide6.QtCore import QStandardPaths, qVersion
 from PySide6.QtGui import QGuiApplication
 
 from nightlight import APP_NAME, __version__, config
+from nightlight.exemptions import FULLSCREEN
+from nightlight.privacy import scrub
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +53,7 @@ class Sources:
     config_path: Path
     log_dir: Path | None
     skipped: Callable[[], set[str]] = lambda: set()
+    last_wake: Callable[[], list[str]] = lambda: []
 
 
 def summary(sources: Sources) -> str:
@@ -56,7 +64,7 @@ def summary(sources: Sources) -> str:
         f"{APP_NAME} {__version__} ({'installed build' if getattr(sys, 'frozen', False) else 'from source'})",
         f"Windows: {platform.platform()}" + (f" (build {sys.getwindowsversion().build})" if sys.platform == "win32" else ""),
         f"Python {platform.python_version()}, PySide6 {PySide6.__version__}, Qt {qVersion()}, {QGuiApplication.platformName()}",
-        f"Report made {datetime.now().astimezone():%Y-%m-%d %H:%M %Z}",
+        f"Report made {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC",
         "",
         "Displays (as the app sees them):",
     ]
@@ -64,12 +72,12 @@ def summary(sources: Sources) -> str:
     prefs = sources.config()
     for number, info in enumerate(monitors.monitors, 1):
         custom = prefs.display(info.key)
-        name = f"{custom.name} ({info.name})" if custom.name else info.name
+        name = info.name  # the display's own (model) name; a custom one may be personal
         if info.supported:
             state = f"{monitors.brightness.get(info.index)}% via {info.control}"
         else:
             state = f"not supported: {info.reason or 'no DDC/CI'}"
-        flags = ", ".join(f for f in ("built-in" if info.internal else "", "hidden" if custom.hidden else "") if f)
+        flags = ", ".join(f for f in ("built-in" if info.internal else "", "renamed" if custom.name else "", "hidden" if custom.hidden else "") if f)
         lines.append(f"  {number}. {name} [{info.key}{', ' + flags if flags else ''}]: {state}")
     if not monitors.monitors:
         lines.append("  none detected")
@@ -78,12 +86,15 @@ def summary(sources: Sources) -> str:
     controller = sources.controller
     lines += ["", f"Night light: {night_light_status(controller)}, showing {controller.current_temperature} K"]
     if controller.paused:
-        lines.append("  paused on: " + ", ".join(f"{d} ({why})" for d, why in controller.paused.items()))
+        kinds = ("a fullscreen app" if why.endswith(FULLSCREEN) else "a listed app" for why in controller.paused.values())
+        lines.append("  paused on: " + ", ".join(f"{d} (for {kind})" for d, kind in zip(controller.paused, kinds)))
     windows_night_light = winsystem.windows_night_light_on()
     lines.append(f"Windows Night Light: {'on' if windows_night_light else 'off' if windows_night_light is False else 'unknown'}")
     if skipped := sources.skipped():
         lines.append("Skipped after crashing or hanging: " + ", ".join(sorted(skipped)))
-    return "\n".join(lines) + "\n"
+    if wake := sources.last_wake():
+        lines += ["", "Last wake from sleep (seconds after waking: displays answering):", *(f"  {line}" for line in wake)]
+    return scrub("\n".join(lines) + "\n")
 
 
 def _windows_displays() -> list[str]:
@@ -110,10 +121,14 @@ def _windows_displays() -> list[str]:
 
 
 def redacted_settings(app_config: config.AppConfig) -> dict:
+    """The settings, minus anything personal: where, which apps, which names."""
     data = config._to_json(app_config)
     night_light = data["night_light"]
-    night_light["latitude"] = round(night_light["latitude"])
-    night_light["longitude"] = round(night_light["longitude"])
+    located = night_light.pop("timezone") or (night_light["latitude"], night_light["longitude"]) != (0.0, 0.0)
+    del night_light["latitude"], night_light["longitude"]
+    night_light["location"] = ("a city" if app_config.night_light.timezone else "coordinates") if located else "not set"
+    night_light["exempt_apps"] = f"{len(app_config.night_light.exempt_apps)} app(s)"
+    data["displays"] = {key: {"renamed": bool(value["name"]), "hidden": value["hidden"]} for key, value in data["displays"].items()}
     return data
 
 
@@ -132,10 +147,11 @@ def write_bundle(sources: Sources, folder: Path | None = None) -> tuple[Path, st
     path = folder / f"{APP_NAME}-diagnostics-{datetime.now():%Y%m%d-%H%M%S}.zip"
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as bundle:
         bundle.writestr("summary.txt", text)
-        bundle.writestr("settings.json", json.dumps(redacted_settings(sources.config()), indent=2))
+        bundle.writestr("settings.json", scrub(json.dumps(redacted_settings(sources.config()), indent=2)))
         if sources.log_dir is not None and sources.log_dir.is_dir():
             for file in sorted(sources.log_dir.iterdir()):
                 if file.is_file() and (file.name.startswith("night-light.log") or file.name == "probe.txt"):
-                    bundle.write(file, f"logs/{file.name}")
+                    # Scrubbed again: lines from older versions weren't.
+                    bundle.writestr(f"logs/{file.name}", scrub(file.read_text(encoding="utf-8", errors="replace")))
     log.info("Diagnostics saved to %s", path)
     return path, text

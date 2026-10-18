@@ -114,7 +114,8 @@ class NightLightController(QObject):
         if dict(paused) == self._paused or not hasattr(self._gamma, "set_override"):
             return
         if paused:
-            log.info("Night light paused on %s", ", ".join(f"{d} ({why})" for d, why in paused.items()))
+            # Which display, not which app: app names stay out of logs (privacy.py).
+            log.info("Night light paused on %s", ", ".join(paused))
         else:
             log.info("Night light resumed on every display")
         self._paused = dict(paused)

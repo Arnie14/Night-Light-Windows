@@ -10,6 +10,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from nightlight import APP_NAME, cli, config
+from nightlight.privacy import ScrubbingFormatter
 from nightlight.app import NightLightApp
 from nightlight.hardware import BACKENDS, create_backends
 from nightlight.single_instance import SingleInstance
@@ -125,7 +126,8 @@ def setup_logging(debug: bool) -> Path | None:
     """
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if debug else logging.INFO)
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # Scrubbed: logs end up in public bug reports (see nightlight/privacy.py).
+    formatter = ScrubbingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     if sys.stderr is not None:
         console = logging.StreamHandler()
         console.setFormatter(formatter)

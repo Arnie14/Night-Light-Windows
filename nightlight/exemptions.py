@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 # Checking the foreground window is cheap; this is quick enough that
 # switching to a game pauses night light before it has drawn much.
 POLL_MS = 400
+FULLSCREEN = ", fullscreen"
 
 
 def paused_displays(app: ForegroundApp | None, config: NightLightConfig) -> dict[str, str]:
@@ -32,7 +33,7 @@ def paused_displays(app: ForegroundApp | None, config: NightLightConfig) -> dict
     if app.exe and app.exe in config.exempt_apps:
         return {app.display: app.exe}
     if config.exempt_fullscreen and app.fullscreen:
-        return {app.display: f"{app.exe or 'an app'}, fullscreen"}
+        return {app.display: f"{app.exe or 'an app'}{FULLSCREEN}"}
     return {}
 
 
@@ -67,5 +68,8 @@ class ForegroundWatcher(QObject):
 
     def _publish(self, paused: dict[str, str]) -> None:
         if paused != self._paused:
+            if paused:
+                kinds = {"a fullscreen app" if why.endswith(FULLSCREEN) else "a listed app" for why in paused.values()}
+                log.info("Pausing night light for %s", " and ".join(sorted(kinds)))
             self._paused = paused
             self.pausedChanged.emit(paused)

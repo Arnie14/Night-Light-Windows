@@ -106,7 +106,7 @@ def schedule_around(config: NightLightConfig, now: datetime) -> list[Transition]
     if config.mode is Mode.LOCATION:
         transitions = _solar_schedule(config.latitude, config.longitude, days, now.tzinfo)
         if transitions is None:
-            log.debug("No sunrise/sunset at (%s, %s); using 06:00/18:00", config.latitude, config.longitude)
+            log.debug("No sunrise/sunset at the location today; using 06:00/18:00")  # no coordinates: logs are shared
             transitions = _timed_schedule(FALLBACK_MORNING, FALLBACK_EVENING, FALLBACK_TRANSITION, days, now.tzinfo)
     else:
         duration = timedelta(minutes=config.transition_minutes)
