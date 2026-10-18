@@ -191,3 +191,13 @@ def test_windows_night_light_notice(window):
     assert window.windows_night_light.isHidden()
     window.set_windows_night_light(True)
     assert not window.windows_night_light.isHidden()
+
+
+def test_idle_dimming_options(window):
+    assert not window.idle_dim.isChecked() and not window.idle_minutes.isEnabled()  # off by default
+    window.idle_dim.setChecked(True)
+    window.idle_minutes.setValue(10)
+    window.idle_level.setValue(15)
+    general = window.current_config().general
+    assert (general.idle_dim, general.idle_minutes, general.idle_level) == (True, 10, 15)
+    assert window.idle_minutes.isEnabled()

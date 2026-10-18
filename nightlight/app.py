@@ -19,6 +19,7 @@ from nightlight.commands import CommandHandler
 from nightlight.controller import NightLightController
 from nightlight.exemptions import ForegroundWatcher
 from nightlight.hardware import winsystem
+from nightlight.idle_dim import IdleDimmer
 from nightlight.hardware.brightness import BrightnessBackend
 from nightlight.hardware.gamma import GammaBackend
 from nightlight.monitors import MonitorManager
@@ -58,6 +59,13 @@ class NightLightApp:
         self.monitors = MonitorManager(brightness)
         self.brightness_memory = BrightnessMemory(self.monitors, config_path.with_name("brightness.json"), general.remember_brightness)
         self.wake_report = WakeReport(self.monitors)
+        self.idle_dimmer = IdleDimmer(
+            self.monitors,
+            self.brightness_memory,
+            winsystem.idle_seconds,
+            lambda: winsystem.display_required() or winsystem.user_busy(),
+            lambda: frozenset(d.key for d in self._config.displays if d.hidden),
+        )
         self.brightness_keys = BrightnessKeys(self.monitors, lambda: frozenset(d.key for d in self._config.displays if d.hidden))
         self.controller = NightLightController(gamma, self._config.night_light)
         self.commands = CommandHandler(self.monitors, self.controller, lambda: self._config)
@@ -213,6 +221,8 @@ class NightLightApp:
         """What every part needs from the settings besides night light itself."""
         self.flyout.set_linked(settings.general.link_brightness)
         self.brightness_keys.set_enabled(settings.general.follow_laptop_brightness)
+        general = settings.general
+        self.idle_dimmer.configure(general.idle_dim, general.idle_minutes, general.idle_level)
         self.flyout.set_display_prefs(settings.displays)
         self.brightness_memory.set_hidden(frozenset(d.key for d in settings.displays if d.hidden))
         self.brightness_memory.set_schedule(settings.brightness_schedule, _location(settings.night_light))
@@ -260,6 +270,7 @@ class NightLightApp:
     def _shutdown(self) -> None:
         self._night_light_check.stop()
         self._exemptions.stop()
+        self.idle_dimmer.wake()  # quitting while dimmed: levels back first (queued before the monitor thread stops)
         self.controller.shutdown()
         self.brightness_memory.shutdown()
         self.monitors.shutdown()

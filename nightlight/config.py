@@ -77,6 +77,11 @@ class GeneralConfig:
     respect_fullscreen: bool = True
     # External displays follow the laptop panel's level (its brightness keys).
     follow_laptop_brightness: bool = False
+    # Dim every display after this many minutes without input (Twinkle Tray's
+    # idle detection), not while a video, game or presentation keeps it on.
+    idle_dim: bool = False
+    idle_minutes: int = 5
+    idle_level: int = 20
 
 
 SUNRISE, SUNSET = "sunrise", "sunset"

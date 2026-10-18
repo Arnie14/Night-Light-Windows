@@ -157,6 +157,22 @@ class SettingsWindow(QWidget):
             "When the built-in display's brightness changes (its keys, or Windows' slider),\n"
             "the external displays are set to the same level."
         )
+        self.idle_dim = QCheckBox("Dim displays when I'm away for")
+        self.idle_dim.setToolTip(
+            "After this long without keyboard or mouse input. Not while a video,\n"
+            "game or presentation keeps the screen on. Any input brings them back."
+        )
+        self.idle_minutes = QSpinBox(minimum=1, maximum=240, suffix=" min")
+        self.idle_level = QSpinBox(minimum=0, maximum=100, singleStep=5, suffix=" %")
+        self.idle_level.setPrefix("to ")
+        self._idle_row = QWidget()
+        idle_layout = QHBoxLayout(self._idle_row)
+        idle_layout.setContentsMargins(0, 0, 0, 0)
+        idle_layout.setSpacing(8)
+        idle_layout.addWidget(self.idle_dim)
+        idle_layout.addWidget(self.idle_minutes)
+        idle_layout.addWidget(self.idle_level)
+        idle_layout.addStretch(1)
         self.software_dimming = QCheckBox("Dim displays without brightness control")
         self.software_dimming.setToolTip(
             "For TVs and monitors without DDC/CI: their colors are dimmed instead,\n"
@@ -198,6 +214,7 @@ class SettingsWindow(QWidget):
         brightness.addRow("", self.link_brightness)
         brightness.addRow("", self.follow_laptop)
         brightness.addRow("", self.software_dimming)
+        brightness.addRow("When idle:", self._idle_row)
         brightness.addRow(_spaced(Separator()))
         brightness.addRow(_section("Brightness schedule", "Set every display to a level at times of day."))
         brightness.addRow("Schedule:", self.schedule_enabled)
@@ -267,6 +284,9 @@ class SettingsWindow(QWidget):
             self.link_brightness.toggled,
             self.software_dimming.toggled,
             self.follow_laptop.toggled,
+            self.idle_dim.toggled,
+            self.idle_minutes.valueChanged,
+            self.idle_level.valueChanged,
             self.exempt_fullscreen.toggled,
             self.exempt_apps.changed,
             self.schedule_enabled.toggled,
@@ -311,6 +331,9 @@ class SettingsWindow(QWidget):
             link_brightness=self.link_brightness.isChecked(),
             software_dimming=self.software_dimming.isChecked(),
             follow_laptop_brightness=self.follow_laptop.isChecked(),
+            idle_dim=self.idle_dim.isChecked(),
+            idle_minutes=self.idle_minutes.value(),
+            idle_level=self.idle_level.value(),
         )
         schedule = BrightnessScheduleConfig(self.schedule_enabled.isChecked(), self.schedule_steps.steps())
         return AppConfig(night_light=night_light, general=general, brightness_schedule=schedule, displays=self.displays.prefs())
@@ -343,6 +366,9 @@ class SettingsWindow(QWidget):
         self.link_brightness.setChecked(general.link_brightness)
         self.software_dimming.setChecked(general.software_dimming)
         self.follow_laptop.setChecked(general.follow_laptop_brightness)
+        self.idle_dim.setChecked(general.idle_dim)
+        self.idle_minutes.setValue(general.idle_minutes)
+        self.idle_level.setValue(general.idle_level)
         self.exempt_fullscreen.setChecked(night_light.exempt_fullscreen)
         self.exempt_apps.set_apps(night_light.exempt_apps)
         self.schedule_enabled.setChecked(config.brightness_schedule.enabled)
@@ -387,6 +413,8 @@ class SettingsWindow(QWidget):
             self.form.setRowVisible(widget, show)
         self.night_temperature.setEnabled(night_light.enabled)
         self.schedule_steps.setEnabled(self.schedule_enabled.isChecked())
+        for field in (self.idle_minutes, self.idle_level):
+            field.setEnabled(self.idle_dim.isChecked())
         self._update_status()
 
     def _checkbox_indent(self) -> int:

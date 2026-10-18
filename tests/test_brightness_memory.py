@@ -257,3 +257,17 @@ def test_scheduled_steps_wait_for_a_sleeping_monitor(tmp_path):
     manager.asleep.clear()
     manager.detect([DELL], {0: 80})  # it wakes and answers
     assert manager.sent == [(0, 30)]
+
+
+def test_steps_and_restores_wait_while_dimmed_for_idle(tmp_path):
+    manager, memory, _ = make(tmp_path, {"DEL41A2": 30})
+    memory.set_schedule(SCHEDULE)
+    manager.detect([DELL], {0: 80})
+    memory.set_held(True)
+    NOW["now"] = at(20, 1)
+    memory._check_schedule()  # the evening step while away
+    memory.restore_all_soon()
+    manager.detect([DELL], {0: 20})  # e.g. a wake while dimmed
+    assert manager.sent == []  # nothing brightened the idle screen
+    memory.set_held(False)
+    assert memory.target(DELL) == 30  # what coming back sets it to

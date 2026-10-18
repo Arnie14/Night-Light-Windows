@@ -124,6 +124,46 @@ def user_busy() -> bool:
     return is_busy(notification_state, bool(app and app.fullscreen))
 
 
+# --- Idle -------------------------------------------------------------------
+
+SYSTEM_EXECUTION_STATE = 16  # CallNtPowerInformation's POWER_INFORMATION_LEVEL
+ES_DISPLAY_REQUIRED = 0x2
+
+
+def ticks_since(now: int, then: int) -> int:
+    """Milliseconds between two 32-bit tick counts, across their wraparound
+    every 49.7 days (GetLastInputInfo's docs warn about it)."""
+    return (now - then) & 0xFFFFFFFF
+
+
+def idle_seconds() -> float:
+    """How long since the last keyboard or mouse input in this session."""
+    if sys.platform != "win32":
+        return 0.0
+    from ctypes import wintypes
+
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+    info = LASTINPUTINFO(cbSize=ctypes.sizeof(LASTINPUTINFO))
+    if not _user32.GetLastInputInfo(ctypes.byref(info)):
+        return 0.0
+    return ticks_since(_kernel32.GetTickCount(), info.dwTime) / 1000
+
+
+def display_required() -> bool:
+    """Whether some app is keeping the display on (video players, browsers
+    playing video, presentations): Windows' aggregate execution state."""
+    if sys.platform != "win32":
+        return False
+    state = ctypes.c_ulong()
+    try:
+        status = _powrprof.CallNtPowerInformation(SYSTEM_EXECUTION_STATE, None, 0, ctypes.byref(state), ctypes.sizeof(state))
+    except OSError:
+        return False
+    return status == 0 and bool(state.value & ES_DISPLAY_REQUIRED)
+
+
 def running_apps() -> list[str]:
     """Executable names of apps with a visible window, for picking exemptions."""
     if sys.platform != "win32":
@@ -327,6 +367,12 @@ if sys.platform == "win32":
     _dwmapi = ctypes.WinDLL("dwmapi")
     _wtsapi32 = ctypes.WinDLL("wtsapi32", use_last_error=True)
     _shell32 = ctypes.WinDLL("shell32")
+    _powrprof = ctypes.WinDLL("powrprof")
+    _powrprof.CallNtPowerInformation.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong]
+    _powrprof.CallNtPowerInformation.restype = ctypes.c_long
+    _user32.GetLastInputInfo.argtypes = [ctypes.c_void_p]
+    _user32.GetLastInputInfo.restype = wintypes.BOOL
+    _kernel32.GetTickCount.restype = wintypes.DWORD
     _shell32.SHQueryUserNotificationState.argtypes = [ctypes.POINTER(ctypes.c_int)]
     _shell32.SHQueryUserNotificationState.restype = ctypes.c_long
 

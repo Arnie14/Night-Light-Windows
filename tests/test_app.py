@@ -172,3 +172,11 @@ def test_a_wake_is_handled_once(start, monkeypatch):
     night_light._on_resumed()  # Windows' event
     night_light._on_resumed()  # the clock check, a moment later
     assert restores == [1]
+
+
+def test_idle_dimming_settings_reach_the_dimmer(start):
+    night_light, _ = start(GeneralConfig())
+    assert not night_light.idle_dimmer._enabled
+    night_light._apply_settings(AppConfig(general=GeneralConfig(idle_dim=True, idle_minutes=3, idle_level=10)))
+    dimmer = night_light.idle_dimmer
+    assert dimmer._enabled and (dimmer._after_s, dimmer._level) == (180, 10)

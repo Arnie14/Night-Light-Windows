@@ -79,6 +79,7 @@ class BrightnessMemory(QObject):
         self._location: tuple[float, float] | None = None
         self._hidden: frozenset[str] = frozenset()
         self._step_since: datetime | None = None  # start of the schedule step last applied
+        self._held = False  # idle dimming is on: don't brighten anything until it ends
         self._present: set[str] = set()  # keys at the previous detection
         self._due: set[str] = set()  # keys to restore once their level has been read
         self._restore_everything = True  # at start-up, every monitor is due
@@ -114,6 +115,11 @@ class BrightnessMemory(QObject):
         else:
             self._schedule_timer.stop()
             self._step_since = None
+
+    def set_held(self, held: bool) -> None:
+        """While displays are dimmed for idle, hold back schedule steps and
+        restores; when it ends, IdleDimmer sets every display to target()."""
+        self._held = held
 
     def set_hidden(self, keys: frozenset[str]) -> None:
         self._hidden = frozenset(keys)
@@ -163,6 +169,8 @@ class BrightnessMemory(QObject):
         self._step_since = step.since
         if not (apply_now or (new_step and not first)):
             return  # at start-up, the restore after detection applies it
+        if self._held:
+            return  # dimmed for idle: the new step's level is applied on waking (target())
         log.info("Brightness schedule: %d%% since %s", step.level, f"{step.since:%H:%M}")
         for monitor in self._monitors.monitors:
             if monitor.supported and (level := self.target(monitor)) is not None:
@@ -179,8 +187,8 @@ class BrightnessMemory(QObject):
 
     def _on_brightness(self, index: int, value: int | None) -> None:
         monitor = self._monitors.monitor(index)
-        if monitor is None or monitor.key not in self._due or value is None:
-            return  # not due, or not answering yet: a later detection retries
+        if monitor is None or monitor.key not in self._due or value is None or self._held:
+            return  # not due, not answering yet (a later detection retries), or dimmed for idle
         self._due.discard(monitor.key)
         target = self.target(monitor)
         if target is not None and value != target:

@@ -100,3 +100,14 @@ def test_panel_brightness_message():
     from nightlight.hardware.winsystem import GUID_VIDEO_BRIGHTNESS, PANEL_BRIGHTNESS
 
     assert classify(winsystem.WM_POWERBROADCAST, winsystem.PBT_POWERSETTINGCHANGE, GUID_VIDEO_BRIGHTNESS, 40) == PANEL_BRIGHTNESS
+
+
+def test_ticks_across_the_wraparound():
+    assert winsystem.ticks_since(5000, 2000) == 3000
+    assert winsystem.ticks_since(1000, 0xFFFFFFFF - 999) == 2000  # 49.7 days in
+
+
+def test_idle_off_windows(monkeypatch):
+    monkeypatch.setattr(winsystem.sys, "platform", "linux")
+    assert winsystem.idle_seconds() == 0.0  # never "idle", so nothing dims
+    assert winsystem.display_required() is False
