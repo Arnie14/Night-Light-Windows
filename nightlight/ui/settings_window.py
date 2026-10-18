@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""The settings window: Night Light, modelled on KDE System Settings >
-Display & Monitor > Night Light, and general app settings (startup)."""
+"""The settings window, in tabs: Night Light (modelled on KDE System Settings >
+Display & Monitor > Night Light, plus apps to pause it for), Brightness
+(remembering, linking, software dimming, the time-of-day schedule), Displays
+(names and visibility) and General (startup)."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 
 from PySide6.QtCore import QTime, QTimeZone, Qt, Signal
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
+    QTabWidget,
     QComboBox,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -29,13 +32,14 @@ from PySide6.QtWidgets import (
 )
 
 from nightlight import APP_NAME
-from nightlight.config import MAX_TRANSITION_MINUTES, AppConfig, GeneralConfig, Mode, NightLightConfig
+from nightlight.config import MAX_TRANSITION_MINUTES, AppConfig, BrightnessScheduleConfig, GeneralConfig, Mode, NightLightConfig
 from nightlight.controller import NightLightController
 from nightlight.core import locations
 from nightlight.core.schedule import OverrideKind
 from nightlight.ui import icons
 from nightlight.ui.night_light_text import is_night_light_on, night_light_status, schedule_description
-from nightlight.ui.widgets import HEADING_WEIGHT, SecondaryLabel, Separator, TemperatureSlider, set_font
+from nightlight.ui.settings_widgets import AppList, DisplayList, StepList
+from nightlight.ui.widgets import HEADING_WEIGHT, SecondaryLabel, Separator, TemperatureSlider, WindowsNightLightNotice, set_font
 
 log = logging.getLogger(__name__)
 
@@ -58,8 +62,17 @@ WIDE_FIELD = 340
 class SettingsWindow(QWidget):
     applied = Signal(object)  # AppConfig
 
-    def __init__(self, controller: NightLightController, config: AppConfig, can_autostart: bool = True) -> None:
+    def __init__(
+        self,
+        controller: NightLightController,
+        config: AppConfig,
+        can_autostart: bool = True,
+        monitors=None,  # MonitorManager, for the Displays tab
+        running_apps: Callable[[], list[str]] = lambda: [],
+    ) -> None:
         super().__init__()
+        self._monitors = monitors
+        self._display_prefs = config.displays
         self._controller = controller
         self._saved = replace(config, night_light=controller.config)
         self._mode_while_off = self._saved.night_light.mode
@@ -88,6 +101,7 @@ class SettingsWindow(QWidget):
         self.banner_button.clicked.connect(controller.clear_override)
         banner_layout.addWidget(self.banner_text, 1)
         banner_layout.addWidget(self.banner_button)
+        self.windows_night_light = WindowsNightLightNotice()
 
         # Night Light
         self.mode = QComboBox()
@@ -138,15 +152,18 @@ class SettingsWindow(QWidget):
             "For TVs and monitors without DDC/CI: their colors are dimmed instead,\n"
             "as Twinkle Tray does. The backlight stays on, so it saves no power."
         )
+        self.exempt_fullscreen = QCheckBox("While an app is fullscreen (games, videos)")
+        self.exempt_apps = AppList(running_apps)
+        self.exempt_apps.setFixedWidth(WIDE_FIELD)
+        self.schedule_enabled = QCheckBox("Change brightness at times of day")
+        self.schedule_steps = StepList()
+        self.displays = DisplayList()
         if not can_autostart:
             self.start_with_windows.setEnabled(False)
             self.start_with_windows.setToolTip("Not available on this system")
 
-        self.form = QFormLayout()
-        self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
-        self.form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.form.setHorizontalSpacing(16)
-        self.form.setVerticalSpacing(10)
+        # Night Light tab
+        self.form = _form()
         self.form.addRow(_section("Night Light", "The blue light filter makes the colors on the screen warmer."))
         self.form.addRow("Switching times:", self.mode)
         self.form.addRow("Location:", self._location_row)
@@ -159,29 +176,63 @@ class SettingsWindow(QWidget):
         self.form.addRow("Night light temperature:", self.night_temperature)
         self.form.addRow("", self.schedule_info)
         self.form.addRow(_spaced(Separator()))
-        self.form.addRow(_section("General"))
-        self.form.addRow("Startup:", self.start_with_windows)
-        self.form.addRow("", self.start_minimized)
-        self.form.addRow("Brightness:", self.remember_brightness)
-        self.form.addRow("", remember_hint)
-        self.form.addRow("", self.link_brightness)
-        self.form.addRow("", self.software_dimming)
+        self.form.addRow(_section("Pause night light", "On the display showing these, for true colors. Other displays keep it."))
+        self.form.addRow("Pause:", self.exempt_fullscreen)
+        self.form.addRow("For these apps:", self.exempt_apps)
+
+        # Brightness tab
+        brightness = _form()
+        brightness.addRow(_section("Brightness"))
+        brightness.addRow("Options:", self.remember_brightness)
+        brightness.addRow("", remember_hint)
+        brightness.addRow("", self.link_brightness)
+        brightness.addRow("", self.software_dimming)
+        brightness.addRow(_spaced(Separator()))
+        brightness.addRow(_section("Brightness schedule", "Set every display to a level at times of day."))
+        brightness.addRow("Schedule:", self.schedule_enabled)
+        brightness.addRow("Steps:", self.schedule_steps)
+        schedule_hint = SecondaryLabel(
+            "Moving a slider keeps your level until the next step. Sunrise and sunset use the location from Night Light.", scale=0.92
+        )
+        schedule_hint.setWordWrap(True)
+        schedule_hint.setFixedWidth(WIDE_FIELD)
+        brightness.addRow("", schedule_hint)
+
+        # Displays tab
+        displays = _form()
+        displays.addRow(_section("Displays", "Rename displays, or hide them from the panel. Hidden displays are never changed."))
+        displays.addRow(self.displays)
+
+        # General tab
+        general = _form()
+        general.addRow(_section("General"))
+        general.addRow("Startup:", self.start_with_windows)
+        general.addRow("", self.start_minimized)
+
+        self.tabs = QTabWidget()
+        for title, form in (("Night Light", self.form), ("Brightness", brightness), ("Displays", displays), ("General", general)):
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(20, 16, 20, 16)
+            page_layout.addLayout(form)
+            page_layout.addStretch(1)
+            self.tabs.addTab(page, title)
 
         Button = QDialogButtonBox.StandardButton
         self.buttons = QDialogButtonBox(Button.RestoreDefaults | Button.Reset | Button.Apply)
-        self.buttons.button(Button.RestoreDefaults).clicked.connect(lambda: self._load(AppConfig()))
+        # Display names are the user's own, not settings with defaults: keep them.
+        self.buttons.button(Button.RestoreDefaults).clicked.connect(lambda: self._load(replace(AppConfig(), displays=self.displays.prefs())))
         self.buttons.button(Button.Reset).clicked.connect(lambda: self._load(self._saved))
         self.buttons.button(Button.Apply).clicked.connect(self._apply)
         self.buttons.button(Button.Apply).setDefault(True)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 22, 28, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 20, 24, 18)
+        layout.setSpacing(14)
         layout.addLayout(header)
+        layout.addWidget(self.windows_night_light)
         layout.addWidget(self.banner)
-        layout.addWidget(Separator())
-        layout.addLayout(self.form)
-        layout.addWidget(Separator())
+        layout.addWidget(self.tabs)
         layout.addWidget(self.buttons)
         # The window fits its contents, growing and shrinking as rows for the
         # chosen switching times come and go.
@@ -202,8 +253,15 @@ class SettingsWindow(QWidget):
             self.remember_brightness.toggled,
             self.link_brightness.toggled,
             self.software_dimming.toggled,
+            self.exempt_fullscreen.toggled,
+            self.exempt_apps.changed,
+            self.schedule_enabled.toggled,
+            self.schedule_steps.changed,
+            self.displays.changed,
         ):
             signal.connect(self._on_changed)
+        if monitors is not None:
+            monitors.monitorsChanged.connect(self._refresh_displays)
         self.location.currentIndexChanged.connect(self._on_location_picked)
         for slider in (self.day_temperature, self.night_temperature):
             self._connect_preview(slider)
@@ -228,6 +286,8 @@ class SettingsWindow(QWidget):
             latitude=self.latitude.value(),
             longitude=self.longitude.value(),
             timezone=self.location.currentData() or CUSTOM_LOCATION,
+            exempt_apps=self.exempt_apps.apps(),
+            exempt_fullscreen=self.exempt_fullscreen.isChecked(),
         )
         general = GeneralConfig(
             start_with_windows=self.start_with_windows.isChecked(),
@@ -236,7 +296,12 @@ class SettingsWindow(QWidget):
             link_brightness=self.link_brightness.isChecked(),
             software_dimming=self.software_dimming.isChecked(),
         )
-        return AppConfig(night_light=night_light, general=general)
+        schedule = BrightnessScheduleConfig(self.schedule_enabled.isChecked(), self.schedule_steps.steps())
+        return AppConfig(night_light=night_light, general=general, brightness_schedule=schedule, displays=self.displays.prefs())
+
+    def set_windows_night_light(self, on: bool | None) -> None:
+        """Show the notice while Windows' own Night Light is on too."""
+        self.windows_night_light.setVisible(bool(on))
 
     def closeEvent(self, event) -> None:
         self._controller.preview(None)
@@ -260,7 +325,18 @@ class SettingsWindow(QWidget):
         self.remember_brightness.setChecked(general.remember_brightness)
         self.link_brightness.setChecked(general.link_brightness)
         self.software_dimming.setChecked(general.software_dimming)
+        self.exempt_fullscreen.setChecked(night_light.exempt_fullscreen)
+        self.exempt_apps.set_apps(night_light.exempt_apps)
+        self.schedule_enabled.setChecked(config.brightness_schedule.enabled)
+        self.schedule_steps.set_steps(config.brightness_schedule.steps)
+        self._display_prefs = config.displays
+        self._refresh_displays(keep_edits=False)
         self._on_changed()
+
+    def _refresh_displays(self, *_args, keep_edits: bool = True) -> None:
+        """The Displays tab lists what is connected now, keeping unsaved edits."""
+        prefs = self.displays.prefs() if keep_edits else self._display_prefs
+        self.displays.set_displays(self._monitors.monitors if self._monitors is not None else [], prefs)
 
     def _apply(self) -> None:
         self._saved = self.current_config()
@@ -292,6 +368,7 @@ class SettingsWindow(QWidget):
         for widget, show in visible.items():
             self.form.setRowVisible(widget, show)
         self.night_temperature.setEnabled(night_light.enabled)
+        self.schedule_steps.setEnabled(self.schedule_enabled.isChecked())
         self._update_status()
 
     def _checkbox_indent(self) -> int:
@@ -345,6 +422,15 @@ class SettingsWindow(QWidget):
         inner.sliderPressed.connect(lambda: self._controller.preview(slider.value()))
         inner.sliderMoved.connect(lambda _: self._controller.preview(slider.value()))
         inner.sliderReleased.connect(lambda: self._controller.preview(None))
+
+
+def _form() -> QFormLayout:
+    form = QFormLayout()
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+    form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    form.setHorizontalSpacing(16)
+    form.setVerticalSpacing(10)
+    return form
 
 
 def _section(title: str, description: str = "") -> QWidget:

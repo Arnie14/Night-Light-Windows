@@ -43,6 +43,9 @@ class FakeMonitors(QObject):
     def refresh(self):
         pass
 
+    def retry(self):
+        pass
+
     def reread_brightness(self):
         pass
 
@@ -119,3 +122,24 @@ def test_displays_say_how_their_brightness_is_controlled():
     assert captions(MonitorInfo(0, "HDR monitor", True, control="sdr")) == ["HDR · SDR content brightness"]
     assert captions(MonitorInfo(0, "TV", True, control="software", minimum=20)) == ["Software dimming"]
     assert MonitorBrightness(MonitorInfo(0, "TV", True, control="software", minimum=20)).slider.minimum() == 20
+
+
+def test_hidden_displays_and_custom_names(flyout):
+    from nightlight.config import DisplayPrefs
+
+    flyout, monitors = flyout
+    flyout.set_display_prefs((DisplayPrefs("DEL", "Left screen"), DisplayPrefs("BOE", "", True)))
+    assert sorted(flyout._rows) == [0, 2]  # the laptop panel is hidden
+    from PySide6.QtWidgets import QLabel
+
+    assert "Left screen" in [label.text() for label in flyout._rows[0].findChildren(QLabel)]
+    flyout.set_linked(True)
+    flyout._rows[0].slider.setValue(80)
+    assert monitors.sent == [(0, 80)]  # a hidden display isn't changed with the others
+
+
+def test_windows_night_light_notice(flyout):
+    flyout, _ = flyout
+    assert flyout.windows_night_light.isHidden()
+    flyout.set_windows_night_light(True)
+    assert not flyout.windows_night_light.isHidden()

@@ -459,3 +459,37 @@ def test_without_a_gamma_backend_there_is_no_software_dimming(monkeypatch):
     FakeDdc([PhysicalMonitor(D1, 7, "x")], {}).install(monkeypatch, [target(D1, "TV")])
     [info] = backend_with().list_monitors()
     assert not info.supported
+
+
+def test_verify_puts_back_a_ramp_windows_reset(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.apply(4500)
+    tinted = gdi.ramps[D1]
+    assert gamma.verify() is False  # nothing changed: nothing to do
+    gdi.ramps[D1] = identity_ramp()  # the lock screen reset it
+    assert gamma.verify() is True
+    assert gdi.ramps[D1] == tinted
+
+
+def test_verify_leaves_untouched_displays_alone(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    gdi.ramps[D1] = gamma_ramp(whitepoint(5000))  # Windows Night Light, while ours never ran
+    assert gamma.verify() is False and gdi.sets == 0
+
+
+def test_a_display_can_pause_night_light_on_its_own(monkeypatch):
+    d2 = r"\\.\DISPLAY2"
+    gdi = FakeGdi({D1: identity_ramp(), d2: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A"), target(d2, "B")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.apply(4000)
+    gamma.set_override(d2, 6500)  # a fullscreen game on display 2
+    assert peak_blue(gdi, D1) < 0.8 and peak_blue(gdi, d2) == 1.0
+    gamma.apply(3800)  # night light keeps changing on the other display only
+    assert peak_blue(gdi, d2) == 1.0
+    gamma.set_override(d2, None)
+    assert peak_blue(gdi, d2) == pytest.approx(peak_blue(gdi, D1))

@@ -62,3 +62,39 @@ def test_bad_general_values_fall_back(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({"general": {"start_with_windows": "yes", "start_minimized": False}}))
     assert config.load(path).general == GeneralConfig(start_with_windows=False, start_minimized=False)
+
+
+def test_new_sections_round_trip(tmp_path):
+    from nightlight.config import BrightnessScheduleConfig, BrightnessStep, DisplayPrefs
+
+    path = tmp_path / "settings.json"
+    original = AppConfig(
+        NightLightConfig(exempt_apps=("game.exe", "photoshop.exe"), exempt_fullscreen=True),
+        brightness_schedule=BrightnessScheduleConfig(True, (BrightnessStep("sunrise", 70, 30), BrightnessStep("21:00", 25))),
+        displays=(DisplayPrefs("DEL41A2", "Left", False), DisplayPrefs("SAM7136", "", True)),
+    )
+    config.save(original, path)
+    assert config.load(path) == original
+    saved = json.loads(path.read_text())
+    assert saved["displays"] == {"DEL41A2": {"name": "Left", "hidden": False}, "SAM7136": {"name": "", "hidden": True}}
+
+
+def test_bad_new_sections_are_ignored(tmp_path):
+    from nightlight.config import BrightnessScheduleConfig
+
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({
+        "night_light": {"exempt_apps": ["Game.EXE ", "", 5]},
+        "brightness_schedule": {"enabled": "yes", "steps": [{"at": "25:00", "level": 10}, {"at": "sunset", "level": 150}, "x"]},
+        "displays": {"A": {"name": 3, "hidden": True}, "B": "nope", "C": {"name": "  "}},
+    }))
+    loaded = config.load(path)
+    assert loaded.night_light.exempt_apps == ()  # not all strings: ignored
+    assert loaded.brightness_schedule.enabled is False
+    assert [(s.at, s.level) for s in loaded.brightness_schedule.steps] == [("sunset", 100)]
+    assert [(d.key, d.name, d.hidden) for d in loaded.displays] == [("A", "", True)]
+    assert BrightnessScheduleConfig().steps  # defaults exist for when it's turned on
+
+
+def test_exempt_apps_are_normalized():
+    assert NightLightConfig(exempt_apps=(" Game.EXE", "game.exe", "")).normalized().exempt_apps == ("game.exe",)

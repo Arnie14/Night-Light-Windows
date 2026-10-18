@@ -29,6 +29,16 @@ class FakeGammaBackend:
     def __init__(self) -> None:
         self.kelvin = NEUTRAL_KELVIN
         self.dims: dict[str, int] = {}
+        self.overrides: dict[str, int] = {}
+
+    def set_override(self, name: str, kelvin: int | None) -> None:
+        if kelvin is None:
+            self.overrides.pop(name, None)
+        else:
+            self.overrides[name] = kelvin
+
+    def verify(self) -> bool:
+        return False
 
     @property
     def dimmed(self) -> bool:

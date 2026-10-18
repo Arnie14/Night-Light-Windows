@@ -34,6 +34,10 @@ WATCHDOG_INTERVAL_MS = 2000
 # How long quitting waits for a monitor call in progress. A hung call can't
 # be interrupted, so after this the app exits without waiting for it.
 SHUTDOWN_WAIT_MS = 3000
+# Changes that aren't a slider drag (the brightness schedule, the command
+# line) fade in a few steps rather than jump; DDC/CI is slow, so few steps.
+FADE_STEPS = 6
+FADE_STEP_MS = 80
 
 
 class _Worker(QObject):
@@ -110,8 +114,8 @@ class _Worker(QObject):
             log.exception("Setting brightness failed")
             self.error.emit(f"Could not set brightness on monitor {index + 1}: {exc}")
 
-    @Slot(int, int)
-    def restore(self, index: int, value: int) -> None:
+    @Slot(int, int, bool)
+    def restore(self, index: int, value: int, fade: bool = False) -> None:
         """Set a remembered level, unprompted, so only if the monitor is awake:
         DDC/CI commands can wake a sleeping monitor, and hang some models'
         firmware until they are unplugged (Twinkle Tray's "monitor power
@@ -126,9 +130,18 @@ class _Worker(QObject):
                     log.info("%s is asleep; restoring its brightness later", name)
                     self.restoreDeferred.emit(index)
                     return
-            with self._calling(f"restoring the brightness of {name}"):
-                self._backend.set_brightness(index, value)
-            self.brightnessRead.emit(index, value)
+            steps = [value]
+            if fade:
+                with self._calling(f"reading the brightness of {name}"):
+                    start = self._backend.get_brightness(index)
+                if start is not None and start != value:
+                    steps = [round(start + (value - start) * i / FADE_STEPS) for i in range(1, FADE_STEPS + 1)]
+            for i, step in enumerate(steps):
+                if i:
+                    time.sleep(FADE_STEP_MS / 1000)
+                with self._calling(f"setting the brightness of {name}"):
+                    self._backend.set_brightness(index, step)
+                self.brightnessRead.emit(index, step)
         except MonitorGoneError:
             log.info("%s is gone; detecting monitors again", name)
             self.restoreDeferred.emit(index)
@@ -136,6 +149,11 @@ class _Worker(QObject):
         except Exception:
             log.warning("Restoring the brightness of %s failed; trying again later", name, exc_info=True)
             self.restoreDeferred.emit(index)
+
+    @Slot()
+    def retry_skipped(self) -> None:
+        if retry := getattr(self._backend, "retry_skipped", None):
+            retry()
 
     @Slot(bool)
     def set_software_dimming(self, enabled: bool) -> None:
@@ -164,8 +182,9 @@ class MonitorManager(QObject):
     _refreshRequested = Signal()
     _readRequested = Signal()
     _setBrightnessRequested = Signal(int)
-    _restoreRequested = Signal(int, int)
+    _restoreRequested = Signal(int, int, bool)
     _softwareDimmingRequested = Signal(bool)
+    _retryRequested = Signal()
     _closeRequested = Signal()
 
     def __init__(self, backend: BrightnessBackend, parent: QObject | None = None) -> None:
@@ -190,6 +209,7 @@ class MonitorManager(QObject):
         self._setBrightnessRequested.connect(self._worker.set_brightness)
         self._restoreRequested.connect(self._worker.restore)
         self._softwareDimmingRequested.connect(self._worker.set_software_dimming)
+        self._retryRequested.connect(self._worker.retry_skipped)
         self._closeRequested.connect(self._worker.close)
         self._worker.monitorsFound.connect(self._on_monitors_found)
         self._worker.brightnessRead.connect(self._on_brightness_read)
@@ -248,17 +268,34 @@ class MonitorManager(QObject):
         if not queued:
             self._setBrightnessRequested.emit(index)
 
+    def retry(self) -> None:
+        """Detect again, including displays skipped after they crashed or hung
+        the app (the panel's ⟳ button)."""
+        self._retryRequested.emit()
+        self.refresh()
+
     def set_software_dimming(self, enabled: bool) -> None:
         """Turn software dimming of displays without brightness control on or
         off, then detect monitors again so they're listed accordingly."""
         self._softwareDimmingRequested.emit(enabled)
         self.refresh()
 
-    def restore_brightness(self, index: int, value: int) -> None:
-        """Put back a remembered level if the monitor is awake (see
-        _Worker.restore); brightnessChanged follows if it was set, and
-        restoreDeferred if not."""
-        self._restoreRequested.emit(index, value)
+    def restore_brightness(self, index: int, value: int, fade: bool = False) -> None:
+        """Set a level the user didn't just choose (a remembered or scheduled
+        one), only if the monitor is awake (see _Worker.restore), optionally
+        fading to it; brightnessChanged follows if it was set, restoreDeferred
+        if not. It doesn't count as the user's choice (no brightnessSet)."""
+        self._restoreRequested.emit(index, value, fade)
+
+    def fade_brightness(self, index: int, value: int) -> None:
+        """Like set_brightness, the user's choice (from the command line), but fading."""
+        start = self.brightness.get(index)
+        if start is None or start == value:
+            self.set_brightness(index, value)
+            return
+        steps = [round(start + (value - start) * i / FADE_STEPS) for i in range(1, FADE_STEPS + 1)]
+        for i, step in enumerate(steps):
+            QTimer.singleShot(i * FADE_STEP_MS, lambda step=step: self.set_brightness(index, step))
 
     def shutdown(self) -> None:
         self._watchdog.stop()

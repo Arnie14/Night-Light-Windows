@@ -1,0 +1,141 @@
+# SPDX-License-Identifier: GPL-3.0-only
+"""One-click diagnostics for bug reports ("Report a problem…" in the tray menu).
+
+Monitorian's FAQ asks for its probe and operation logs; collecting them by
+hand is where reports stall. This gathers what a report needs into one zip
+on the Desktop, and a short summary for the clipboard to paste into an issue:
+the app and Windows versions, each display and how it's controlled, night
+light's state, and the logs and settings.
+
+It's quick and safe to run any time: it reads what the app already knows and
+cheap display queries, but doesn't scan DDC/CI or tint displays (that's
+`--probe`, whose report is included if one was made). The location in the
+settings is rounded to whole degrees.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import platform
+import sys
+import zipfile
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+import PySide6
+from PySide6.QtCore import QStandardPaths, qVersion
+from PySide6.QtGui import QGuiApplication
+
+from nightlight import APP_NAME, __version__, config
+
+log = logging.getLogger(__name__)
+
+ISSUES_URL = "https://github.com/Arnie14/Night-Light-Windows/issues/new"
+
+
+@dataclass
+class Sources:
+    """What the report is made from; filled in by the app."""
+
+    monitors: object  # MonitorManager
+    controller: object  # NightLightController
+    config: Callable[[], config.AppConfig]
+    config_path: Path
+    log_dir: Path | None
+    skipped: Callable[[], set[str]] = lambda: set()
+
+
+def summary(sources: Sources) -> str:
+    from nightlight.hardware import winsystem
+    from nightlight.ui.night_light_text import night_light_status
+
+    lines = [
+        f"{APP_NAME} {__version__} ({'installed build' if getattr(sys, 'frozen', False) else 'from source'})",
+        f"Windows: {platform.platform()}" + (f" (build {sys.getwindowsversion().build})" if sys.platform == "win32" else ""),
+        f"Python {platform.python_version()}, PySide6 {PySide6.__version__}, Qt {qVersion()}, {QGuiApplication.platformName()}",
+        f"Report made {datetime.now().astimezone():%Y-%m-%d %H:%M %Z}",
+        "",
+        "Displays (as the app sees them):",
+    ]
+    monitors = sources.monitors
+    prefs = sources.config()
+    for number, info in enumerate(monitors.monitors, 1):
+        custom = prefs.display(info.key)
+        name = f"{custom.name} ({info.name})" if custom.name else info.name
+        if info.supported:
+            state = f"{monitors.brightness.get(info.index)}% via {info.control}"
+        else:
+            state = f"not supported: {info.reason or 'no DDC/CI'}"
+        flags = ", ".join(f for f in ("built-in" if info.internal else "", "hidden" if custom.hidden else "") if f)
+        lines.append(f"  {number}. {name} [{info.key}{', ' + flags if flags else ''}]: {state}")
+    if not monitors.monitors:
+        lines.append("  none detected")
+    lines += _windows_displays()
+
+    controller = sources.controller
+    lines += ["", f"Night light: {night_light_status(controller)}, showing {controller.current_temperature} K"]
+    if controller.paused:
+        lines.append("  paused on: " + ", ".join(f"{d} ({why})" for d, why in controller.paused.items()))
+    windows_night_light = winsystem.windows_night_light_on()
+    lines.append(f"Windows Night Light: {'on' if windows_night_light else 'off' if windows_night_light is False else 'unknown'}")
+    if skipped := sources.skipped():
+        lines.append("Skipped after crashing or hanging: " + ", ".join(sorted(skipped)))
+    return "\n".join(lines) + "\n"
+
+
+def _windows_displays() -> list[str]:
+    if sys.platform != "win32":
+        return []
+    from nightlight.hardware import win32
+
+    lines = ["", "Displays (as Windows describes them):"]
+    try:
+        for target in win32.display_targets():
+            hdr = ""
+            if target.hdr:
+                nits = win32.get_sdr_white_level(target)
+                hdr = f", HDR on (SDR {nits:.0f} nits)" if nits else ", HDR on"
+            ramp = win32.get_gamma_ramp(target.gdi_name)
+            peaks = " ".join(f"{c}{channel[-1] * 100 // 65535}%" for c, channel in zip("RGB", ramp)) if ramp else "unreadable"
+            lines.append(
+                f"  {target.gdi_name}: {target.friendly_name or '(no name)'}, {target.connector}"
+                f"{', built-in' if target.internal else ''}{hdr}, id {target.hardware_id or '?'}, gamma peaks {peaks}"
+            )
+    except Exception as exc:  # a report must never fail for this
+        lines.append(f"  could not query: {exc}")
+    return lines
+
+
+def redacted_settings(app_config: config.AppConfig) -> dict:
+    data = config._to_json(app_config)
+    night_light = data["night_light"]
+    night_light["latitude"] = round(night_light["latitude"])
+    night_light["longitude"] = round(night_light["longitude"])
+    return data
+
+
+def default_folder() -> Path:
+    for location in (QStandardPaths.StandardLocation.DesktopLocation, QStandardPaths.StandardLocation.DownloadLocation):
+        if folder := QStandardPaths.writableLocation(location):
+            return Path(folder)
+    return Path.home()
+
+
+def write_bundle(sources: Sources, folder: Path | None = None) -> tuple[Path, str]:
+    """Write the zip; returns its path and the summary (for the clipboard)."""
+    text = summary(sources)
+    folder = folder or default_folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{APP_NAME}-diagnostics-{datetime.now():%Y%m%d-%H%M%S}.zip"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("summary.txt", text)
+        bundle.writestr("settings.json", json.dumps(redacted_settings(sources.config()), indent=2))
+        if sources.log_dir is not None and sources.log_dir.is_dir():
+            for file in sorted(sources.log_dir.iterdir()):
+                if file.is_file() and (file.name.startswith("night-light.log") or file.name == "probe.txt"):
+                    bundle.write(file, f"logs/{file.name}")
+    log.info("Diagnostics saved to %s", path)
+    return path, text

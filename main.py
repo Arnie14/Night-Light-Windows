@@ -7,10 +7,9 @@ import signal
 import sys
 from pathlib import Path
 
-import platformdirs
 from PySide6.QtWidgets import QApplication
 
-from nightlight import APP_NAME, config
+from nightlight import APP_NAME, cli, config
 from nightlight.app import NightLightApp
 from nightlight.hardware import BACKENDS, create_backends
 from nightlight.single_instance import SingleInstance
@@ -20,7 +19,11 @@ log = logging.getLogger("nightlight")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Winlight: brightness and night light for Windows")
+    parser = argparse.ArgumentParser(
+        description="Winlight: brightness and night light for Windows",
+        epilog=cli.EXAMPLES,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--backend",
         choices=BACKENDS,
@@ -37,7 +40,18 @@ def main() -> int:
     )
     parser.add_argument("--quit", action="store_true", help="ask a running copy to quit (restoring normal colors), then exit")
     parser.add_argument("--allow-multiple", action="store_true", help="don't stop a second copy from starting")
+    parser.add_argument("--diagnostics", action="store_true", help="save a diagnostics file for a bug report (Winlight must be running), then exit")
+    cli.add_arguments(parser)
     args = parser.parse_args()
+
+    if cli.requested(args) or args.diagnostics:
+        # The command line: quick, no windows, and no log lines mixed into its output.
+        from PySide6.QtCore import QCoreApplication
+
+        _app = QCoreApplication(sys.argv)  # noqa: F841 (sockets need one)
+        if args.diagnostics:
+            args.list, args.diagnostics_request = False, True
+        return cli.run(args)
 
     log_file = setup_logging(args.debug)
 
@@ -68,6 +82,7 @@ def main() -> int:
     brightness, gamma = create_backends(args.backend)
     night_light = NightLightApp(app, brightness, gamma, args.config or config.default_path())
     instance.activated.connect(night_light.show_panel)
+    instance.requestReceived.connect(night_light.handle_request)
     instance.quitRequested.connect(app.quit)
     app.aboutToQuit.connect(instance.close)
     exit_code = app.exec()
@@ -116,7 +131,7 @@ def setup_logging(debug: bool) -> Path | None:
         console.setFormatter(formatter)
         root.addHandler(console)
     try:
-        log_dir = Path(platformdirs.user_log_dir("night-light", appauthor=False))
+        log_dir = config.log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         path = log_dir / "night-light.log"
         handler = logging.handlers.RotatingFileHandler(path, maxBytes=1_000_000, backupCount=2, encoding="utf-8")

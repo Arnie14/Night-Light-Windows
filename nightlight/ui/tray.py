@@ -7,12 +7,13 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from nightlight import APP_NAME
 from nightlight.controller import NightLightController
 from nightlight.ui import icons
-from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status
+from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status, paused_text
 
 
 class Tray(QSystemTrayIcon):
     flyoutRequested = Signal(QRect)  # the icon's on-screen geometry, may be empty
     configureRequested = Signal()
+    diagnosticsRequested = Signal()
     quitRequested = Signal()
 
     def __init__(self, controller: NightLightController) -> None:
@@ -24,6 +25,7 @@ class Tray(QSystemTrayIcon):
         self._override_action = self._menu.addAction("")
         self._override_action.triggered.connect(controller.clear_override)
         self._menu.addAction("Settings…", self.configureRequested.emit)
+        self._menu.addAction("Report a Problem…", self.diagnosticsRequested.emit)
         self._menu.addSeparator()
         self._menu.addAction("Quit", self.quitRequested.emit)
         self._menu.aboutToShow.connect(self._update_menu)
@@ -41,7 +43,8 @@ class Tray(QSystemTrayIcon):
     def _update(self) -> None:
         controller = self._controller
         self.setIcon(icons.night_icon() if is_night_light_on(controller) else icons.day_icon())
-        self.setToolTip(f"{APP_NAME}\nNight Light: {night_light_status(controller)}")
+        paused = paused_text(controller)
+        self.setToolTip(f"{APP_NAME}\nNight Light: {night_light_status(controller)}" + (f"\n{paused}" if paused else ""))
 
     def _update_menu(self) -> None:
         # "Suspend ▸" / "Activate ▸" with KDE's durations, or "Resume" / "Turn Off".

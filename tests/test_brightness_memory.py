@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import json
+from datetime import datetime, timezone
 
+import pytest
 from PySide6.QtCore import QObject, Signal
 
 from nightlight import brightness_memory
 from nightlight.brightness_memory import BrightnessMemory
+from nightlight.config import BrightnessScheduleConfig, BrightnessStep
 from nightlight.hardware.brightness import MonitorInfo, with_unique_keys
+
+NOW = {"now": datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)}
 
 DELL = MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2")
 LG = MonitorInfo(1, "LG 27GL850", True, key="GSM5B7F")
@@ -26,6 +31,7 @@ class FakeManager(QObject):
         self.monitors = []
         self.sent = []  # (index, value) set on the hardware
         self.asleep = set()  # indexes whose power state says standby/off
+        self.faded = []  # whether each restore faded
 
     def monitor(self, index):
         return next((m for m in self.monitors if m.index == index), None)
@@ -43,20 +49,21 @@ class FakeManager(QObject):
         self.brightnessSet.emit(index, value)
         self.brightnessChanged.emit(index, value)
 
-    def restore_brightness(self, index, value):  # as MonitorManager's worker answers
+    def restore_brightness(self, index, value, fade=False):  # as MonitorManager's worker answers
         if index in self.asleep:
             self.restoreDeferred.emit(index)
             return
         self.sent.append((index, value))
+        self.faded.append(fade)
         self.brightnessChanged.emit(index, value)
 
 
 def make(tmp_path, levels=None, enabled=True):
     path = tmp_path / "brightness.json"
     if levels is not None:
-        brightness_memory.save(levels, path)
+        brightness_memory.save(levels, {}, path)
     manager = FakeManager()
-    return manager, BrightnessMemory(manager, path, enabled, parent=manager), path  # parent: kept alive with the manager
+    return manager, BrightnessMemory(manager, path, enabled, parent=manager, clock=lambda: NOW["now"]), path  # parent: kept alive with the manager
 
 
 def test_restores_at_start(tmp_path):
@@ -103,7 +110,8 @@ def test_remembers_levels_set_in_the_app_and_saves_them(tmp_path):
     manager.set_brightness(0, 45)
     assert memory.levels == {"DEL41A2": 45}
     memory.shutdown()  # writes the pending change
-    assert json.loads(path.read_text())["levels"] == {"DEL41A2": 45}
+    saved = json.loads(path.read_text())
+    assert saved["levels"] == {"DEL41A2": 45} and "DEL41A2" in saved["set_at"]
 
 
 def test_levels_read_from_the_monitor_are_not_remembered(tmp_path):
@@ -127,12 +135,13 @@ def test_laptop_panel_is_never_restored_to_black(tmp_path):
     assert manager.sent == [(2, 1)]
 
 
-def test_turned_off_neither_restores_nor_remembers(tmp_path):
-    manager, memory, _ = make(tmp_path, {"DEL41A2": 30}, enabled=False)
+def test_turned_off_neither_restores_nor_saves(tmp_path):
+    manager, memory, path = make(tmp_path, {"DEL41A2": 30}, enabled=False)
     manager.detect([DELL], {0: 100})
     manager.set_brightness(0, 55)
-    assert manager.sent == [(0, 55)]
-    assert memory.levels == {"DEL41A2": 30}
+    memory.shutdown()
+    assert manager.sent == [(0, 55)]  # no restore to 30
+    assert brightness_memory.load(path)[0] == {"DEL41A2": 30}  # 55 not saved
 
 
 def test_turning_on_does_not_restore_immediately(tmp_path):
@@ -154,9 +163,10 @@ def test_identical_monitors_are_told_apart(tmp_path):
 def test_corrupt_or_odd_files_are_ignored(tmp_path):
     path = tmp_path / "brightness.json"
     path.write_text("{oops")
-    assert brightness_memory.load(path) == {}
-    path.write_text(json.dumps({"levels": {"A": 50, "B": "high", "C": 150, "D": True}}))
-    assert brightness_memory.load(path) == {"A": 50, "C": 100}
+    assert brightness_memory.load(path) == ({}, {})
+    path.write_text(json.dumps({"levels": {"A": 50, "B": "high", "C": 150, "D": True}, "set_at": {"A": "nonsense", "C": "2026-06-15T12:00:00+00:00"}}))
+    levels, set_at = brightness_memory.load(path)
+    assert levels == {"A": 50, "C": 100} and list(set_at) == ["C"]
 
 
 def test_sleeping_monitor_is_restored_once_awake(tmp_path):
@@ -173,3 +183,77 @@ def test_restores_do_not_count_as_the_users_choice(tmp_path):
     manager, memory, _ = make(tmp_path, {"DEL41A2": 30})
     manager.detect([DELL], {0: 100})
     assert manager.sent == [(0, 30)] and memory.levels == {"DEL41A2": 30}
+
+
+# --- With the brightness schedule -------------------------------------------
+
+SCHEDULE = BrightnessScheduleConfig(True, (BrightnessStep("07:00", 80), BrightnessStep("20:00", 30)))
+
+
+def at(hour, minute=0):
+    return datetime(2026, 6, 15, hour, minute, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def noon():
+    NOW["now"] = at(12)
+
+
+def test_schedule_level_applies_at_start(tmp_path):
+    manager, memory, _ = make(tmp_path, {"DEL41A2": 30})
+    memory.set_schedule(SCHEDULE)
+    manager.detect([DELL, LG], {0: 50, 1: 50})
+    assert manager.sent == [(0, 80), (1, 80)]  # the schedule wins over an old remembered level
+
+
+def test_a_manual_change_pauses_the_schedule_until_its_next_step(tmp_path):
+    manager, memory, _ = make(tmp_path)
+    memory.set_schedule(SCHEDULE)
+    manager.detect([DELL], {0: 80})
+    NOW["now"] = at(13)
+    manager.set_brightness(0, 55)  # the user prefers 55 this afternoon
+    memory.restore_all_soon()
+    NOW["now"] = at(15)
+    manager.detect([DELL], {0: 100})  # e.g. after sleep: their 55 comes back, not 80
+    assert manager.sent[-1] == (0, 55)
+    NOW["now"] = at(20, 1)
+    memory._check_schedule()  # the next step: the schedule takes over again
+    assert manager.sent[-1] == (0, 30) and manager.faded[-1] is True
+
+
+def test_steps_are_applied_once_each(tmp_path):
+    manager, memory, _ = make(tmp_path)
+    memory.set_schedule(SCHEDULE)
+    manager.detect([DELL], {0: 80})
+    before = len(manager.sent)
+    memory._check_schedule()
+    memory._check_schedule()
+    assert len(manager.sent) == before
+
+
+def test_turning_the_schedule_on_applies_it_at_once(tmp_path):
+    manager, memory, _ = make(tmp_path)
+    manager.detect([DELL], {0: 50})
+    memory.set_schedule(SCHEDULE)
+    assert manager.sent == [(0, 80)]
+
+
+def test_hidden_displays_are_left_alone(tmp_path):
+    manager, memory, _ = make(tmp_path, {"DEL41A2": 30, "GSM5B7F": 30})
+    memory.set_hidden(frozenset({"GSM5B7F"}))
+    memory.set_schedule(SCHEDULE)
+    manager.detect([DELL, LG], {0: 50, 1: 50})
+    assert [index for index, _ in manager.sent] == [0]
+
+
+def test_scheduled_steps_wait_for_a_sleeping_monitor(tmp_path):
+    manager, memory, _ = make(tmp_path)
+    memory.set_schedule(SCHEDULE)
+    manager.detect([DELL], {0: 80})
+    manager.asleep.add(0)  # displays off by 20:00
+    NOW["now"] = at(20, 1)
+    memory._check_schedule()
+    assert manager.sent == []  # nothing sent to the sleeping monitor
+    manager.asleep.clear()
+    manager.detect([DELL], {0: 80})  # it wakes and answers
+    assert manager.sent == [(0, 30)]

@@ -18,6 +18,7 @@ receiver from ever reading.
 from __future__ import annotations
 
 import getpass
+import json
 import logging
 
 from PySide6.QtCore import QObject, Signal
@@ -26,6 +27,7 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 log = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT_MS = 500
+REPLY_TIMEOUT_MS = 10_000
 # The running copy reads the command from its event loop, which may be busy
 # for a moment (detecting monitors, starting up), so allow it some time.
 WRITE_TIMEOUT_MS = 3000
@@ -42,6 +44,8 @@ def default_name() -> str:
 class SingleInstance(QObject):
     activated = Signal()  # another launch asked this copy to show itself
     quitRequested = Signal()  # `--quit`, e.g. from the installer, asked this copy to exit
+    # The command line asked something (a dict); answer with reply(dict).
+    requestReceived = Signal(object, object)  # request, reply
 
     def __init__(self, name: str | None = None, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -71,6 +75,24 @@ class SingleInstance(QObject):
         if socket.state() != QLocalSocket.LocalSocketState.UnconnectedState:
             socket.waitForDisconnected(CONNECT_TIMEOUT_MS)
         return True
+
+    def request(self, payload: dict, timeout_ms: int = REPLY_TIMEOUT_MS) -> dict | None:
+        """Send a command-line request to the running copy and wait for its
+        answer. None if no copy is running."""
+        socket = QLocalSocket()
+        socket.connectToServer(self._name)
+        if not socket.waitForConnected(CONNECT_TIMEOUT_MS):
+            return None
+        socket.write(json.dumps(payload).encode() + b"\n")
+        socket.waitForBytesWritten(WRITE_TIMEOUT_MS)
+        reply = b""
+        while not reply.endswith(b"\n") and socket.waitForReadyRead(timeout_ms):
+            reply += bytes(socket.readAll().data())
+        socket.disconnectFromServer()
+        try:
+            return json.loads(reply)
+        except ValueError:
+            return {"ok": False, "output": "Winlight didn't answer in time."}
 
     def _listen(self) -> bool:
         # Nobody answered. On Linux a crashed copy can leave its socket file behind.
@@ -103,8 +125,27 @@ class SingleInstance(QObject):
             self._server = None
 
     def _read(self, socket: QLocalSocket) -> None:
-        if socket.bytesAvailable() > 0:
-            self._on_command(bytes(socket.readAll().data()))
+        if socket.bytesAvailable() <= 0:
+            return
+        data = bytes(socket.readAll().data())
+        if data.lstrip().startswith(b"{"):
+            self._on_request(data, socket)
+        else:
+            self._on_command(data)
+
+    def _on_request(self, data: bytes, socket: QLocalSocket) -> None:
+        try:
+            payload = json.loads(data)
+        except ValueError:
+            payload = {}
+
+        def reply(answer: dict) -> None:
+            if socket.state() == QLocalSocket.LocalSocketState.ConnectedState:
+                socket.write(json.dumps(answer).encode() + b"\n")
+                socket.flush()
+
+        log.info("Command line: %s", payload)
+        self.requestReceived.emit(payload, reply)
 
     def _on_command(self, data: bytes) -> None:
         if b"quit" in data:

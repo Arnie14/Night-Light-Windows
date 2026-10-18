@@ -109,3 +109,86 @@ def test_quitting_releases_dimming_too():
     gamma = DimmingGamma()
     make(gamma).shutdown()
     assert gamma.released == 1
+
+
+class PausingGamma(RecordingGamma):
+    def __init__(self) -> None:
+        super().__init__()
+        self.overrides: dict[str, int | None] = {}
+        self.verified = 0
+
+    def set_override(self, display, kelvin):
+        self.overrides[display] = kelvin
+
+    def verify(self):
+        self.verified += 1
+        return False
+
+
+ALWAYS_ON = NightLightConfig(enabled=True, mode=Mode.ALWAYS, night_temperature=3500)
+
+
+def test_starting_at_night_fades_in_instead_of_snapping():
+    gamma = RecordingGamma()
+    controller = make(gamma, ALWAYS_ON)
+    assert gamma.applied == [] or gamma.applied[0] > 6000  # starts near neutral
+    QTest.qWait(1200)
+    assert gamma.applied[-1] == 3500 and len(gamma.applied) > 10
+    controller.shutdown()
+
+
+def test_quitting_fades_out():
+    gamma = RecordingGamma()
+    controller = make(gamma, ALWAYS_ON)
+    QTest.qWait(1200)
+    before = len(gamma.applied)
+    controller.shutdown()
+    fade = gamma.applied[before:]
+    assert len(fade) >= 5 and fade == sorted(fade) and fade[-1] < 6500  # warmer to cooler, then reset
+    assert gamma.resets >= 1
+
+
+def test_pausing_a_display_fades_it_to_neutral_and_back():
+    gamma = PausingGamma()
+    controller = make(gamma, ALWAYS_ON)
+    QTest.qWait(1200)
+    controller.set_paused({"DISPLAY2": "game.exe"})
+    assert 3500 < gamma.overrides["DISPLAY2"] < 6500  # fading, not jumping
+    QTest.qWait(400)
+    assert gamma.overrides["DISPLAY2"] == 6500
+    assert controller.paused == {"DISPLAY2": "game.exe"}
+    controller.set_paused({})
+    QTest.qWait(400)
+    assert gamma.overrides["DISPLAY2"] is None  # back to following night light
+    controller.shutdown()
+
+
+def test_unlocking_checks_the_ramps_several_times():
+    gamma = PausingGamma()
+    controller = make(gamma)
+    gamma.verified = 0
+    controller.reapply_now()
+    QTest.qWait(50)
+    assert gamma.verified >= 1  # straight away
+    QTest.qWait(3200)
+    assert gamma.verified >= len(controller_module.REAPPLY_BURST_MS)
+    controller.shutdown()
+
+
+def test_pausing_while_night_light_is_off_touches_nothing():
+    gamma = PausingGamma()
+    controller = make(gamma)  # night light off: neutral
+    controller.set_paused({"DISPLAY2": "game.exe"})
+    QTest.qWait(100)
+    assert gamma.overrides == {}  # nothing to pause, so the ramp is left alone
+    controller.shutdown()
+
+
+def test_a_paused_display_stays_neutral_when_night_light_starts():
+    gamma = PausingGamma()
+    controller = make(gamma)
+    controller.set_paused({"DISPLAY2": "game.exe"})
+    controller.set_override(controller_module.OverrideKind.ACTIVATE)  # night light comes on
+    QTest.qWait(1200)
+    assert gamma.applied[-1] == 4500 and gamma.overrides["DISPLAY2"] == 6500
+    controller.shutdown()

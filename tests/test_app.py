@@ -82,3 +82,54 @@ def test_turning_software_dimming_off_reaches_the_monitors(start, monkeypatch):
     night_light._apply_settings(AppConfig(general=GeneralConfig(software_dimming=False)))
     night_light._apply_settings(AppConfig(general=GeneralConfig(software_dimming=False)))  # unchanged: nothing
     assert calls == [False]
+
+
+def test_windows_night_light_notice_follows_its_state(start, monkeypatch):
+    from nightlight.hardware import winsystem
+
+    state = {"on": False}
+    monkeypatch.setattr(winsystem, "windows_night_light_on", lambda: state["on"])
+    night_light, _ = start(GeneralConfig())
+    night_light._check_windows_night_light()
+    assert night_light.flyout.windows_night_light.isHidden()
+    state["on"] = True
+    night_light._check_windows_night_light()
+    assert not night_light.flyout.windows_night_light.isHidden()
+
+
+def test_display_preferences_reach_the_panel_and_brightness(start):
+    from nightlight.config import DisplayPrefs
+
+    night_light, _ = start(GeneralConfig())
+    night_light._apply_settings(AppConfig(displays=(DisplayPrefs("SAM7136", "", True),)))
+    assert night_light.flyout._prefs["SAM7136"].hidden
+    assert night_light.brightness_memory._hidden == {"SAM7136"}
+
+
+def test_an_exempt_app_pauses_night_light_on_its_display(start, monkeypatch):
+    from nightlight.config import NightLightConfig
+    from nightlight.hardware.winsystem import ForegroundApp
+
+    night_light, _ = start(GeneralConfig())
+    night_light._exemptions._probe = lambda: ForegroundApp("game.exe", r"\\.\DISPLAY2", True)
+    night_light._apply_settings(AppConfig(NightLightConfig(exempt_apps=("game.exe",))))
+    assert night_light.controller.paused == {r"\\.\DISPLAY2": "game.exe"}
+    night_light._apply_settings(AppConfig())
+    assert night_light.controller.paused == {}
+
+
+def test_diagnostics_from_the_command_line(start, monkeypatch, tmp_path):
+    from nightlight import diagnostics
+
+    monkeypatch.setattr(diagnostics, "default_folder", lambda: tmp_path / "desk")
+    night_light, _ = start(GeneralConfig())
+    replies = []
+    night_light.handle_request({"command": "diagnostics"}, replies.append)
+    assert replies[0]["ok"] and len(list((tmp_path / "desk").glob("Winlight-diagnostics-*.zip"))) == 1
+    night_light.handle_request({"command": "list"}, replies.append)
+    assert replies[1]["ok"]
+
+
+def test_tray_menu_has_report_a_problem(start):
+    night_light, _ = start(GeneralConfig())
+    assert "Report a Problem…" in [a.text() for a in night_light.tray._menu.actions()]

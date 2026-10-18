@@ -140,3 +140,54 @@ def test_software_dimming_option(window):
     window.software_dimming.setChecked(False)
     assert window.current_config().general.software_dimming is False
     assert apply_button(window).isEnabled()
+
+
+def test_exemptions(window):
+    window.exempt_fullscreen.setChecked(True)
+    window.exempt_apps.add("Photoshop.EXE")
+    window.exempt_apps.add("photoshop.exe")  # once only
+    night_light = window.current_config().night_light
+    assert night_light.exempt_fullscreen and night_light.exempt_apps == ("photoshop.exe",)
+    assert apply_button(window).isEnabled()
+
+
+def test_brightness_schedule_steps(window):
+    from nightlight.config import BrightnessStep
+
+    window.schedule_enabled.setChecked(True)
+    window.schedule_steps.set_steps((BrightnessStep("07:00", 80), BrightnessStep("sunset", 40, -30)))
+    schedule = window.current_config().brightness_schedule
+    assert schedule.enabled and schedule.steps == (BrightnessStep("07:00", 80), BrightnessStep("sunset", 40, -30))
+    window.schedule_steps._rows[1].removeRequested.emit(window.schedule_steps._rows[1])
+    assert window.current_config().brightness_schedule.steps == (BrightnessStep("07:00", 80),)
+
+
+def test_display_names_and_hiding():
+    from PySide6.QtCore import QObject, Signal
+
+    from nightlight.config import DisplayPrefs
+    from nightlight.hardware.brightness import MonitorInfo
+
+    class Monitors(QObject):
+        monitorsChanged = Signal(list)
+        monitors = [MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2"), MonitorInfo(1, "TV", True, key="SAM7136")]
+
+    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    monitors = Monitors()
+    saved = (DisplayPrefs("DEL41A2", "Left"),)
+    window = SettingsWindow(controller, AppConfig(KYIV, displays=saved), monitors=monitors)
+    assert window.current_config().displays == saved
+    name, show = window.displays._rows["SAM7136"]
+    show.setChecked(False)
+    assert window.current_config().displays == (DisplayPrefs("DEL41A2", "Left"), DisplayPrefs("SAM7136", "", True))
+    monitors.monitorsChanged.emit(monitors.monitors)  # re-detection keeps unsaved edits
+    assert window.current_config().displays[-1].hidden
+    window.buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).click()
+    assert window.current_config().displays  # names are kept by Restore Defaults
+    controller.shutdown()
+
+
+def test_windows_night_light_notice(window):
+    assert window.windows_night_light.isHidden()
+    window.set_windows_night_light(True)
+    assert not window.windows_night_light.isHidden()

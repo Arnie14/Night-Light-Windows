@@ -18,13 +18,14 @@ from PySide6.QtWidgets import (
 )
 
 from nightlight import APP_NAME
+from nightlight.config import DisplayPrefs
 from nightlight.controller import NightLightController
 from nightlight.hardware.brightness import MonitorInfo
 from nightlight.monitors import MonitorManager
 from nightlight.ui import icons
-from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status
+from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status, paused_text
 from nightlight.ui.placement import flyout_position
-from nightlight.ui.widgets import HEADING_WEIGHT, GlyphButton, MonitorBrightness, SecondaryLabel, Separator, set_font
+from nightlight.ui.widgets import HEADING_WEIGHT, GlyphButton, MonitorBrightness, SecondaryLabel, Separator, WindowsNightLightNotice, set_font
 
 WIDTH = 340
 
@@ -38,6 +39,7 @@ class Flyout(QFrame):
         self._controller = controller
         self._rows: dict[int, MonitorBrightness] = {}
         self._linked = False
+        self._prefs: dict[str, DisplayPrefs] = {}  # custom names and hidden displays, by key
         self._hidden_at = 0.0
         self._anchor: QRect | None = None  # the tray icon it opened from
         self._as_window = as_window
@@ -54,11 +56,14 @@ class Flyout(QFrame):
         header = QHBoxLayout()
         title = QLabel("Brightness and Color")
         set_font(title, 1.15, HEADING_WEIGHT)
-        refresh = GlyphButton(icons.refresh_glyph, "Detect monitors again")
+        refresh = GlyphButton(icons.refresh_glyph, "Detect displays again")
         refresh.clicked.connect(self._refresh)
         header.addWidget(title, 1)
         header.addWidget(refresh)
         layout.addLayout(header)
+
+        self.windows_night_light = WindowsNightLightNotice(compact=True)
+        layout.addWidget(self.windows_night_light)
 
         self._monitor_status = SecondaryLabel("Detecting monitors…")
         self._monitor_status.setWordWrap(True)
@@ -146,24 +151,41 @@ class Flyout(QFrame):
         size = self.size() if self.isVisible() else self.sizeHint()
         return flyout_position(size, screen.geometry(), screen.availableGeometry(), anchor)
 
+    def set_windows_night_light(self, on: bool | None) -> None:
+        """Show the notice while Windows' own Night Light is on too (it stacks with ours)."""
+        if self.windows_night_light.isVisible() != bool(on):
+            self.windows_night_light.setVisible(bool(on))
+            self.adjustSize()
+
+    def set_display_prefs(self, prefs: tuple[DisplayPrefs, ...]) -> None:
+        """Custom names, and displays to leave out of the panel (and linked changes)."""
+        self._prefs = {p.key: p for p in prefs}
+        self._rebuild(self._monitors.monitors)
+
     def _refresh(self) -> None:
         self._monitor_status.setText("Detecting monitors…")
         self._monitor_status.show()
-        self._monitors.refresh()
+        self._monitors.retry()  # includes displays skipped after a crash or hang
 
     def _rebuild(self, monitors: list[MonitorInfo]) -> None:
         for row in self._rows.values():
             row.deleteLater()
         self._rows.clear()
         for info in monitors:
-            row = MonitorBrightness(info)
+            prefs = self._prefs.get(info.key, DisplayPrefs(info.key))
+            if prefs.hidden:
+                continue
+            row = MonitorBrightness(info, prefs.name)
             row.brightnessRequested.connect(self._on_brightness_requested)
             if info.index in self._monitors.brightness:
                 row.set_brightness(self._monitors.brightness[info.index])
             self._monitor_layout.addWidget(row)
             self._rows[info.index] = row
-        if monitors:
+        if self._rows:
             self._monitor_status.hide()
+        elif monitors:
+            self._monitor_status.setText("Every display is hidden; show them in Settings > Displays.")
+            self._monitor_status.show()
         else:
             self._monitor_status.setText("No monitors with DDC/CI brightness control found.")
             self._monitor_status.show()
@@ -188,7 +210,8 @@ class Flyout(QFrame):
     def _update_night_light(self) -> None:
         controller = self._controller
         self._night_icon.setPixmap((icons.night_icon() if is_night_light_on(controller) else icons.day_icon()).pixmap(26, 26))
-        self._night_text.setText(night_light_status(controller))
+        paused = paused_text(controller)
+        self._night_text.setText(night_light_status(controller) + (f"\n{paused}" if paused else ""))
         if self._override_menu.isVisible():
             return  # don't rebuild the menu under the user's cursor
         self._toggle.setText(build_override_menu(controller, self._override_menu))

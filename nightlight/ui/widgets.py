@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPalette
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QSizePolicy, QSlider, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPalette
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QToolButton, QVBoxLayout, QWidget
 
 from nightlight.core.colortemp import MAX_KELVIN, MIN_KELVIN
 from nightlight.hardware.brightness import MonitorInfo
@@ -117,12 +117,38 @@ class GlyphButton(QToolButton):
         self.setIcon(self._draw(blend(palette.color(QPalette.ColorRole.ButtonText), palette.color(QPalette.ColorRole.Button), 0.25)))
 
 
+class WindowsNightLightNotice(QFrame):
+    """Shown while Windows' own Night Light is on: the two tints stack, so
+    colors end up far too warm. Winlight is meant to replace it."""
+
+    SETTINGS_URL = "ms-settings:nightlight"
+
+    def __init__(self, compact: bool = False) -> None:
+        super().__init__(frameShape=QFrame.Shape.StyledPanel)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 8, 8)
+        text = (
+            "Windows Night Light is on too, so colors are tinted twice."
+            if compact
+            else "Windows Night Light is on too. Both tint the screen, so colors end up too warm. "
+            "Winlight replaces it: turn Windows Night Light off."
+        )
+        label = QLabel(text)
+        label.setWordWrap(True)
+        self.button = QPushButton("Turn it off…" if compact else "Open Windows Settings")
+        self.button.setToolTip("Opens Settings > System > Display > Night light")
+        self.button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.SETTINGS_URL)))
+        layout.addWidget(label, 1)
+        layout.addWidget(self.button)
+        self.hide()
+
+
 class MonitorBrightness(QWidget):
     """Monitor name and level on one line, a full-width slider below."""
 
     brightnessRequested = Signal(int, int)  # index, value
 
-    def __init__(self, info: MonitorInfo) -> None:
+    def __init__(self, info: MonitorInfo, name: str = "") -> None:
         super().__init__()
         self.info = info
         layout = QVBoxLayout(self)
@@ -130,9 +156,9 @@ class MonitorBrightness(QWidget):
         layout.setSpacing(4)
 
         top = QHBoxLayout()
-        name = QLabel(info.name)
-        set_font(name, weight=QFont.Weight.DemiBold)
-        top.addWidget(name, 1)
+        title = QLabel(name or info.name)
+        set_font(title, weight=QFont.Weight.DemiBold)
+        top.addWidget(title, 1)
         layout.addLayout(top)
         if caption := CONTROL_CAPTIONS.get(info.control):
             text, tooltip = caption

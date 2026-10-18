@@ -40,6 +40,14 @@ def night_light_status(controller: NightLightController) -> str:
     return f"{phase} · {state.temperature}K"
 
 
+def paused_text(controller: NightLightController) -> str:
+    """"Paused for game.exe" while night light is paused on a display for an exempt app."""
+    if not controller.paused or not is_night_light_on(controller):
+        return ""
+    reasons = sorted(set(controller.paused.values()))
+    return "Paused for " + ", ".join(reasons)
+
+
 def schedule_description(controller: NightLightController) -> str:
     """When the next changes happen, worded like KDE's Night Light page."""
     config, now = controller.config, controller.now()
