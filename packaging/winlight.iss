@@ -37,9 +37,12 @@ SolidCompression=yes
 ; Close a running copy through Windows' Restart Manager if --quit didn't.
 CloseApplications=yes
 RestartApplications=no
+; Tell Windows about the PATH change (the optional command line task).
+ChangesEnvironment=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "addtopath"; Description: "Add winlight-cli to PATH, to control Winlight from scripts and the command line"; GroupDescription: "Command line:"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -49,12 +52,46 @@ Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreve
 Name: "{autoprograms}\Winlight"; Filename: "{app}\Winlight.exe"; AppUserModelID: "Winlight.Winlight"
 Name: "{autodesktop}\Winlight"; Filename: "{app}\Winlight.exe"; AppUserModelID: "Winlight.Winlight"; Tasks: desktopicon
 
+[Registry]
+; The user's own PATH, so no administrator rights are needed; removed again on uninstall.
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NotOnPath(ExpandConstant('{app}'))
+
 [Run]
 Filename: "{app}\Winlight.exe"; Description: "{cm:LaunchProgram,Winlight}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  EnvKey = 'Environment';
+
+function NotOnPath(Dir: String): Boolean;
+var
+  Path: String;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, EnvKey, 'Path', Path) then
+    Path := '';
+  Result := Pos(';' + Uppercase(Dir) + ';', ';' + Uppercase(Path) + ';') = 0;
+end;
+
+procedure RemoveFromPath(Dir: String);
+var
+  Path: String;
+  P: Integer;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, EnvKey, 'Path', Path) then
+    exit;
+  P := Pos(';' + Uppercase(Dir) + ';', ';' + Uppercase(Path) + ';');
+  if P = 0 then
+    exit;
+  { In ';' + Path + ';' the match starts at the separator before the entry,
+    so in Path the entry starts at P. Remove it with one separator: the one
+    before it, or after it when it is the first entry. }
+  if P = 1 then
+    Delete(Path, 1, Length(Dir) + 1)
+  else
+    Delete(Path, P - 1, Length(Dir) + 1);
+  RegWriteExpandStringValue(HKEY_CURRENT_USER, EnvKey, 'Path', Path);
+end;
 
 { Ask a running Winlight to quit, so it puts the screen colors back to
   normal before its files are replaced or removed. Killing it instead would
@@ -84,5 +121,8 @@ begin
     don't leave it pointing at a deleted program. Settings in
     %LOCALAPPDATA%\night-light are kept, as most apps do. }
   if CurUninstallStep = usPostUninstall then
+  begin
     RegDeleteValue(HKEY_CURRENT_USER, RunKey, 'Winlight');
+    RemoveFromPath(ExpandConstant('{app}'));
+  end;
 end;

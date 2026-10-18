@@ -95,6 +95,10 @@ def main() -> int:
 
     # Smoke test: the frozen app starts, finds its modules and Qt, and exits.
     run(str(app / "Winlight.exe"), "--quit", timeout=60)
+    # The command line answers (exit code 2 and a message: the app isn't running).
+    result = subprocess.run([str(app / "winlight-cli.exe"), "--list"], capture_output=True, text=True, timeout=60)
+    if result.returncode != 2 or "isn't running" not in result.stderr:
+        raise SystemExit(f"winlight-cli.exe didn't answer as expected: {result.returncode} {result.stdout!r} {result.stderr!r}")
 
     portable = shutil.make_archive(str(DIST / f"Winlight-{version}-portable"), "zip", DIST, "Winlight")
     print("Portable:", portable)
@@ -114,6 +118,7 @@ def check(app: Path) -> None:
     """Fail the build if something the app needs at run time is missing."""
     internal = app / "_internal"
     needed = {
+        "command line": app / "winlight-cli.exe",
         "time zone table": internal / "nightlight" / "data" / "timezones.csv",
         "Qt's Windows platform plugin": next(internal.rglob("qwindows.dll"), None),
     }

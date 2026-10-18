@@ -57,8 +57,23 @@ exe = EXE(  # noqa: F821
     version=str(build / "version_info.txt"),
     upx=False,
 )
+# The same program as a console executable, for the command line
+# (winlight-cli --set 40): a windowed exe can't print to a console, and
+# cmd.exe doesn't wait for one, so scripts would get no output or exit code.
+cli = EXE(  # noqa: F821
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="winlight-cli",
+    console=True,
+    icon=str(build / "winlight.ico"),
+    version=str(build / "version_info.txt"),
+    upx=False,
+)
 coll = COLLECT(  # noqa: F821
     exe,
+    cli,
     a.binaries,
     a.datas,
     name="Winlight",
