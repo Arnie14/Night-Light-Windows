@@ -43,6 +43,7 @@ In the panel, click ⚙ (Settings):
 - [ ] Turn on the **Brightness schedule** with a step a minute or two from now, Apply: at that time every display fades to the step's level. Move a slider afterwards: your level stays until the next step.
 - [ ] Settings → **Displays**: rename one, untick "Show in panel" for another, Apply. The panel uses the new name and leaves out the hidden one.
 - [ ] Laptop with an external monitor: tick **External displays follow the laptop's brightness keys**, Apply, and press the brightness keys: the external monitor follows within about 2 seconds.
+- [ ] Tick **Dim displays when I'm away for 1 min to 20%**, Apply, and leave the PC alone: after a minute the displays fade down; move the mouse and they come back. Play a video and leave it: nothing dims.
 - [ ] Sleep the PC for a few minutes with a monitor connected, wake it, and wait 2 minutes before **Report a Problem…**: the summary's "Last wake from sleep" section shows when each display answered again.
 
 ## 5. Command line (optional)

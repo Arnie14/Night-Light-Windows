@@ -216,6 +216,14 @@ Focus, keys, sleep and privacy:
 - [ ] Sleep for a few minutes and wake: the log has "After waking +N s: …" lines for each pass and a "Wake summary". Note how long each external monitor took to answer. Please send these lines even when everything works; they show how long monitors take on your hardware.
 - [ ] Open `night-light.log` and a Report a Problem zip: your Windows user name, computer name and email don't appear anywhere (look for `<user>`, `<computer>`, `<home>` instead), nor your city, coordinates, custom display names or the apps you listed.
 
+Dimming when idle (Settings > Brightness > When idle, e.g. 1 minute to 20%):
+
+- [ ] Leave the PC alone: after the time, every display fades to 20% (displays already darker stay as they are). Move the mouse: they fade back within about a second.
+- [ ] Play a video in a browser or player (not fullscreen) and leave it: nothing dims. The same with a fullscreen game or a PowerPoint slideshow.
+- [ ] With the brightness schedule on, stay away across a step's time: coming back sets the step's level, not the old one.
+- [ ] Quit Winlight while dimmed: the displays come back first.
+- [ ] Hidden displays and displays without brightness control stay as they are.
+
 Diagnostics and safe mode:
 
 - [ ] Tray > Report a Problem…: a zip appears on the Desktop with summary.txt, settings.json (location rounded) and the logs; the summary is on the clipboard; the buttons show the file and open GitHub. `winlight-cli --diagnostics` does the same and prints the path.

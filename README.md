@@ -10,7 +10,7 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 
 - **Every display gets a slider.** DDC/CI for external monitors, the laptop's own control for its panel, Windows' SDR brightness for HDR displays, and software dimming for TVs and anything else.
 - **Night light** with a warm color shift, by custom times or sunrise and sunset at your city, with smooth transitions. It **pauses on the display showing a game, a video or an app you choose**, and keeps going on the others.
-- **Brightness that follows your day:** a schedule of levels (fixed times, or sunrise and sunset), and each display's level put back after restarting, sleep, or reconnecting a monitor.
+- **Brightness that follows your day:** a schedule of levels (fixed times, or sunrise and sunset), dimming while you're away, and each display's level put back after restarting, sleep, or reconnecting a monitor.
 - **Your displays, your names:** rename displays or hide the ones you don't want in the panel.
 - **Scriptable:** `winlight-cli --set 40`, `--night-light toggle`, and more, for AutoHotkey, Task Scheduler or a Stream Deck.
 - **Small and native:** a tray icon and a panel, light and dark mode, starts with Windows if you like.
@@ -51,6 +51,7 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 | Private logs and reports | 🧪 Needs Windows testing | User name, computer name, home folder and emails are scrubbed from every log line and report; no location, custom names or listed app names are written. |
 | Never steals focus from fullscreen games | 🧪 Needs Windows testing | Windows' "don't interrupt" state and fullscreen detection keep Winlight from opening windows on its own over a game, video or presentation. |
 | Laptop brightness keys move external displays too | 🧪 Needs Windows testing | Optional. Follows the laptop panel's level rather than intercepting the keys. |
+| Dim when idle | 🧪 Needs Windows testing | Optional: displays dim after a few minutes without input and come back on the first key or mouse move. Not while a video, game or presentation keeps the screen on. |
 | Displays followed after sleep | 🧪 Needs Windows testing | Re-detection at 2 s to 2 min after waking, each pass logged with its timing, stopping once every display is back. |
 | Multi-display detection, hotplug and sleep | 🧪 Needs Windows testing | Re-detection after display changes and waking, several times, as monitors are often slow to answer. |
 | Start at sign-in, start minimized | ✅ Ready | The current user's Run registry key; no administrator rights. |
@@ -250,6 +251,7 @@ nightlight/
   privacy.py             scrubbing personal details from logs and reports
   brightness_keys.py     external displays following the laptop's brightness keys
   wake_report.py         re-detecting displays after sleep, with timings in the log
+  idle_dim.py            dimming while the PC is left alone
   data/                  time zone table for picking a location (from tools/make_timezones.py)
 packaging/               Windows build: PyInstaller spec, Inno Setup script, icon, build.py
 tools/                   screenshots.py (README images), make_timezones.py
