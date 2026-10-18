@@ -32,6 +32,7 @@ In the panel, click ⚙ (Settings):
 - [ ] **Sleep** the PC and wake it: same.
 - [ ] Settings → Night Light → tick **While an app is fullscreen**, Apply. Play a video fullscreen or start a game: that display fades to normal colors, the others stay warm. Leave fullscreen: it fades back.
 - [ ] Add an app under **For these apps** (e.g. your photo editor), Apply, and switch to it: the same happens while it's in front.
+- [ ] With a game or video fullscreen, start Winlight again from the Start menu: nothing pops up over it, and the game keeps focus.
 - [ ] Switch back to your usual schedule (custom times or sunset/sunrise).
 
 ## 4. Brightness
@@ -41,6 +42,8 @@ In the panel, click ⚙ (Settings):
 - [ ] Tick **Change all displays together**, Apply: one slider moves them all.
 - [ ] Turn on the **Brightness schedule** with a step a minute or two from now, Apply: at that time every display fades to the step's level. Move a slider afterwards: your level stays until the next step.
 - [ ] Settings → **Displays**: rename one, untick "Show in panel" for another, Apply. The panel uses the new name and leaves out the hidden one.
+- [ ] Laptop with an external monitor: tick **External displays follow the laptop's brightness keys**, Apply, and press the brightness keys: the external monitor follows within about 2 seconds.
+- [ ] Sleep the PC for a few minutes with a monitor connected, wake it, and wait 2 minutes before **Report a Problem…**: the summary's "Last wake from sleep" section shows when each display answered again.
 
 ## 5. Command line (optional)
 
@@ -59,4 +62,4 @@ In a new terminal (or use the full path `%LOCALAPPDATA%\Programs\Winlight\winlig
 
 ## 7. Send it back
 
-Even if everything worked, a **Report a Problem…** zip is useful: it shows how each of your displays was detected.
+Even if everything worked, a **Report a Problem…** zip is useful: it shows how each of your displays was detected. It doesn't contain your user name, computer name, location or custom display names; you can open it and check before sending.

@@ -194,6 +194,14 @@ Reading [Monitorian](https://github.com/emoacht/Monitorian), [Twinkle Tray](http
 - **One-click diagnostics** (Monitorian's FAQ asks for probe and operation logs; collecting them by hand is where reports stall).
   - ✅ Tray > Report a Problem…: a zip on the Desktop (summary, logs, settings with the location rounded) and the summary on the clipboard. No DDC/CI scan or tint, so it's safe any time.
 - **Smooth changes.** Starting at night fades in, quitting fades out, pausing and resuming fade, scheduled and command-line brightness changes fade.
+- **Not stealing focus from games.** Opening a window over an exclusive-fullscreen game can minimize it.
+  - ✅ `winsystem.user_busy()`: Windows' `SHQueryUserNotificationState` (busy, Direct3D fullscreen, presentation mode) or a fullscreen app in front. Winlight then doesn't open windows on its own (a second launch's panel, settings at sign-in); a setting, on by default. Opening it from the tray is never blocked (that click already left the game).
+- **Laptop brightness keys** (Twinkle Tray's hotkey settings note that Windows still handles them and laptop firmware may intercept them; #570 asks to follow WmiMonitorBrightnessEvent instead).
+  - ✅ `brightness_keys.py` doesn't intercept keys: it follows the panel's level, from Windows' power-setting notification for display brightness (`aded5e82-…`, when Windows sends it) and a 2 s check of the panel while the option is on, and sets external displays to match. Changes the app made itself within 2 s are its own echo and ignored, so the panel's own slider doesn't move the others. Testing will show which source fires on which laptops.
+- **After sleep**, the most reported DDC/CI problem in both projects.
+  - ✅ `wake_report.py`: re-detection at 2, 5, 10, 20, 30, 60 and 120 s after waking (Monitorian: 5–60 s), each pass logged with its time since waking, who answered and how long detection took, and a summary (also in diagnostics). It stops once every display that answered before sleep has answered twice in a row. Schedules now add up instead of replacing each other, so a display change right after waking no longer cuts the wake's schedule short; Windows' event and the clock check reporting the same wake count once.
+- **Privacy in logs and reports**: they get posted publicly.
+  - ✅ `privacy.py`: every log line and traceback, and every file in a report (old log lines too), has the user name, computer name, home folder and email addresses replaced. Nothing writes coordinates, cities, time zones, custom display names, listed app names (logged as "a listed app"), or command-line arguments. Report timestamps are in UTC.
 
 ## 9. Quirks and issues they ran into
 

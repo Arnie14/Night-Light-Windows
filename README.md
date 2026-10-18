@@ -48,6 +48,10 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 | Night light back at once after unlock and sleep | 🧪 Needs Windows testing | Listens for Windows' unlock, wake and display-on events, and checks the ramps every 1.5 s. |
 | Windows Night Light notice | 🧪 Needs Windows testing | Detects Windows Night Light from its registry state (undocumented) and offers to open its setting. |
 | One-click diagnostics, crash safe mode | 🧪 Needs Windows testing | "Report a Problem…" saves a zip and copies a summary; a display whose DDC/CI crashed or hung the app is skipped until retried. |
+| Private logs and reports | 🧪 Needs Windows testing | User name, computer name, home folder and emails are scrubbed from every log line and report; no location, custom names or listed app names are written. |
+| Never steals focus from fullscreen games | 🧪 Needs Windows testing | Windows' "don't interrupt" state and fullscreen detection keep Winlight from opening windows on its own over a game, video or presentation. |
+| Laptop brightness keys move external displays too | 🧪 Needs Windows testing | Optional. Follows the laptop panel's level rather than intercepting the keys. |
+| Displays followed after sleep | 🧪 Needs Windows testing | Re-detection at 2 s to 2 min after waking, each pass logged with its timing, stopping once every display is back. |
 | Multi-display detection, hotplug and sleep | 🧪 Needs Windows testing | Re-detection after display changes and waking, several times, as monitors are often slow to answer. |
 | Start at sign-in, start minimized | ✅ Ready | The current user's Run registry key; no administrator rights. |
 | Installer, portable zip, uninstaller | ✅ Ready | Per-user, built by GitHub Actions. |
@@ -99,6 +103,7 @@ Most of these were learned from [Monitorian](https://github.com/emoacht/Monitori
 - Most TVs don't support DDC/CI.
 - Gamma ramps belong to displays, not windows, so pausing night light for an app pauses it for that app's whole display.
 - Windows Night Light's state has no API; Winlight reads its undocumented registry value, and shows nothing if it can't tell.
+- Laptop brightness keys are handled by the laptop's firmware and Windows, not passed to apps, so Winlight can't take them over. It follows the brightness they set instead, which is reliable and doesn't need a keyboard hook (which games' anti-cheat may flag).
 - Running alongside Windows Night Light, f.lux or GPU color settings (such as AMD's "Custom Colors") may cause conflicts.
 
 ## 🗺️ Roadmap
@@ -146,7 +151,9 @@ Display numbers are the order in the panel and in `--list`. Changes fade rather 
 
 ## 🐞 Reporting a problem
 
-Right-click the tray icon and choose **Report a Problem…**. Winlight saves a `Winlight-diagnostics-….zip` to your Desktop (logs, settings with the location rounded, and what it knows about each display) and copies a summary to the clipboard. Open an [issue](https://github.com/Arnie14/Night-Light-Windows/issues), paste the summary and attach the zip.
+Right-click the tray icon and choose **Report a Problem…**. Winlight saves a `Winlight-diagnostics-….zip` to your Desktop (logs, settings, and what it knows about each display) and copies a summary to the clipboard.
+
+Reports are meant to be posted publicly, so nothing personal goes in: your user name, computer name, home folder and email addresses are replaced with placeholders in every file, and your location, city, custom display names and the names of apps you listed aren't included at all. The same goes for the log file itself. Open an [issue](https://github.com/Arnie14/Night-Light-Windows/issues), paste the summary and attach the zip.
 
 ## ⬇️ Download details
 
@@ -240,6 +247,9 @@ nightlight/
   commands.py, cli.py    the command line (winlight-cli) and what the app does for it
   diagnostics.py         "Report a Problem…"
   safe_mode.py           skipping displays whose DDC/CI crashed or hung the app
+  privacy.py             scrubbing personal details from logs and reports
+  brightness_keys.py     external displays following the laptop's brightness keys
+  wake_report.py         re-detecting displays after sleep, with timings in the log
   data/                  time zone table for picking a location (from tools/make_timezones.py)
 packaging/               Windows build: PyInstaller spec, Inno Setup script, icon, build.py
 tools/                   screenshots.py (README images), make_timezones.py

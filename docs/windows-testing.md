@@ -209,6 +209,13 @@ Command line (`winlight-cli.exe` next to `Winlight.exe`, or `python main.py …`
 - [ ] Errors say why and exit with 1 (try `--display 9` and `--set bright`); with Winlight not running it says so and exits with 2 (`echo %ERRORLEVEL%`).
 - [ ] From AutoHotkey or a `.bat` file: works, and waits for the result.
 
+Focus, keys, sleep and privacy:
+
+- [ ] Start a game in exclusive fullscreen (and one in borderless fullscreen, and a fullscreen video). Then start `Winlight.exe` again (or use a hotkey tool that launches it): the panel does **not** appear and the game keeps focus; the log says "Not opening the panel over a fullscreen app". The same with "Start minimized" off at sign-in. Untick Settings > General > "Never open over fullscreen…": then it does open.
+- [ ] Laptop: tick Settings > Brightness > "External displays follow the laptop's brightness keys". Press the brightness keys: external displays follow within about 2 s. The log says whether Windows reported it ("noticed by Windows") or the check found it ("noticed by a check of the panel"); please note which. Dragging the laptop's own slider in the panel does **not** move the others (unless "Change all displays together" is on).
+- [ ] Sleep for a few minutes and wake: the log has "After waking +N s: …" lines for each pass and a "Wake summary". Note how long each external monitor took to answer. Please send these lines even when everything works; they show how long monitors take on your hardware.
+- [ ] Open `night-light.log` and a Report a Problem zip: your Windows user name, computer name and email don't appear anywhere (look for `<user>`, `<computer>`, `<home>` instead), nor your city, coordinates, custom display names or the apps you listed.
+
 Diagnostics and safe mode:
 
 - [ ] Tray > Report a Problem…: a zip appears on the Desktop with summary.txt, settings.json (location rounded) and the logs; the summary is on the clipboard; the buttons show the file and open GitHub. `winlight-cli --diagnostics` does the same and prints the path.
