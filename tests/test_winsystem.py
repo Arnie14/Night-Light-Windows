@@ -79,3 +79,24 @@ def test_off_windows_these_report_nothing(monkeypatch):
     assert winsystem.foreground_app() is None
     assert winsystem.running_apps() == []
     assert winsystem.windows_night_light_on() is None
+
+
+@pytest.mark.parametrize(
+    ("state", "fullscreen", "busy"),
+    [
+        (winsystem.QUNS_RUNNING_D3D_FULL_SCREEN, False, True),  # an exclusive-fullscreen game
+        (winsystem.QUNS_PRESENTATION_MODE, False, True),
+        (winsystem.QUNS_BUSY, False, True),
+        (5, True, True),  # Windows doesn't know, but a borderless game is in front
+        (5, False, False),  # QUNS_ACCEPTS_NOTIFICATIONS
+        (None, False, False),
+    ],
+)
+def test_busy(state, fullscreen, busy):
+    assert winsystem.is_busy(state, fullscreen) is busy
+
+
+def test_panel_brightness_message():
+    from nightlight.hardware.winsystem import GUID_VIDEO_BRIGHTNESS, PANEL_BRIGHTNESS
+
+    assert classify(winsystem.WM_POWERBROADCAST, winsystem.PBT_POWERSETTINGCHANGE, GUID_VIDEO_BRIGHTNESS, 40) == PANEL_BRIGHTNESS

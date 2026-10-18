@@ -13,6 +13,7 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from nightlight import APP_NAME, autostart, config, diagnostics
+from nightlight.brightness_keys import BrightnessKeys
 from nightlight.brightness_memory import BrightnessMemory
 from nightlight.commands import CommandHandler
 from nightlight.controller import NightLightController
@@ -23,6 +24,7 @@ from nightlight.hardware.gamma import GammaBackend
 from nightlight.monitors import MonitorManager
 from nightlight.safe_mode import SafeMode
 from nightlight.ui.flyout import Flyout
+from nightlight.wake_report import WakeReport
 from nightlight.ui.settings_window import SettingsWindow
 from nightlight.ui.tray import Tray
 from nightlight.watcher import DisplayWatcher
@@ -33,7 +35,7 @@ log = logging.getLogger(__name__)
 # a while to answer DDC/CI after being plugged in or woken, so look more than
 # once (Monitorian: 1-20 s after display changes, 5-60 s after resume).
 RESCAN_AFTER_CHANGE_S = (2, 8)
-RESCAN_AFTER_RESUME_S = (5, 15, 30)
+# After waking, see wake_report.py (a longer schedule, with timings logged).
 # How often to look whether Windows' own Night Light is on (a registry read).
 WINDOWS_NIGHT_LIGHT_CHECK_MS = 10_000
 
@@ -55,6 +57,8 @@ class NightLightApp:
             set_dimming(general.software_dimming)
         self.monitors = MonitorManager(brightness)
         self.brightness_memory = BrightnessMemory(self.monitors, config_path.with_name("brightness.json"), general.remember_brightness)
+        self.wake_report = WakeReport(self.monitors)
+        self.brightness_keys = BrightnessKeys(self.monitors, lambda: frozenset(d.key for d in self._config.displays if d.hidden))
         self.controller = NightLightController(gamma, self._config.night_light)
         self.commands = CommandHandler(self.monitors, self.controller, lambda: self._config)
         self._settings: SettingsWindow | None = None
@@ -83,7 +87,7 @@ class NightLightApp:
             self.tray.quitRequested.connect(qapp.quit)
             self.tray.show()
             qapp.setQuitOnLastWindowClosed(False)
-            if not self._config.general.start_minimized:
+            if not self._config.general.start_minimized and not self._busy("the settings at start"):
                 self.show_settings()
         else:
             log.warning("No system tray available; showing the panel as a window")
@@ -100,6 +104,7 @@ class NightLightApp:
         self._events.displayChanged.connect(self.controller.reapply_now)
         self._events.resumed.connect(self._on_resumed)
         self._events.displayOn.connect(self._on_display_on)
+        self._events.panelBrightness.connect(self.brightness_keys.on_windows_event)
 
         self._night_light_check = QTimer(interval=WINDOWS_NIGHT_LIGHT_CHECK_MS)
         self._night_light_check.timeout.connect(self._check_windows_night_light)
@@ -112,7 +117,18 @@ class NightLightApp:
     # --- Windows and panels ---------------------------------------------------
 
     def show_panel(self) -> None:
+        """Another launch (a shortcut, a hotkey tool) asked for the panel."""
+        if self._busy("the panel"):
+            return
         self._open_flyout(self.tray.geometry() if self.tray else None)
+
+    def _busy(self, what: str) -> bool:
+        """Whether to hold back opening `what` now, so a fullscreen game or
+        video keeps its focus (it might otherwise be minimized)."""
+        if self._config.general.respect_fullscreen and winsystem.user_busy():
+            log.info("Not opening %s over a fullscreen app", what)
+            return True
+        return False
 
     def _open_flyout(self, anchor=None) -> None:
         self._check_windows_night_light()
@@ -174,6 +190,7 @@ class NightLightApp:
             config_path=self._config_path,
             log_dir=config.log_dir(),
             skipped=lambda: set(self._safe_mode.skipped),
+            last_wake=lambda: list(self.wake_report.lines),
         )
 
     # --- Settings -------------------------------------------------------------
@@ -195,6 +212,7 @@ class NightLightApp:
     def _apply_preferences(self, settings: config.AppConfig) -> None:
         """What every part needs from the settings besides night light itself."""
         self.flyout.set_linked(settings.general.link_brightness)
+        self.brightness_keys.set_enabled(settings.general.follow_laptop_brightness)
         self.flyout.set_display_prefs(settings.displays)
         self.brightness_memory.set_hidden(frozenset(d.key for d in settings.displays if d.hidden))
         self.brightness_memory.set_schedule(settings.brightness_schedule, _location(settings.night_light))
@@ -213,10 +231,15 @@ class NightLightApp:
             self._settings.set_windows_night_light(on)
 
     def _on_resumed(self) -> None:
-        # Monitors and laptop panels often wake at another brightness.
+        # Both Windows' event and the clock check report a wake; act once.
+        if not self.wake_report.woke():
+            return
         self.controller.reapply_now()
+        # Monitors and laptop panels often wake at another brightness.
         self.brightness_memory.restore_all_soon()
-        self._on_displays_changed(RESCAN_AFTER_RESUME_S)
+        if displays_changed := getattr(self._gamma, "displays_changed", None):
+            displays_changed()
+        self.controller.update()
 
     def _on_display_on(self) -> None:
         # After the display slept (idle) without the PC sleeping: no display
@@ -224,7 +247,7 @@ class NightLightApp:
         # (Monitorian re-checks then too).
         self.controller.reapply_now()
         self.brightness_memory.restore_all_soon()
-        self.monitors.refresh_later(RESCAN_AFTER_RESUME_S[:2])
+        self.monitors.refresh_later((5, 10))
 
     def _on_displays_changed(self, rescan_after_s: tuple[float, ...]) -> None:
         # Display changes and sleep can reset gamma ramps: re-apply now.

@@ -98,6 +98,22 @@ class _Worker(QObject):
                     self.brightnessRead.emit(monitor.index, None)
 
     @Slot(int)
+    def read_one(self, index: int) -> None:
+        monitor = next((m for m in self._monitors if m.index == index and m.supported), None)
+        if monitor is None:
+            return
+        try:
+            with self._calling(f"reading the brightness of {monitor.name}"):
+                value = self._backend.get_brightness(index)
+        except MonitorGoneError:
+            self.monitorGone.emit()
+            return
+        except Exception:
+            log.debug("Reading brightness failed", exc_info=True)
+            return
+        self.brightnessRead.emit(index, value)
+
+    @Slot(int)
     def set_brightness(self, index: int) -> None:
         # Only the latest value matters: while a slow DDC/CI write runs, newer
         # slider positions replace older ones instead of queueing up behind it.
@@ -176,11 +192,14 @@ class MonitorManager(QObject):
     brightnessSet = Signal(int, int)
     # A restore_brightness() didn't happen (the monitor was asleep or failed): index.
     restoreDeferred = Signal(int)
+    refreshStarted = Signal()
+    refreshed = Signal()  # a detection finished, its first readings included
     error = Signal(str)
 
     # Requests to the worker thread.
     _refreshRequested = Signal()
     _readRequested = Signal()
+    _readOneRequested = Signal(int)
     _setBrightnessRequested = Signal(int)
     _restoreRequested = Signal(int, int, bool)
     _softwareDimmingRequested = Signal(bool)
@@ -197,8 +216,9 @@ class MonitorManager(QObject):
         self._refresh_again = False
         self._read_at = 0.0
         self._gone_at: float | None = None
-        self._scheduled: list[QTimer] = []
+        self._scheduled: list[tuple[float, QTimer]] = []  # (when due, timer)
         self._warned_hang: tuple[str, float] | None = None
+        self._written_at: dict[int, float] = {}  # index -> when the app last changed it
         self.hung = False  # a monitor call was still running when shutting down
 
         self._thread = QThread(self)
@@ -206,6 +226,7 @@ class MonitorManager(QObject):
         self._worker.moveToThread(self._thread)
         self._refreshRequested.connect(self._worker.refresh)
         self._readRequested.connect(self._worker.read_brightness)
+        self._readOneRequested.connect(self._worker.read_one)
         self._setBrightnessRequested.connect(self._worker.set_brightness)
         self._restoreRequested.connect(self._worker.restore)
         self._softwareDimmingRequested.connect(self._worker.set_software_dimming)
@@ -230,24 +251,29 @@ class MonitorManager(QObject):
             return
         self._refreshing = True
         self._read_at = time.monotonic()
+        self.refreshStarted.emit()
         self._refreshRequested.emit()
 
     def refresh_later(self, delays_s: Iterable[float]) -> None:
-        """Detect monitors after each delay, replacing any earlier schedule.
+        """Detect monitors after each delay.
 
         Monitors often don't answer DDC/CI until a few seconds after being
         plugged in, waking up or the system starting, so both Monitorian and
-        Twinkle Tray look again several times rather than once.
+        Twinkle Tray look again several times rather than once. Schedules add
+        up (a display change soon after waking keeps the wake's long
+        schedule); a detection already due within a second of a new one
+        covers it.
         """
-        for timer in self._scheduled:
-            timer.stop()
-            timer.deleteLater()
-        self._scheduled = []
+        now = time.monotonic()
+        self._scheduled = [(due, timer) for due, timer in self._scheduled if timer.isActive()]
         for delay in delays_s:
+            due = now + delay
+            if any(abs(due - other) < 1.0 for other, _ in self._scheduled):
+                continue
             timer = QTimer(self, singleShot=True, interval=int(delay * 1000))
             timer.timeout.connect(self.refresh)
             timer.start()
-            self._scheduled.append(timer)
+            self._scheduled.append((due, timer))
 
     def reread_brightness(self) -> None:
         """Read the current brightness again, unless it was read very recently."""
@@ -256,7 +282,17 @@ class MonitorManager(QObject):
         self._read_at = time.monotonic()
         self._readRequested.emit()
 
+    def read(self, index: int) -> None:
+        """Read one monitor's brightness again (brightnessChanged follows)."""
+        self._readOneRequested.emit(index)
+
+    def recently_written(self, index: int, seconds: float) -> bool:
+        """Whether the app itself changed this monitor's brightness lately,
+        to tell its own changes from the keys or Windows' slider."""
+        return time.monotonic() - self._written_at.get(index, -1e9) < seconds
+
     def set_brightness(self, index: int, value: int) -> None:
+        self._written_at[index] = time.monotonic()
         self.brightness[index] = value
         # brightnessSet first: it tells BrightnessMemory the user picked this
         # level, before brightnessChanged could make a pending restore undo it.
@@ -285,6 +321,7 @@ class MonitorManager(QObject):
         one), only if the monitor is awake (see _Worker.restore), optionally
         fading to it; brightnessChanged follows if it was set, restoreDeferred
         if not. It doesn't count as the user's choice (no brightnessSet)."""
+        self._written_at[index] = time.monotonic()
         self._restoreRequested.emit(index, value, fade)
 
     def fade_brightness(self, index: int, value: int) -> None:
@@ -343,8 +380,16 @@ class MonitorManager(QObject):
         self._gone_at = now
         self.refresh()
 
+    def cancel_scheduled(self) -> None:
+        """Drop detections scheduled by refresh_later."""
+        for _due, timer in self._scheduled:
+            timer.stop()
+            timer.deleteLater()
+        self._scheduled = []
+
     def _on_refresh_finished(self) -> None:
         self._refreshing = False
+        self.refreshed.emit()
         if self._refresh_again:
             self._refresh_again = False
             self.refresh()

@@ -152,3 +152,14 @@ def test_a_hung_monitor_call_is_reported_and_quitting_does_not_wait_for_it(monke
     assert time.monotonic() - started < 1 and monitors.hung
     backend.release.set()  # let the thread finish so the test run can end cleanly
     monitors._thread.wait(2000)
+
+
+def test_schedules_add_up_instead_of_replacing(manager):
+    monitors = manager(SlowBackend())
+    monitors.refresh_later((5, 30, 60))  # after waking
+    monitors.refresh_later((2, 8))  # a display change soon after
+    monitors.refresh_later((2.5,))  # covered by the one at 2 s
+    due = sorted(round(d - time.monotonic()) for d, _ in monitors._scheduled)
+    assert due == [2, 5, 8, 30, 60]
+    monitors.cancel_scheduled()
+    assert monitors._scheduled == []

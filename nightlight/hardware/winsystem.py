@@ -98,6 +98,32 @@ def _foreground_app() -> ForegroundApp | None:
     return ForegroundApp(exe, info.szDevice, fullscreen)
 
 
+# SHQueryUserNotificationState: Windows' own "don't interrupt" signal.
+QUNS_BUSY = 2  # a fullscreen app is running, or presentation settings are on
+QUNS_RUNNING_D3D_FULL_SCREEN = 3  # an exclusive-fullscreen Direct3D game
+QUNS_PRESENTATION_MODE = 4
+_DO_NOT_INTERRUPT = {QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE}
+
+
+def is_busy(notification_state: int | None, foreground_fullscreen: bool) -> bool:
+    """Whether opening a window now would interrupt a game, video or presentation."""
+    return notification_state in _DO_NOT_INTERRUPT or foreground_fullscreen
+
+
+def user_busy() -> bool:
+    """Windows says not to interrupt, or the app in front is fullscreen.
+    Opening a window then could minimize an exclusive-fullscreen game."""
+    if sys.platform != "win32":
+        return False
+    state = ctypes.c_int()
+    try:
+        notification_state = state.value if _shell32.SHQueryUserNotificationState(ctypes.byref(state)) == 0 else None
+    except OSError:
+        notification_state = None
+    app = foreground_app()
+    return is_busy(notification_state, bool(app and app.fullscreen))
+
+
 def running_apps() -> list[str]:
     """Executable names of apps with a visible window, for picking exemptions."""
     if sys.platform != "win32":
@@ -140,8 +166,12 @@ WTS_SESSION_LOGON = 0x5
 WTS_SESSION_UNLOCK = 0x8
 # GUID_CONSOLE_DISPLAY_STATE: the console display turned off (0), on (1) or dimmed (2).
 GUID_CONSOLE_DISPLAY_STATE = uuid.UUID("6fe69556-704a-47a0-8f24-c28d936fda47")
+# The power setting for display brightness (video subgroup); Windows reports
+# the built-in panel's level in percent when it changes, e.g. by the keys.
+GUID_VIDEO_BRIGHTNESS = uuid.UUID("aded5e82-b909-4619-9949-f5d71dac0bcb")
 
 UNLOCKED, RESUMED, DISPLAY_ON, DISPLAY_CHANGED = "unlocked", "resumed", "display on", "display changed"
+PANEL_BRIGHTNESS = "panel brightness"
 
 
 def classify(message: int, wparam: int, setting: uuid.UUID | None = None, data: int | None = None) -> str | None:
@@ -153,6 +183,8 @@ def classify(message: int, wparam: int, setting: uuid.UUID | None = None, data: 
             return RESUMED
         if wparam == PBT_POWERSETTINGCHANGE and setting == GUID_CONSOLE_DISPLAY_STATE and data == 1:
             return DISPLAY_ON
+        if wparam == PBT_POWERSETTINGCHANGE and setting == GUID_VIDEO_BRIGHTNESS and data is not None:
+            return PANEL_BRIGHTNESS
     if message == WM_DISPLAYCHANGE:
         return DISPLAY_CHANGED
     return None
@@ -172,6 +204,7 @@ class SystemEvents(QObject):
     resumed = Signal()
     displayOn = Signal()
     displayChanged = Signal()
+    panelBrightness = Signal(int)  # the built-in panel's level changed (keys, Windows' slider)
 
     def __init__(self, app, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -185,14 +218,20 @@ class SystemEvents(QObject):
         try:
             if not _wtsapi32.WTSRegisterSessionNotification(hwnd, 0):  # NOTIFY_FOR_THIS_SESSION
                 log.info("Could not register for session notifications")
-            guid = _GUID.from_uuid(GUID_CONSOLE_DISPLAY_STATE)
-            self._power = _user32.RegisterPowerSettingNotification(hwnd, ctypes.byref(guid), 0)  # DEVICE_NOTIFY_WINDOW_HANDLE
+            self._power = [
+                _user32.RegisterPowerSettingNotification(hwnd, ctypes.byref(_GUID.from_uuid(guid)), 0)  # DEVICE_NOTIFY_WINDOW_HANDLE
+                for guid in (GUID_CONSOLE_DISPLAY_STATE, GUID_VIDEO_BRIGHTNESS)
+            ]
         except OSError:
             log.info("Could not register for power notifications", exc_info=True)
         self._filter = _Filter(self._on_event)
         app.installNativeEventFilter(self._filter)
 
-    def _on_event(self, what: str) -> None:
+    def _on_event(self, what: str, data: int | None = None) -> None:
+        if what == PANEL_BRIGHTNESS:
+            log.debug("Windows: built-in display brightness %s%%", data)
+            self.panelBrightness.emit(int(data))
+            return
         log.info("Windows: %s", what)
         {UNLOCKED: self.unlocked, RESUMED: self.resumed, DISPLAY_ON: self.displayOn, DISPLAY_CHANGED: self.displayChanged}[what].emit()
 
@@ -211,9 +250,10 @@ class _Filter(QAbstractNativeEventFilter):
             if msg.message == WM_POWERBROADCAST and msg.wParam == PBT_POWERSETTINGCHANGE and msg.lParam:
                 broadcast = _POWERBROADCAST_SETTING.from_address(msg.lParam)
                 setting = broadcast.PowerSetting.to_uuid()
-                data = broadcast.Data
+                raw = ctypes.string_at(msg.lParam + _POWERBROADCAST_SETTING.Data.offset, min(broadcast.DataLength, 4))
+                data = int.from_bytes(raw, "little") if raw else None
             if what := classify(msg.message, msg.wParam, setting, data):
-                self._callback(what)
+                self._callback(what, data)
         return False, 0
 
 
@@ -286,6 +326,9 @@ if sys.platform == "win32":
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     _dwmapi = ctypes.WinDLL("dwmapi")
     _wtsapi32 = ctypes.WinDLL("wtsapi32", use_last_error=True)
+    _shell32 = ctypes.WinDLL("shell32")
+    _shell32.SHQueryUserNotificationState.argtypes = [ctypes.POINTER(ctypes.c_int)]
+    _shell32.SHQueryUserNotificationState.restype = ctypes.c_long
 
     _user32.GetForegroundWindow.restype = wintypes.HWND
     _user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]

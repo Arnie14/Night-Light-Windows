@@ -138,6 +138,11 @@ class SettingsWindow(QWidget):
         # General
         self.start_with_windows = QCheckBox(f"Start {APP_NAME} when I sign in")
         self.start_minimized = QCheckBox("Start minimized in the system tray")
+        self.respect_fullscreen = QCheckBox("Never open over fullscreen games, videos or presentations")
+        self.respect_fullscreen.setToolTip(
+            f"{APP_NAME} won't open its windows on its own (another launch asking for the panel,\n"
+            "settings at start) while one is fullscreen, so it can't take its focus or minimize it."
+        )
         self.remember_brightness = QCheckBox("Remember each display's brightness")
         self.remember_brightness.setToolTip(
             "Some displays and laptops come back at another brightness.\n"
@@ -147,6 +152,11 @@ class SettingsWindow(QWidget):
         remember_hint = SecondaryLabel("Restored after starting, sleep and reconnecting a display", scale=0.92)
         remember_hint.setContentsMargins(self._checkbox_indent(), 0, 0, 0)
         self.link_brightness = QCheckBox("Change all displays together")
+        self.follow_laptop = QCheckBox("External displays follow the laptop's brightness keys")
+        self.follow_laptop.setToolTip(
+            "When the built-in display's brightness changes (its keys, or Windows' slider),\n"
+            "the external displays are set to the same level."
+        )
         self.software_dimming = QCheckBox("Dim displays without brightness control")
         self.software_dimming.setToolTip(
             "For TVs and monitors without DDC/CI: their colors are dimmed instead,\n"
@@ -186,6 +196,7 @@ class SettingsWindow(QWidget):
         brightness.addRow("Options:", self.remember_brightness)
         brightness.addRow("", remember_hint)
         brightness.addRow("", self.link_brightness)
+        brightness.addRow("", self.follow_laptop)
         brightness.addRow("", self.software_dimming)
         brightness.addRow(_spaced(Separator()))
         brightness.addRow(_section("Brightness schedule", "Set every display to a level at times of day."))
@@ -208,6 +219,7 @@ class SettingsWindow(QWidget):
         general.addRow(_section("General"))
         general.addRow("Startup:", self.start_with_windows)
         general.addRow("", self.start_minimized)
+        general.addRow("Focus:", self.respect_fullscreen)
 
         self.tabs = QTabWidget()
         for title, form in (("Night Light", self.form), ("Brightness", brightness), ("Displays", displays), ("General", general)):
@@ -250,9 +262,11 @@ class SettingsWindow(QWidget):
             self.transition.valueChanged,
             self.start_with_windows.toggled,
             self.start_minimized.toggled,
+            self.respect_fullscreen.toggled,
             self.remember_brightness.toggled,
             self.link_brightness.toggled,
             self.software_dimming.toggled,
+            self.follow_laptop.toggled,
             self.exempt_fullscreen.toggled,
             self.exempt_apps.changed,
             self.schedule_enabled.toggled,
@@ -292,9 +306,11 @@ class SettingsWindow(QWidget):
         general = GeneralConfig(
             start_with_windows=self.start_with_windows.isChecked(),
             start_minimized=self.start_minimized.isChecked(),
+            respect_fullscreen=self.respect_fullscreen.isChecked(),
             remember_brightness=self.remember_brightness.isChecked(),
             link_brightness=self.link_brightness.isChecked(),
             software_dimming=self.software_dimming.isChecked(),
+            follow_laptop_brightness=self.follow_laptop.isChecked(),
         )
         schedule = BrightnessScheduleConfig(self.schedule_enabled.isChecked(), self.schedule_steps.steps())
         return AppConfig(night_light=night_light, general=general, brightness_schedule=schedule, displays=self.displays.prefs())
@@ -322,9 +338,11 @@ class SettingsWindow(QWidget):
         self.transition.setValue(night_light.transition_minutes)
         self.start_with_windows.setChecked(general.start_with_windows and self.start_with_windows.isEnabled())
         self.start_minimized.setChecked(general.start_minimized)
+        self.respect_fullscreen.setChecked(general.respect_fullscreen)
         self.remember_brightness.setChecked(general.remember_brightness)
         self.link_brightness.setChecked(general.link_brightness)
         self.software_dimming.setChecked(general.software_dimming)
+        self.follow_laptop.setChecked(general.follow_laptop_brightness)
         self.exempt_fullscreen.setChecked(night_light.exempt_fullscreen)
         self.exempt_apps.set_apps(night_light.exempt_apps)
         self.schedule_enabled.setChecked(config.brightness_schedule.enabled)

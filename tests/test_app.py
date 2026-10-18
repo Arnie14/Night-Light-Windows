@@ -133,3 +133,42 @@ def test_diagnostics_from_the_command_line(start, monkeypatch, tmp_path):
 def test_tray_menu_has_report_a_problem(start):
     night_light, _ = start(GeneralConfig())
     assert "Report a Problem…" in [a.text() for a in night_light.tray._menu.actions()]
+
+
+def test_no_windows_open_on_their_own_over_a_fullscreen_game(start, monkeypatch):
+    from nightlight.hardware import winsystem
+
+    busy = {"now": True}
+    monkeypatch.setattr(winsystem, "user_busy", lambda: busy["now"])
+    night_light, _ = start(GeneralConfig(start_minimized=False))
+    assert night_light._settings is None  # not opened at start over the game
+    night_light.show_panel()  # a second launch asking for the panel
+    assert not night_light.flyout.isVisible()
+    busy["now"] = False
+    night_light.show_panel()
+    assert night_light.flyout.isVisible()
+    night_light.flyout.hide()
+
+
+def test_the_focus_guard_can_be_turned_off(start, monkeypatch):
+    from nightlight.hardware import winsystem
+
+    monkeypatch.setattr(winsystem, "user_busy", lambda: True)
+    night_light, _ = start(GeneralConfig(start_minimized=False, respect_fullscreen=False))
+    assert night_light._settings is not None and night_light._settings.isVisible()
+
+
+def test_laptop_keys_option_reaches_the_follower(start):
+    night_light, _ = start(GeneralConfig())
+    assert not night_light.brightness_keys._enabled
+    night_light._apply_settings(AppConfig(general=GeneralConfig(follow_laptop_brightness=True)))
+    assert night_light.brightness_keys._enabled
+
+
+def test_a_wake_is_handled_once(start, monkeypatch):
+    night_light, _ = start(GeneralConfig())
+    restores = []
+    monkeypatch.setattr(night_light.brightness_memory, "restore_all_soon", lambda: restores.append(1))
+    night_light._on_resumed()  # Windows' event
+    night_light._on_resumed()  # the clock check, a moment later
+    assert restores == [1]

@@ -72,6 +72,11 @@ class GeneralConfig:
     remember_brightness: bool = True  # restore each monitor's level after start, sleep and reconnecting
     link_brightness: bool = False  # one slider moves every monitor's brightness
     software_dimming: bool = True  # dim displays without brightness control (TVs) through the gamma ramp
+    # Don't open windows unasked (a second launch's panel, settings at sign-in)
+    # while a game, video or presentation is fullscreen: that can minimize it.
+    respect_fullscreen: bool = True
+    # External displays follow the laptop panel's level (its brightness keys).
+    follow_laptop_brightness: bool = False
 
 
 SUNRISE, SUNSET = "sunrise", "sunset"
