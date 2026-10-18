@@ -9,9 +9,13 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 </p>
 
 - **Every display gets a slider.** DDC/CI for external monitors, the laptop's own control for its panel, Windows' SDR brightness for HDR displays, and software dimming for TVs and anything else.
-- **Night light** with a warm color shift, by custom times or sunrise and sunset at your city, with smooth transitions.
-- **Remembers each display's brightness** and puts it back after restarting, sleep, or reconnecting a monitor.
+- **Night light** with a warm color shift, by custom times or sunrise and sunset at your city, with smooth transitions. It **pauses on the display showing a game, a video or an app you choose**, and keeps going on the others.
+- **Brightness that follows your day:** a schedule of levels (fixed times, or sunrise and sunset), and each display's level put back after restarting, sleep, or reconnecting a monitor.
+- **Your displays, your names:** rename displays or hide the ones you don't want in the panel.
+- **Scriptable:** `winlight-cli --set 40`, `--night-light toggle`, and more, for AutoHotkey, Task Scheduler or a Stream Deck.
 - **Small and native:** a tray icon and a panel, light and dark mode, starts with Windows if you like.
+
+> **Winlight replaces Windows Night Light; it doesn't add to it.** If both are on, the screen is tinted twice and looks far too orange. Winlight shows a notice with a button to Windows' setting when it finds Windows Night Light on: turn that off and let Winlight do it.
 
 <p align="center">
   <img src="docs/screenshots/settings-light.png" alt="Winlight settings: Night Light schedule and temperatures, startup and brightness options" width="520">
@@ -37,6 +41,13 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 | SDR brightness for HDR displays | 🧪 Needs Windows testing | Windows' "SDR content brightness" (80–480 nits), as in Monitorian and Twinkle Tray, for HDR displays without DDC/CI. |
 | Software dimming for TVs and displays without brightness control | 🧪 Needs Windows testing | Dims the colors through the gamma ramp, together with night light, using Twinkle Tray's driver-safe curve. Can be turned off. |
 | Remember brightness, change all displays together | 🧪 Needs Windows testing | Restored after start, sleep and reconnecting, as Twinkle Tray does; linked sliders like Monitorian's "unison". |
+| Brightness schedule | 🧪 Needs Windows testing | Levels at times of day or sunrise/sunset ± minutes, as Twinkle Tray's "time of day adjustments". Moving a slider keeps your level until the next step. |
+| Pause night light for apps and fullscreen | 🧪 Needs Windows testing | As f.lux's "disable for": only on the display showing the app, fading out and back in. |
+| Rename and hide displays | 🧪 Needs Windows testing | Keyed by the display's id, so names follow it between ports. |
+| Command line (`winlight-cli`) | 🧪 Needs Windows testing | List, get and set brightness per display or all, relative changes, night light on/off/toggle, refresh, JSON output. |
+| Night light back at once after unlock and sleep | 🧪 Needs Windows testing | Listens for Windows' unlock, wake and display-on events, and checks the ramps every 1.5 s. |
+| Windows Night Light notice | 🧪 Needs Windows testing | Detects Windows Night Light from its registry state (undocumented) and offers to open its setting. |
+| One-click diagnostics, crash safe mode | 🧪 Needs Windows testing | "Report a Problem…" saves a zip and copies a summary; a display whose DDC/CI crashed or hung the app is skipped until retried. |
 | Multi-display detection, hotplug and sleep | 🧪 Needs Windows testing | Re-detection after display changes and waking, several times, as monitors are often slow to answer. |
 | Start at sign-in, start minimized | ✅ Ready | The current user's Run registry key; no administrator rights. |
 | Installer, portable zip, uninstaller | ✅ Ready | Per-user, built by GitHub Actions. |
@@ -86,15 +97,17 @@ Most of these were learned from [Monitorian](https://github.com/emoacht/Monitori
 - Gamma ramps don't apply to displays in HDR mode, so night light skips them, and their brightness uses Windows' SDR level instead.
 - Software dimming can't go as dark as a backlight (Windows rejects very dark ramps), and saves no power: it's for displays with no other control.
 - Most TVs don't support DDC/CI.
+- Gamma ramps belong to displays, not windows, so pausing night light for an app pauses it for that app's whole display.
+- Windows Night Light's state has no API; Winlight reads its undocumented registry value, and shows nothing if it can't tell.
 - Running alongside Windows Night Light, f.lux or GPU color settings (such as AMD's "Custom Colors") may cause conflicts.
 
 ## 🗺️ Roadmap
 
 1. ✅ Night light, scheduling, tray panel and settings
 2. ✅ Laptop panel brightness, installer, first beta
-3. 🧪 External monitors, TVs and HDR displays: testing now ([test plan](docs/windows-testing.md))
+3. 🧪 External monitors, TVs and HDR displays, and this round's features: testing now ([installer test plan](docs/testing-installer.md), [full test plan](docs/windows-testing.md))
 4. 📋 Code signing, then a 1.0 release
-5. 📋 Hide and rename displays, hotkeys, brightness by time of day
+5. 📋 Hotkeys with an on-screen indicator, per-display brightness schedules
 
 ## 🔗 Related Projects
 
@@ -113,6 +126,27 @@ It is also a learning-focused project designed to:
 - Work with real Windows APIs
 - Handle cross-device compatibility (DDC/CI, multi-monitor)
 - Use AI tools (like ChatGPT or Copilot) effectively in software development
+
+## ⌨️ Command line
+
+`winlight-cli.exe` sits next to `Winlight.exe` (the installer can add it to PATH). It talks to the running app, so Winlight must be running.
+
+```powershell
+winlight-cli --list                      # displays, their numbers, ids and brightness
+winlight-cli --set 40                    # every display to 40% (hidden ones excepted)
+winlight-cli --set +10 --display 2       # display 2 up by 10
+winlight-cli --set 70 --display DELL     # by name (any part, custom names too) or id
+winlight-cli --get --display 1           # prints just the number
+winlight-cli --night-light toggle        # also on, off, auto (follow the schedule), status
+winlight-cli --refresh                   # detect displays again
+winlight-cli --list --json               # for scripts
+```
+
+Display numbers are the order in the panel and in `--list`. Changes fade rather than jump. Exit codes: 0 done, 1 failed (the message says why), 2 Winlight isn't running.
+
+## 🐞 Reporting a problem
+
+Right-click the tray icon and choose **Report a Problem…**. Winlight saves a `Winlight-diagnostics-….zip` to your Desktop (logs, settings with the location rounded, and what it knows about each display) and copies a summary to the clipboard. Open an [issue](https://github.com/Arnie14/Night-Light-Windows/issues), paste the summary and attach the zip.
 
 ## ⬇️ Download details
 
@@ -160,6 +194,8 @@ Other options:
 - `python main.py --probe` prints what each Windows API reports about every display, and saves it as `probe.txt` in the log folder. Use it when a monitor misbehaves.
 - `--allow-multiple` lets a second copy start. Normally a second launch just opens the running copy's flyout.
 - `--quit` asks the running copy to quit cleanly (restoring normal colors). The installer uses it before upgrading or uninstalling.
+- `--diagnostics` saves the same zip as "Report a Problem…" and prints its path.
+- The command line options above work from source too: `python main.py --list`.
 
 ### Building the Windows app
 
@@ -178,7 +214,7 @@ Releases are built by GitHub Actions ([`.github/workflows/release.yml`](.github/
 
 Logs go to the terminal and to `night-light.log` in the user's log folder (`%LOCALAPPDATA%\night-light\Logs` on Windows).
 
-Testing on Windows follows [docs/windows-testing.md](docs/windows-testing.md).
+Testing on Windows follows [docs/windows-testing.md](docs/windows-testing.md) (from source, everything) or [docs/testing-installer.md](docs/testing-installer.md) (with the installer, for testers).
 
 ### Project layout
 
@@ -192,12 +228,18 @@ nightlight/
   watcher.py             notices display changes, hotplug and waking from sleep
   single_instance.py     keeps one copy running
   probe.py               the --probe diagnostic report
-  core/                  pure logic, no Qt or hardware: colortemp.py, schedule.py
+  core/                  pure logic, no Qt or hardware: colortemp.py, schedule.py,
+                         brightness_schedule.py, locations.py
   hardware/              backend interfaces (brightness.py, gamma.py), windows.py + win32.py
-                         (Windows APIs), kde.py (Linux dev backend)
+                         (Windows display APIs), winsystem.py (foreground app, unlock and
+                         power events, Windows Night Light), kde.py (Linux dev backend)
   ui/                    tray, flyout, placement, settings_window, widgets, night_light_text, icons
   autostart.py           starting at sign-in (Run key)
-  brightness_memory.py   remembers and restores each monitor's brightness
+  brightness_memory.py   which level each display should have: remembered, or the brightness schedule
+  exemptions.py          pausing night light for apps and fullscreen
+  commands.py, cli.py    the command line (winlight-cli) and what the app does for it
+  diagnostics.py         "Report a Problem…"
+  safe_mode.py           skipping displays whose DDC/CI crashed or hung the app
   data/                  time zone table for picking a location (from tools/make_timezones.py)
 packaging/               Windows build: PyInstaller spec, Inno Setup script, icon, build.py
 tools/                   screenshots.py (README images), make_timezones.py
@@ -214,6 +256,7 @@ This project is licensed under the **GNU General Public License v3.0**. See [LIC
 Behavior, wording and some data are based on the open-source work of other projects, used under licenses compatible with the GPL-3.0:
 
 - **[KDE Plasma](https://kde.org/plasma-desktop/)**: the design of the Brightness and Color panel and the Night Light settings page, KWin's Night Light transition behavior and timings, KWin's composition of brightness and color temperature into one transform per display, and the schedule rules from [knighttime](https://invent.kde.org/plasma/knighttime). KWin and PowerDevil are GPL-2.0-or-later; knighttime is LGPL.
-- **[Monitorian](https://github.com/emoacht/Monitorian)** (MIT) and **[Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray)** (MIT): how the Windows display, DDC/CI, WMI, SDR white level and gamma APIs are used, one class per kind of brightness control, the order of fallbacks, Twinkle Tray's driver-safe software dimming curve, flyout placement and tray behavior, retry and re-detection timings, and many Windows quirks. No code is copied; the approach is re-implemented in Python, as described in [docs/windows-notes.md](docs/windows-notes.md).
+- **[f.lux](https://justgetflux.com/)**: the idea of pausing night light for chosen apps and fullscreen.
+- **[Monitorian](https://github.com/emoacht/Monitorian)** (MIT) and **[Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray)** (MIT): their users' requests for a command line and the shape of it, Twinkle Tray's brightness schedule, renaming and hiding displays and crash safe mode, Monitorian's power notifications; and how the Windows display, DDC/CI, WMI, SDR white level and gamma APIs are used, one class per kind of brightness control, the order of fallbacks, Twinkle Tray's driver-safe software dimming curve, flyout placement and tray behavior, retry and re-detection timings, and many Windows quirks. No code is copied; the approach is re-implemented in Python, as described in [docs/windows-notes.md](docs/windows-notes.md).
 - **[Redshift](https://github.com/jonls/redshift)** (GPL-3.0) and KWin: the blackbody color table by Ingo Thies (2013) used in [nightlight/core/colortemp.py](nightlight/core/colortemp.py).
 - Python libraries: [PySide6](https://doc.qt.io/qtforpython-6/) (LGPL-3.0), [monitorcontrol](https://github.com/newAM/monitorcontrol) (MIT), [WMI](https://github.com/tjguk/wmi) (MIT) with [pywin32](https://github.com/mhammond/pywin32) (PSF), [astral](https://github.com/sffjunkie/astral) (Apache-2.0), [platformdirs](https://github.com/tox-dev/platformdirs) (MIT), [jeepney](https://gitlab.com/takluyver/jeepney) (MIT).

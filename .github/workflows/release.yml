@@ -79,4 +79,6 @@ jobs:
             | `…-setup.exe` | Installer. No admin rights needed. |
             | `…-portable.zip` | Unzip and run `Winlight.exe`. |
 
-            External monitors need **DDC/CI** turned on in their on-screen menu. Found a problem? [Open an issue](https://github.com/Arnie14/Night-Light-Windows/issues) and attach the files from `%LOCALAPPDATA%\night-light\Logs`.
+            Winlight **replaces** Windows Night Light: turn Windows' one off, or colors are tinted twice. External monitors need **DDC/CI** turned on in their on-screen menu.
+
+            Found a problem? Tray icon → **Report a Problem…**, then [open an issue](https://github.com/Arnie14/Night-Light-Windows/issues) with the summary and zip. Testers: [checklist](https://github.com/Arnie14/Night-Light-Windows/blob/main/docs/testing-installer.md).

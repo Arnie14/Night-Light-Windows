@@ -22,7 +22,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor, QPalette  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from nightlight.config import AppConfig, GeneralConfig, Mode, NightLightConfig  # noqa: E402
+from nightlight.config import AppConfig, BrightnessScheduleConfig, BrightnessStep, GeneralConfig, Mode, NightLightConfig  # noqa: E402
 from nightlight.controller import NightLightController  # noqa: E402
 from nightlight.hardware.brightness import FakeBrightnessBackend  # noqa: E402
 from nightlight.hardware.gamma import FakeGammaBackend  # noqa: E402
@@ -33,7 +33,10 @@ from nightlight.ui.settings_window import SettingsWindow  # noqa: E402
 
 EVENING = datetime(2026, 10, 17, 21, 30).astimezone()  # night light fully on
 # Custom times, so the schedule text reads the same in every time zone.
-NIGHT_LIGHT = NightLightConfig(enabled=True, mode=Mode.TIMES, night_start="20:00", day_start="07:00", night_temperature=3800)
+NIGHT_LIGHT = NightLightConfig(
+    enabled=True, mode=Mode.TIMES, night_start="20:00", day_start="07:00", night_temperature=3800,
+    exempt_fullscreen=True, exempt_apps=("photoshop.exe",),
+)
 
 
 def settle(app: QApplication, seconds: float = 0.3) -> None:
@@ -72,7 +75,11 @@ def main(out: Path) -> None:
     controller = NightLightController(FakeGammaBackend(), NIGHT_LIGHT, clock=lambda: EVENING)
     monitors.refresh()
     settle(app, 1.0)
-    config = AppConfig(night_light=NIGHT_LIGHT, general=GeneralConfig(start_with_windows=True))
+    config = AppConfig(
+        night_light=NIGHT_LIGHT,
+        general=GeneralConfig(start_with_windows=True),
+        brightness_schedule=BrightnessScheduleConfig(True, (BrightnessStep("sunrise", 80, 30), BrightnessStep("21:00", 40))),
+    )
     try:
         for dark in (False, True):
             use_scheme(app, dark)
@@ -82,10 +89,13 @@ def main(out: Path) -> None:
             settle(app)
             flyout.grab().save(str(out / f"flyout-{theme}.png"))
             flyout.close()
-            settings = SettingsWindow(controller, config)
+            settings = SettingsWindow(controller, config, monitors=monitors)
             settings.show()
             settle(app)
             settings.grab().save(str(out / f"settings-{theme}.png"))
+            settings.tabs.setCurrentIndex(1)  # Brightness
+            settle(app)
+            settings.grab().save(str(out / f"settings-brightness-{theme}.png"))
             settings.close()
             print(f"Saved {theme} screenshots to {out}")
     finally:

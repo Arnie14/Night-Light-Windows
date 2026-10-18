@@ -23,7 +23,7 @@ Both projects combine several APIs, because no single one gives everything:
 | WMI `root\wmi` `WmiMonitorBrightness` / `WmiMonitorBrightnessMethods` | Built-in laptop panel brightness and its supported levels | Both |
 | WinRT `DisplayMonitor` | Better names, connection kind | Monitorian, on Windows 10 1803+ |
 
-- ✅ `nightlight/hardware/win32.py` binds `QueryDisplayConfig`, `EnumDisplayMonitors`, dxva2 and GDI with ctypes. Names come from the EDID via `QueryDisplayConfig`, not from the DDC/CI capabilities string (see §8).
+- ✅ `nightlight/hardware/win32.py` binds `QueryDisplayConfig`, `EnumDisplayMonitors`, dxva2 and GDI with ctypes. Names come from the EDID via `QueryDisplayConfig`, not from the DDC/CI capabilities string (see §9).
 - ✅ The device path converts to a PnP instance id (`DISPLAY\BOE0812\4&...&UID265988`), which is how both projects match a WMI instance to a display.
 - ✅ The connector type marks built-in panels (LVDS, embedded DisplayPort or UDI, "internal") and "indirect" displays (DisplayLink/USB, Miracast, virtual), which have no DDC/CI channel.
 - ➖ WinRT `DisplayMonitor`: `QueryDisplayConfig` names have been good enough.
@@ -132,7 +132,8 @@ From Twinkle Tray's settings (its `en.json` strings) and Monitorian's README:
   - ✅ The built-in display's slider, linked changes and restores stop at 1%.
 - **Update rate.** Twinkle Tray offers rates from "Ludicrous" to 2 s, because some monitors flicker when written to quickly.
   - ✅ A fixed 100 ms throttle with only the latest value sent. 📋 Make it a setting if testing finds a monitor that flickers.
-- 📋 **Later:** hide and rename displays, reorder them (both); hotkeys and an on-screen overlay (Twinkle Tray, and Monitorian as a paid add-on); brightness by time of day and dimming when idle (Twinkle Tray); contrast and min/max range per monitor (Monitorian); scrolling over the tray icon (needs a native event filter, see §4).
+- ✅ Hide and rename displays, and brightness by time of day: see §8.
+- 📋 **Later:** reordering displays (both); hotkeys and an on-screen overlay (Twinkle Tray, and Monitorian as a paid add-on); dimming when idle and per-display schedules (Twinkle Tray); contrast and min/max range per monitor (Monitorian); scrolling over the tray icon (needs a native event filter, see §4).
 
 ## 6. External monitors and TVs: what to expect and how it's handled
 
@@ -170,9 +171,31 @@ Reading [Monitorian](https://github.com/emoacht/Monitorian), [Twinkle Tray](http
   - ✅ `WindowsGammaBackend` keeps each display's base ramp and dimming; night light and dimming both recompose base → dimmed → tinted, under a lock (night light comes from the UI thread, dimming from the monitor thread). Night light turning off keeps dimming; quitting (`release()`) undims and restores every ramp.
 - **Monitorian's 24H2 HDR check** (`ADVANCED_COLOR_INFO_2`, `activeColorMode == HDR`).
   - ✅ Already used.
-- 📋 **Display power notifications** (Monitorian `PowerManagement.cs`: `RegisterPowerSettingNotification` for the console display state) would let the app restore brightness when a monitor turns back on without a display change, and avoid DDC/CI while displays are off. Worth doing if testing shows HDMI monitors coming back at the wrong level.
+- **Display power and session notifications** (Monitorian `PowerManagement.cs`: `RegisterPowerSettingNotification` for the console display state).
+  - ✅ `hardware/winsystem.py`: a hidden window registered for `GUID_CONSOLE_DISPLAY_STATE` and session changes (`WTSRegisterSessionNotification`), read through Qt's native event filter. Unlocking, waking and a display turning on re-apply night light at once (it was 1–2 s late after unlocking) and restore brightness; see §8.
 
-## 8. Quirks and issues they ran into
+## 8. This round: features from their users' requests
+
+- **Night light back at once after unlock and sleep.** Windows resets gamma ramps on the lock screen and after sleep, often before telling anyone.
+  - ✅ Windows' unlock, wake and display-on events trigger an immediate check and a few more over 3 s (Windows can reset the ramp again as the desktop reappears); `WindowsGammaBackend.verify()` also runs every 1.5 s, one `GetDeviceGammaRamp` per display, and re-applies only where our ramp was replaced.
+- **Pausing night light for apps and fullscreen** (f.lux's "disable for", the main reason people pick it over Windows Night Light).
+  - ✅ Gamma ramps are per display, so the display showing the app pauses and the others don't. The foreground window is checked every 0.4 s (`GetForegroundWindow`, `QueryFullProcessImageNameW`, the DWM frame against `MonitorFromWindow`'s rectangle; the desktop and taskbar don't count as fullscreen). The controller fades that display to neutral and back through a per-display temperature in the gamma backend.
+- **Windows Night Light stacking.** Both tint, so the result is far too warm.
+  - ✅ Its state is read from the CloudStore registry blob (undocumented; byte 18 is 0x15 when on, 0x13 off, as scripts that toggle it read it, at both the old and the 24H2 location). Unknown formats show nothing rather than a false warning. The notice opens `ms-settings:nightlight`.
+- **Command line.** Monitorian's (#655, #585) and Twinkle Tray's (#1118, #1214, #628, #485) issues ask for get/set per display and for all, relative changes, refresh, fading, numbers that match what users see, and scripting.
+  - ✅ `winlight-cli.exe`, a console build of the same program (a windowed exe can't print or give an exit code to cmd), talking JSON to the running app over the single-instance pipe. Numbers are the panel's order; names match custom names; "all" leaves hidden displays alone; changes fade; `--json` for scripts; exit codes 0/1/2.
+- **Crash safe mode** (Twinkle Tray 1.18: "after a detection-related crash, the app uses a safer method on the next start").
+  - ✅ `safe_mode.py`: a marker is written before each display's DDC/CI detection and removed after; one left at start means the app crashed or was ended during it (a hang shows the watchdog warning, and the user has to end it), so that display's DDC/CI is skipped, with a reason in the panel, until ⟳ retries it. Its other controls (WMI, SDR) still work.
+- **Rename and hide displays** (Twinkle Tray's "Rename Monitors", "Hide Displays"; Monitorian's press-and-hold rename).
+  - ✅ Settings > Displays, keyed by the display's EDID id as Twinkle Tray keys them, so names follow a display between ports; an empty name keeps its own. Hidden displays are left out of the panel, linked changes, "--set all", the schedule and restores.
+- **Brightness schedule** (Twinkle Tray's "time of day adjustments", "use sun position" with an offset, "check at app startup").
+  - ✅ Steps at a time, or sunrise/sunset ± minutes using night light's location. A step fades every visible display to its level, through the same power-checked path as restores, so sleeping monitors get it when they wake.
+  - The conflict between scheduled and remembered levels is settled in one place, `BrightnessMemory.target()`: with the schedule on, the user's own level wins if set after the current step began (a manual change pauses the schedule until its next step), otherwise the scheduled level; with it off, the remembered level. Both restores and steps use it. Twinkle Tray had bugs from the two fighting (startup overwriting the current level, sliders reverting after hardware events); its "animate between times" also "quickly overrides manual changes", which this avoids by changing levels only at steps.
+- **One-click diagnostics** (Monitorian's FAQ asks for probe and operation logs; collecting them by hand is where reports stall).
+  - ✅ Tray > Report a Problem…: a zip on the Desktop (summary, logs, settings with the location rounded) and the summary on the clipboard. No DDC/CI scan or tint, so it's safe any time.
+- **Smooth changes.** Starting at night fades in, quitting fades out, pausing and resuming fade, scheduled and command-line brightness changes fade.
+
+## 9. Quirks and issues they ran into
 
 - **Monitors aren't ready straight after a change.** After a display change, resume or sign-in, monitors often don't answer DDC/CI for several seconds.
   - Monitorian's timers tick at gaps of 1, 4, 5 and 10 s after a display settings change, so it re-scans 1, 5, 10 and 20 s afterwards. After resume it re-scans at 5, 10, 20, 30 and 60 s; after the display turns on at 5 and 10 s; and after sign-in at 30 and 60 s. It ignores display changes while the display is off.

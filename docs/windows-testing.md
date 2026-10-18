@@ -166,12 +166,14 @@ Brightness options, also in Settings > General:
 - [ ] Plug it back in: it reappears within about 10 s, with working brightness.
 - [ ] Change resolution, or the scaling of one display: night light stays applied (it is re-applied within about 1 s).
 - [ ] Sleep the PC for over a minute, then wake it: night light is still applied, and within about 30 s brightness works on every monitor. The log shows "Woke up after…".
-- [ ] Lock and unlock (Win+L), and turn a monitor off and on with its power button: note anything that stops working.
+- [ ] Lock and unlock (Win+L) with night light on: night light is back **at once** after unlocking, with no visible flash of normal colors (before: 1–2 s). The log shows "Windows: unlocked". Note if a flash remains, and how long.
+- [ ] Sleep and wake, and let the display turn off on its own (idle) and wake it: the same, with "Windows: resumed" or "Windows: display on" in the log.
+- [ ] Turn a monitor off and on with its power button: note anything that stops working.
 
 ## 8. Running alongside other tools
 
 - [ ] Start `python main.py` a second time: no second tray icon; the first copy's flyout opens instead.
-- [ ] With Windows Night Light on as well as this app: do the tints stack (extra warm) or does one win? Note what you see.
+- [ ] Turn Windows Night Light on (Settings > System > Display > Night light > Turn on now): within about 10 s the panel and Settings show "Windows Night Light is on too", and the button opens Windows' Night light page. Turn it off there: the notice goes away. If the notice never appears, export this registry key with regedit once with Windows Night Light on and once off, and send both: `HKCU\Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\default$windows.data.bluelightreduction.bluelightreductionstate`.
 - [ ] With f.lux running: the log notes the ramp being changed by something else. Expect the two to fight; just note how bad it looks.
 
 ## 9. Display scaling and layout
@@ -181,7 +183,38 @@ Brightness options, also in Settings > General:
 - [ ] The settings window resizes itself when switching between Always off, Always on, location and custom times, without leaving empty space or clipping rows.
 - [ ] Take screenshots of the flyout and the settings window in both themes and send them back.
 
-## 10. The installed app
+## 10. This round's features
+
+Pausing night light (Settings > Night Light > Pause night light):
+
+- [ ] Tick "While an app is fullscreen": a fullscreen video (browser F11, or a player) and a game, borderless and exclusive fullscreen, each fade their display to normal colors within about half a second; the other displays stay warm. Leaving fullscreen fades it back. Note any game that isn't detected.
+- [ ] Add an app with "Add an app" (it lists running apps) and with "Browse for an app…": switching to it pauses night light on its display; switching away resumes it.
+- [ ] The panel and the tray tooltip say "Paused for …" meanwhile.
+- [ ] Nothing flashes or jumps: starting the app at night fades in, Quit fades out quickly, pausing and resuming fade.
+
+Brightness schedule (Settings > Brightness):
+
+- [ ] Steps at a clock time, and at sunrise/sunset with an offset (needs a location under Night Light): at each step every visible display fades to the level; a sleeping display gets it when it wakes.
+- [ ] Moving a slider after a step keeps your level, also after sleep and restarting the app, until the next step, which takes over again.
+- [ ] Turning the schedule on applies the current step at once.
+
+Displays (Settings > Displays):
+
+- [ ] Rename a display: the panel, `winlight-cli --list` and the diagnostics use the new name; clearing the name brings back its own.
+- [ ] Hide a display: it's gone from the panel and from "Change all displays together", and the schedule and restores leave it alone.
+
+Command line (`winlight-cli.exe` next to `Winlight.exe`, or `python main.py …` from source):
+
+- [ ] `--list`, `--list --json`, `--get --display 1`, `--set 40`, `--set +10 --display 2`, `--set 50 --display <part of a name>`, `--night-light on|off|toggle|auto|status`, `--refresh`: each does what it says, fades, and prints the result.
+- [ ] Errors say why and exit with 1 (try `--display 9` and `--set bright`); with Winlight not running it says so and exits with 2 (`echo %ERRORLEVEL%`).
+- [ ] From AutoHotkey or a `.bat` file: works, and waits for the result.
+
+Diagnostics and safe mode:
+
+- [ ] Tray > Report a Problem…: a zip appears on the Desktop with summary.txt, settings.json (location rounded) and the logs; the summary is on the clipboard; the buttons show the file and open GitHub. `winlight-cli --diagnostics` does the same and prints the path.
+- [ ] If a monitor ever freezes Winlight: end it in Task Manager and start it again. That display shows "Skipped: Winlight stopped while talking to this display last time"; ⟳ in the panel tries it again.
+
+## 11. The installed app
 
 With a build from [Releases](https://github.com/Arnie14/Night-Light-Windows/releases), or the Actions tab's `winlight-windows` artifact. Quit any copy run from source first.
 
@@ -195,10 +228,12 @@ With a build from [Releases](https://github.com/Arnie14/Night-Light-Windows/rele
 - [ ] Uninstall from Settings > Apps: Winlight quits first (colors back to normal), its files and Start menu entry are gone, and the `Winlight` value is gone from the Run key. `%LOCALAPPDATA%\night-light` (settings) stays.
 - [ ] Portable zip: unzip to another folder, run `Winlight.exe`: it works the same.
 - [ ] Note the installer's size, and how long the app takes to start.
+- [ ] Tick "Add winlight-cli to PATH" when installing: a new terminal finds `winlight-cli`. Uninstall removes it from PATH again, leaving the rest of PATH as it was.
+- [ ] The tester checklist [testing-installer.md](testing-installer.md) works start to finish with the installer alone.
 
 ## What to send back
 
-- `probe.txt` and `night-light.log`, both from `%LOCALAPPDATA%\night-light\Logs\`.
+- The zip from **Report a Problem…** (tray menu), which holds the log, settings and a summary of every display; add `probe.txt` if you ran `--probe`.
 - The screenshots.
 - The failing checklist items, with what happened instead.
 - The output of `pytest`, if anything failed.
