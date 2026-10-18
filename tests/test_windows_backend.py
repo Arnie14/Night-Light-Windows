@@ -101,15 +101,17 @@ def test_unresponsive_and_indirect_displays_are_listed_as_unsupported(monkeypatc
     ddc = FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x"), PhysicalMonitor(r"\\.\DISPLAY2", 8, "y")], {})
     ddc.install(monkeypatch, [target(r"\\.\DISPLAY1", "Old TV"), target(r"\\.\DISPLAY2", "Dock screen", DISPLAYLINK)])
     tv, dock = backend_with().list_monitors()
-    assert not tv.supported and "Turn DDC/CI on" in tv.reason and "TVs" in tv.reason  # HDMI: maybe a TV
-    assert not dock.supported and "DisplayLink" in dock.reason
+    # A few words under the slider, the advice in the detail. HDMI: maybe a TV.
+    assert not tv.supported and tv.reason.startswith("DDC/CI didn't answer") and "TVs" in tv.reason
+    assert "Turn DDC/CI on" in tv.detail and tv.status == "unsupported"
+    assert not dock.supported and "USB" in dock.reason and "DisplayLink" in dock.detail
     assert sorted(ddc.destroyed) == [7, 8]  # handles of failed monitors are released
 
 
 def test_displayport_monitor_without_ddc_gets_no_tv_hint(monkeypatch):
     FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x")], {}).install(monkeypatch, [target(r"\\.\DISPLAY1", "Office monitor", DP)])
     [monitor] = backend_with().list_monitors()
-    assert "Turn DDC/CI on" in monitor.reason and "TVs" not in monitor.reason
+    assert "Turn DDC/CI on" in monitor.detail and "TVs" not in monitor.reason + monitor.detail
 
 
 def test_power_state_comes_from_vcp_d6(monkeypatch):
@@ -177,11 +179,21 @@ def test_built_in_panel_is_marked_internal(monkeypatch):
     assert (panel.key, panel.internal, panel.minimum) == ("BOE0812", True, 1)
 
 
+def test_built_in_panel_is_not_asked_over_ddc(monkeypatch):
+    path = r"\\?\DISPLAY#BOE0812#4&2a6&0&UID26#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+    ddc = FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 0, "Generic PnP Monitor")], {})
+    ddc.install(monkeypatch, [target(r"\\.\DISPLAY1", "", INTERNAL, path=path)])
+    asked = []
+    monkeypatch.setattr(win32, "get_vcp", lambda handle, code: asked.append(handle))
+    [panel] = backend_with(FakeWmi([(r"DISPLAY\BOE0812\4&2a6&0&UID26_0", 80, [])])).list_monitors()
+    assert panel.supported and asked == [] and ddc.destroyed == [0]
+
+
 def test_internal_panel_without_wmi_explains_why(monkeypatch):
     FakeDdc([], {}).install(monkeypatch, [target(r"\\.\DISPLAY1", "", INTERNAL)])
     backend = backend_with(FakeWmi([]))
     [panel] = backend.list_monitors()
-    assert not panel.supported and "WMI" in panel.reason
+    assert not panel.supported and panel.reason == windows.REASON_PANEL and "WMI" in panel.detail
 
 
 def test_monitors_without_display_configuration_still_work(monkeypatch):
@@ -377,6 +389,20 @@ def test_dimming_that_windows_refuses_settles_at_the_darkest_accepted(monkeypatc
     assert gdi.ramps[D1] != identity_ramp()  # still dimmed, as far as Windows allows
 
 
+def test_warmest_tint_is_found_again_when_dimming_changes(monkeypatch):
+    # Dimming leaves less room for tinting before Windows refuses the ramp.
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.6)
+    gdi.install(monkeypatch, [target(D1, "TV")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.apply(2000)
+    undimmed = gamma._displays[D1].warmest
+    gamma.set_dimming(D1, 20)
+    assert gamma._displays[D1].warmest > undimmed
+    gamma.set_dimming(D1, 100)
+    gamma.apply(2000)
+    assert gamma._displays[D1].warmest == undimmed
+
+
 def test_hdr_displays_cannot_be_dimmed_in_software(monkeypatch):
     FakeGdi({D1: identity_ramp()}).install(monkeypatch, [target(D1, "HDR", hdr=True)])
     assert not windows.WindowsGammaBackend().can_dim(D1)
@@ -459,3 +485,254 @@ def test_without_a_gamma_backend_there_is_no_software_dimming(monkeypatch):
     FakeDdc([PhysicalMonitor(D1, 7, "x")], {}).install(monkeypatch, [target(D1, "TV")])
     [info] = backend_with().list_monitors()
     assert not info.supported
+
+
+# --- Identity, hangs, isolation, recovery --------------------------------------
+
+import threading  # noqa: E402
+import time  # noqa: E402
+
+from nightlight.core import edid as edid_module  # noqa: E402
+
+
+def with_edid(gdi, name, serial, tech=DP, product=0x41A2):
+    data = edid_module.parse(edid_module.build("DEL", product, 0, name, serial))
+    path = rf"\\?\DISPLAY#DEL{product:04X}#5&{serial or 'x'}&0&UID1#{{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}}"
+    return DisplayTarget(gdi, name, path, tech, False, edid=data)
+
+
+def test_identity_comes_from_the_edid_and_tells_twins_apart(monkeypatch):
+    ddc = FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x"), PhysicalMonitor(r"\\.\DISPLAY2", 8, "y")], {7: (40, 100), 8: (60, 100)})
+    ddc.install(monkeypatch, [with_edid(r"\\.\DISPLAY1", "DELL U2720Q", "AAA111"), with_edid(r"\\.\DISPLAY2", "DELL U2720Q", "BBB222")])
+    left, right = backend_with().list_monitors()
+    assert (left.key, right.key) == ("DEL41A2:AAA111", "DEL41A2:BBB222")  # not "#2" by order
+    assert left.details.serial == "AAA111" and left.details.connector == "DisplayPort" and left.channel == "ddc"
+
+
+class HangingDdc(FakeDdc):
+    """Like FakeDdc, but reads from the given handles block until released."""
+
+    def __init__(self, monitors, vcp, hang):
+        super().__init__(monitors, vcp)
+        self.hang = set(hang)
+        self.release = threading.Event()
+        self.reads = []
+
+    def get_vcp(self, handle, code):
+        self.reads.append(handle)
+        if handle in self.hang:
+            self.release.wait(5)
+        return super().get_vcp(handle, code)
+
+
+def test_a_hanging_monitor_is_left_alone_and_the_others_still_work(monkeypatch):
+    monkeypatch.setattr(windows, "PROBE_TIMEOUT_S", 0.2)
+    targets = [with_edid(r"\\.\DISPLAY1", "Hangs", "H1"), with_edid(r"\\.\DISPLAY2", "Fine", "F1", product=0x5000)]
+    ddc = HangingDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x"), PhysicalMonitor(r"\\.\DISPLAY2", 8, "y")], {7: (40, 100), 8: (60, 100)}, hang={7})
+    ddc.install(monkeypatch, targets)
+    backend = backend_with()
+    started = time.monotonic()
+    hung, fine = backend.list_monitors()
+    assert time.monotonic() - started < 1.0  # bounded by the probe deadline, probes side by side
+    assert not hung.supported and hung.status == "not responding" and hung.reason == windows.REASON_NOT_RESPONDING
+    assert fine.supported and backend.get_brightness(1) == 60
+    assert 7 not in ddc.destroyed  # its probe still uses the handle
+    # Detecting again doesn't ask it again while its call is stuck.
+    ddc.monitors = [PhysicalMonitor(r"\\.\DISPLAY1", 17, "x"), PhysicalMonitor(r"\\.\DISPLAY2", 18, "y")]
+    ddc.vcp = {17: (40, 100), 18: (60, 100)}
+    reads = len(ddc.reads)
+    hung, fine = backend.list_monitors()
+    assert 17 not in ddc.reads[reads:] and not hung.supported and fine.supported
+    assert 17 in ddc.destroyed  # its fresh handle was released unused
+    # Once the stuck call returns, its handle is released and it is checked again.
+    ddc.release.set()
+    for _ in range(100):
+        if 7 in ddc.destroyed and not backend.stuck:
+            break
+        time.sleep(0.01)
+    assert 7 in ddc.destroyed and backend.stuck == {}
+    ddc.hang.clear()
+    ddc.monitors = [PhysicalMonitor(r"\\.\DISPLAY1", 27, "x"), PhysicalMonitor(r"\\.\DISPLAY2", 28, "y")]
+    ddc.vcp = {27: (40, 100), 28: (60, 100)}
+    hung, fine = backend.list_monitors()
+    assert hung.supported
+
+
+def test_a_monitor_that_answered_before_is_retrying_not_unsupported(monkeypatch):
+    # After waking, monitors often don't answer for a while (Monitorian #50):
+    # "turn DDC/CI on" would be the wrong advice.
+    target_ = with_edid(r"\\.\DISPLAY1", "DELL", "S1")
+    ddc = FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x")], {7: (40, 100)})
+    ddc.install(monkeypatch, [target_])
+    backend = backend_with()
+    assert backend.list_monitors()[0].supported
+    ddc.monitors, ddc.vcp = [PhysicalMonitor(r"\\.\DISPLAY1", 8, "x")], {8: win32.ERROR_GRAPHICS_I2C_ERROR_RECEIVING_DATA}
+    [info] = backend.list_monitors()
+    assert not info.supported and info.status == "retrying" and "Turn DDC/CI on" not in info.detail
+
+
+def test_a_monitor_whose_signal_never_gets_through_is_not_asked_twice(monkeypatch):
+    ddc = FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x")], {7: win32.ERROR_GRAPHICS_I2C_ERROR_TRANSMITTING_DATA},
+                  high_level={7: (0, 50, 100)})
+    ddc.install(monkeypatch, [target(r"\\.\DISPLAY1", "Behind a dock")])
+    [info] = backend_with().list_monitors()
+    assert not info.supported  # the high-level API wasn't tried: nothing gets through
+    assert ddc.destroyed == [7]
+
+
+def test_a_failure_detecting_one_display_does_not_affect_the_others(monkeypatch):
+    panel_path = r"\\?\DISPLAY#BOE0812#4&2a6&0&UID26#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+    ddc = FakeDdc([PhysicalMonitor(r"\\.\DISPLAY2", 8, "y")], {8: (60, 100)})
+    ddc.install(monkeypatch, [target(r"\\.\DISPLAY1", "", INTERNAL, path=panel_path), target(r"\\.\DISPLAY2", "External")])
+    backend = backend_with(FakeWmi([]))
+
+    def broken(*_args):
+        raise RuntimeError("driver bug")
+
+    monkeypatch.setattr(backend, "_panel", broken)
+    panel, external = backend.list_monitors()
+    assert not panel.supported and panel.reason == windows.REASON_CHECK_FAILED
+    assert external.supported
+
+
+def test_a_handle_in_use_is_released_only_when_its_call_returns():
+    release, destroyed = threading.Event(), []
+
+    class Api:
+        def set_vcp(self, handle, code, value):
+            release.wait(5)
+
+        def destroy_physical_monitor(self, handle):
+            destroyed.append(handle)
+
+    control = windows._VcpControl(Api(), 7, 100)
+    writer = threading.Thread(target=control.write, args=(50,))
+    writer.start()
+    time.sleep(0.05)
+    assert control.busy_for is not None
+    control.close()
+    assert destroyed == []  # still in use: destroying it now could crash
+    release.set()
+    writer.join(2)
+    assert destroyed == [7]
+    with pytest.raises(MonitorGoneError):
+        control.read()  # a closed control refuses calls: its display was re-detected
+
+
+def test_detecting_again_while_a_call_is_stuck_keeps_away_from_that_display(monkeypatch):
+    ddc = FakeDdc([PhysicalMonitor(r"\\.\DISPLAY1", 7, "x")], {7: (40, 100)})
+    ddc.install(monkeypatch, [with_edid(r"\\.\DISPLAY1", "DELL", "S1")])
+    release = threading.Event()
+    monkeypatch.setattr(win32, "set_vcp", lambda h, code, value: release.wait(5))
+    backend = backend_with()
+    backend.list_monitors()
+    writer = threading.Thread(target=backend.set_brightness, args=(0, 50))
+    writer.start()
+    time.sleep(0.05)
+    ddc.monitors = [PhysicalMonitor(r"\\.\DISPLAY1", 8, "x")]
+    [info] = backend.list_monitors()  # e.g. after a display change
+    assert not info.supported and info.status == "not responding"
+    assert 7 not in ddc.destroyed and 8 in ddc.destroyed
+    release.set()
+    writer.join(2)
+    assert 7 in ddc.destroyed and backend.stuck == {}
+
+
+def test_switching_hdr_on_moves_a_display_from_dimming_to_sdr(monkeypatch):
+    backend, gamma, gdi = software_backend(monkeypatch, [target(D1, "TV")])
+    assert backend.list_monitors()[0].control == "software"
+    targets = [target(D1, "TV", hdr=True)]
+    monkeypatch.setattr(win32, "display_targets", lambda: targets)
+    install_sdr(monkeypatch, nits=160)
+    gamma.displays_changed()
+    [info] = backend.list_monitors()
+    assert (info.control, info.channel) == ("sdr", "sdr") and backend.get_brightness(0) == 20
+
+
+def test_dimming_comes_back_when_hdr_is_switched_off(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    targets = [target(D1, "TV")]
+    gdi.install(monkeypatch, targets)
+    monkeypatch.setattr(win32, "display_targets", lambda: targets)
+    gamma = windows.WindowsGammaBackend()
+    gamma.set_dimming(D1, 50)
+    targets[0] = target(D1, "TV", hdr=True)
+    gamma.displays_changed()
+    gdi.ramps[D1] = identity_ramp()  # Windows reset it meanwhile
+    targets[0] = target(D1, "TV")
+    gamma.displays_changed()
+    assert mid(gdi) < 0.45
+
+
+def test_dimming_a_display_that_vanished_reports_it_gone(monkeypatch):
+    FakeGdi({D1: identity_ramp()}).install(monkeypatch, [target(D1, "TV")])
+    gamma = windows.WindowsGammaBackend()
+    with pytest.raises(MonitorGoneError):
+        gamma.set_dimming(r"\\.\DISPLAY9", 50)
+
+
+def test_one_display_rejecting_its_ramp_does_not_stop_the_others(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp(), r"\\.\DISPLAY2": identity_ramp()})
+    gdi.install(monkeypatch, [target(D1, "A"), target(r"\\.\DISPLAY2", "B")])
+    original = gdi.set
+
+    def flaky(name, ramp):
+        if name == D1:
+            raise RuntimeError("driver bug")
+        return original(name, ramp)
+
+    monkeypatch.setattr(win32, "set_gamma_ramp", flaky)
+    windows.WindowsGammaBackend().apply(4500)
+    assert peak_blue(gdi, r"\\.\DISPLAY2") < 1
+
+
+CALIBRATION = [[round(v * 0.95) for v in channel] for channel in identity_ramp()]
+
+
+def test_after_a_crash_the_calibration_is_recovered(monkeypatch, tmp_path):
+    gdi = FakeGdi({D1: [list(c) for c in CALIBRATION]})
+    gdi.install(monkeypatch, [with_edid(D1, "Calibrated", "C1")])
+    journal = tmp_path / "gamma.json"
+    crashed = windows.WindowsGammaBackend(journal=windows.GammaJournal(journal))
+    crashed.apply(4500)
+    del crashed  # killed: no release, the tint stays on the display
+    assert gdi.ramps[D1] != CALIBRATION
+    restarted = windows.WindowsGammaBackend(journal=windows.GammaJournal(journal))
+    restarted.reset()
+    assert gdi.ramps[D1] == CALIBRATION  # not a flat ramp: the calibration came back
+    restarted.apply(5000)
+    assert gdi.ramps[D1] == gamma_ramp(whitepoint(5000), base=CALIBRATION)
+
+
+def test_a_crash_mid_fade_is_recognised_too(monkeypatch, tmp_path):
+    gdi = FakeGdi({D1: [list(c) for c in CALIBRATION]})
+    gdi.install(monkeypatch, [with_edid(D1, "Calibrated", "C1")])
+    crashed = windows.WindowsGammaBackend(journal=windows.GammaJournal(tmp_path / "gamma.json"))
+    crashed.apply(5000)  # saved at once (clean -> tinted)
+    crashed.apply(4800)  # within the write interval: not saved yet
+    restarted = windows.WindowsGammaBackend(journal=windows.GammaJournal(tmp_path / "gamma.json"))
+    restarted.reset()
+    assert gdi.ramps[D1] == CALIBRATION
+
+
+def test_a_stale_journal_entry_is_dropped(monkeypatch, tmp_path):
+    gdi = FakeGdi({D1: [list(c) for c in CALIBRATION]})
+    gdi.install(monkeypatch, [with_edid(D1, "Calibrated", "C1")])
+    path = tmp_path / "gamma.json"
+    windows.WindowsGammaBackend(journal=windows.GammaJournal(path)).apply(4500)  # then a crash...
+    gdi.ramps[D1] = [list(c) for c in CALIBRATION]  # ...and Windows reloaded the calibration at sign-in
+    restarted = windows.WindowsGammaBackend(journal=windows.GammaJournal(path))
+    restarted.apply(5000)
+    assert gdi.ramps[D1] == gamma_ramp(whitepoint(5000), base=CALIBRATION)
+    assert windows.GammaJournal(path).entry("DEL41A2:C1") is not None  # tinted again now
+    restarted.release()
+    assert windows.GammaJournal(path).entry("DEL41A2:C1") is None  # clean exit: nothing to recover
+
+
+def test_a_tint_from_another_app_is_not_mistaken_for_ours(monkeypatch, tmp_path):
+    flux = gamma_ramp(whitepoint(3400))
+    gdi = FakeGdi({D1: flux}, min_peak=0.0)
+    gdi.install(monkeypatch, [with_edid(D1, "Calibrated", "C1")])
+    gamma = windows.WindowsGammaBackend(journal=windows.GammaJournal(tmp_path / "gamma.json"))  # no entry
+    gamma.reset()
+    assert gdi.ramps[D1] == identity_ramp()  # neutral, as before

@@ -1,0 +1,328 @@
+# SPDX-License-Identifier: GPL-3.0-only
+"""Brightness by time of day: the schedule's maths (pure), and the scheduler
+that applies it idempotently across restarts, sleep, overrides and daylight
+saving changes."""
+
+import json
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+import pytest
+from PySide6.QtCore import QObject, Signal
+
+from nightlight.brightness_scheduler import BrightnessScheduler
+from nightlight.config import Anchor, BrightnessScheduleConfig, SchedulePoint
+from nightlight.core.brightness_schedule import PRESETS, boundaries, describe, scheduled_level
+from nightlight.hardware.brightness import MonitorInfo
+from nightlight.monitors import SCHEDULE, USER, DisplayState, Status
+
+UTC = timezone.utc
+NEW_YORK = ZoneInfo("America/New_York")
+DAY_NIGHT = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00")))
+
+
+def at(day, hour, minute=0, zone=UTC, month=6, fold=0):
+    return datetime(2026, month, day, hour, minute, tzinfo=zone, fold=fold)
+
+
+# --- The schedule itself -------------------------------------------------------
+
+
+def test_presets_are_valid():
+    for key, preset in PRESETS.items():
+        config = BrightnessScheduleConfig(enabled=True, preset=key, points=preset.points, transition_minutes=preset.transition_minutes)
+        assert config.normalized() == config, key
+        assert len(preset.points) >= 2 and preset.name and preset.description
+        assert scheduled_level(config, at(15, 12)) is not None
+
+
+@pytest.mark.parametrize(("hour", "level", "since"), [(12, 100, 7), (23, 50, 20), (3, 50, 20), (7, 100, 7), (6, 50, 20)])
+def test_the_latest_point_that_has_passed_sets_the_level(hour, level, since):
+    state = scheduled_level(DAY_NIGHT, at(15, hour))
+    assert state.level == level and state.since.at.hour == since and not state.transitioning
+
+
+def test_overnight_the_point_from_yesterday_still_applies():
+    state = scheduled_level(DAY_NIGHT, at(15, 3))
+    assert state.since.at == at(14, 20) and state.next.at == at(15, 7)
+
+
+def test_off_or_empty_gives_nothing():
+    assert scheduled_level(BrightnessScheduleConfig(enabled=False), at(15, 12)) is None
+
+
+def test_two_points_at_the_same_time_fire_once_and_the_later_one_wins():
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(60, "20:00"), SchedulePoint(40, "20:00")))
+    laid_out, _ = boundaries(config, at(15, 12))
+    assert sum(1 for b in laid_out if b.at == at(15, 20)) == 1
+    assert scheduled_level(config, at(15, 21)).level == 40
+
+
+def test_a_sunset_point_and_a_clock_point_on_the_same_instant_merge():
+    # With no location, sunset falls back to 19:00: the same instant as the clock point.
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(70, "19:00"), SchedulePoint(30, anchor=Anchor.SUNSET)))
+    laid_out, approximate = boundaries(config, at(15, 12))
+    assert approximate and sum(1 for b in laid_out if b.at == at(15, 19)) == 1
+    assert scheduled_level(config, at(15, 20)).level == 30
+
+
+def test_sun_points_follow_the_location():
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, anchor=Anchor.SUNRISE), SchedulePoint(40, anchor=Anchor.SUNSET, offset_minutes=30)))
+    london = (51.5, -0.13)
+    state = scheduled_level(config, at(21, 23), location=london)  # midsummer: sunset about 20:21 UTC
+    assert not state.approximate_sun and state.level == 40
+    assert at(21, 20, 40) < state.since.at < at(21, 21, 10)
+
+
+def test_sun_points_without_a_location_use_7_and_19():
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, anchor=Anchor.SUNRISE), SchedulePoint(40, anchor=Anchor.SUNSET)))
+    state = scheduled_level(config, at(15, 20))
+    assert state.approximate_sun and state.since.at == at(15, 19)
+
+
+def test_polar_day_falls_back_too():
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, anchor=Anchor.SUNRISE), SchedulePoint(40, anchor=Anchor.SUNSET)))
+    assert scheduled_level(config, at(21, 20), location=(78.2, 15.6)).approximate_sun  # Svalbard in June
+
+
+def test_gradual_transition():
+    config = BrightnessScheduleConfig(enabled=True, points=DAY_NIGHT.points, transition_minutes=30)
+    halfway = scheduled_level(config, at(15, 20, 15))
+    assert halfway.level == 75 and halfway.transitioning
+    done = scheduled_level(config, at(15, 20, 30))
+    assert done.level == 50 and not done.transitioning
+
+
+def test_a_transition_never_runs_into_the_next_point():
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00"), SchedulePoint(20, "20:10")),
+                                      transition_minutes=60)
+    assert scheduled_level(config, at(15, 20, 5)).level == 75  # halfway over the 10 minutes it has
+    assert scheduled_level(config, at(15, 20, 10)).since.level == 20
+
+
+def test_describe():
+    assert describe(DAY_NIGHT) == "07:00 100% · 20:00 50%"
+    assert describe(BrightnessScheduleConfig(points=(SchedulePoint(40, anchor=Anchor.SUNSET, offset_minutes=-30),))) == "sunset - 30 min 40%"
+
+
+# --- Daylight saving time (America/New_York: 8 March and 1 November 2026) ---
+
+
+def test_spring_forward_a_point_in_the_skipped_hour_happens_right_after_it():
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(30, "02:30"), SchedulePoint(100, "09:00")))
+    laid_out, _ = boundaries(config, at(8, 12, zone=NEW_YORK, month=3), NEW_YORK)
+    on_the_day = [b for b in laid_out if b.at.astimezone(NEW_YORK).date().day == 8 and b.level == 30]
+    assert len(on_the_day) == 1
+    assert on_the_day[0].at.astimezone(UTC) == datetime(2026, 3, 8, 7, 30, tzinfo=UTC)  # 03:30 EDT
+    before = datetime(2026, 3, 8, 7, 15, tzinfo=UTC)  # 03:15 EDT, before it
+    assert scheduled_level(config, before, NEW_YORK).level == 100
+
+
+def test_fall_back_a_point_in_the_repeated_hour_happens_once():
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(30, "01:30"), SchedulePoint(100, "09:00")))
+    first = datetime(2026, 11, 1, 5, 40, tzinfo=UTC)  # 01:40 EDT
+    second = datetime(2026, 11, 1, 6, 40, tzinfo=UTC)  # 01:40 EST, the hour again
+    a, b = scheduled_level(config, first, NEW_YORK), scheduled_level(config, second, NEW_YORK)
+    assert a.since.id == b.since.id  # the same point: not applied a second time
+    assert a.since.at.astimezone(UTC) == datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
+
+
+def test_points_stay_at_their_wall_clock_time_across_the_change():
+    config = DAY_NIGHT
+    saturday = scheduled_level(config, datetime(2026, 3, 8, 3, 0, tzinfo=UTC), NEW_YORK)  # Sat 22:00 EST
+    # The next morning point is 07:00 EDT (11:00 UTC), not 07:00 EST (12:00 UTC).
+    assert saturday.next.at.astimezone(UTC) == datetime(2026, 3, 8, 11, 0, tzinfo=UTC)
+    assert saturday.next.at.astimezone(NEW_YORK).hour == 7
+
+
+def test_a_transition_across_the_change_lasts_its_real_length():
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "09:00"), SchedulePoint(40, "01:00")), transition_minutes=60)
+    start = datetime(2026, 11, 1, 5, 0, tzinfo=UTC)  # 01:00 EDT; an hour later it is 01:00 EST
+    assert scheduled_level(config, start + timedelta(minutes=30), NEW_YORK).level == 70
+    assert not scheduled_level(config, start + timedelta(minutes=60), NEW_YORK).transitioning
+
+
+# --- The scheduler: idempotent application --------------------------------------
+
+
+class FakeMonitors(QObject):
+    monitorsChanged = Signal(list)
+    displayChanged = Signal(str)
+    brightnessSet = Signal(str, int, str)
+    restoreDeferred = Signal(str, str)
+
+    def __init__(self):
+        super().__init__()
+        self.states = {}
+        self.sent = []
+
+    def state(self, key):
+        return self.states.get(key)
+
+    def detect(self, *infos, status=Status.READING):
+        self.states = {i.key: DisplayState(i, status if i.supported else Status.UNSUPPORTED) for i in infos}
+        self.monitorsChanged.emit(list(infos))
+
+    def set_brightness(self, key, value, source=USER):
+        self.sent.append((key, value, source))
+        self.brightnessSet.emit(key, value, source)
+
+    def set_status(self, key, status):
+        self.states[key].status = status
+        self.displayChanged.emit(key)
+
+
+DELL = MonitorInfo(0, "DELL", True, key="DEL")
+LG = MonitorInfo(1, "LG", True, key="GSM")
+PANEL = MonitorInfo(2, "Panel", True, key="BOE", internal=True, minimum=1)
+TV = MonitorInfo(3, "TV", False, key="TV")
+
+
+class Clock:
+    def __init__(self, now):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def scheduler(tmp_path):
+    made = []
+
+    def make(config=DAY_NIGHT, now=at(15, 12), monitors=None, state=None, zone=None):
+        path = tmp_path / "schedule.json"
+        if state is not None:
+            path.write_text(json.dumps(state))
+        monitors = monitors or FakeMonitors()
+        clock = Clock(now)
+        sched = BrightnessScheduler(monitors, config, path, clock=clock, zone=zone)
+        made.append(sched)
+        return sched, monitors, clock
+
+    yield make
+    for sched in made:
+        sched.shutdown()
+
+
+def test_the_current_point_is_applied_to_every_display_once(scheduler):
+    sched, monitors, clock = scheduler()
+    monitors.detect(DELL, LG, TV)
+    assert monitors.sent == [("DEL", 100, SCHEDULE), ("GSM", 100, SCHEDULE)]  # not the TV: no control
+    for _ in range(5):
+        sched.evaluate("tick")
+    assert len(monitors.sent) == 2  # idempotent: asking again changes nothing
+
+
+def test_a_user_change_stands_until_the_next_point(scheduler):
+    sched, monitors, clock = scheduler()
+    monitors.detect(DELL)
+    monitors.set_brightness("DEL", 60)  # the user, at 12:00
+    clock.now = at(15, 19, 59)
+    sched.evaluate("tick")
+    assert monitors.sent[-1] == ("DEL", 60, USER)
+    clock.now = at(15, 20, 1)
+    sched.evaluate("timer")
+    assert monitors.sent[-1] == ("DEL", 50, SCHEDULE)  # the evening point applies, override or not
+
+
+def test_restarting_within_a_point_leaves_restored_levels_alone(scheduler, tmp_path):
+    first, monitors, clock = scheduler()
+    monitors.detect(DELL)
+    saved = json.loads((tmp_path / "schedule.json").read_text())
+    first.shutdown()
+    # Restart at 15:00: the 07:00 point was applied before, so the level the
+    # user picked since (restored by BrightnessMemory) stands.
+    sched, monitors2, _ = scheduler(now=at(15, 15), state=saved)
+    sched.evaluate("start")  # before any detection
+    monitors2.detect(DELL)
+    assert monitors2.sent == []
+    monitors2.detect(DELL, LG)  # plugged in later: it gets the level
+    assert monitors2.sent == [("GSM", 100, SCHEDULE)]
+
+
+def test_starting_after_a_point_passed_while_not_running_applies_it(scheduler):
+    yesterday_evening = {"version": 1, "applied": at(14, 20).isoformat()}
+    sched, monitors, _ = scheduler(now=at(15, 9), state=yesterday_evening)
+    monitors.detect(DELL)
+    assert monitors.sent == [("DEL", 100, SCHEDULE)]
+
+
+def test_sleeping_through_several_points_applies_only_the_latest(scheduler):
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(70, "18:00"), SchedulePoint(40, "22:00")))
+    sched, monitors, clock = scheduler(config=config, now=at(15, 12))
+    monitors.detect(DELL)
+    clock.now = at(15, 23, 30)  # slept from 12:00 to 23:30
+    sched.evaluate("wake")
+    assert monitors.sent == [("DEL", 100, SCHEDULE), ("DEL", 40, SCHEDULE)]
+
+
+def test_a_display_unreachable_at_the_point_gets_it_when_it_answers(scheduler):
+    sched, monitors, clock = scheduler()
+    monitors.detect(DELL)
+    monitors.set_status("DEL", Status.NOT_RESPONDING)
+    clock.now = at(15, 20, 1)
+    sched.evaluate("timer")
+    assert monitors.sent == [("DEL", 100, SCHEDULE)]  # nothing new while it doesn't answer
+    monitors.set_status("DEL", Status.OK)
+    assert monitors.sent[-1] == ("DEL", 50, SCHEDULE)
+    monitors.set_status("DEL", Status.OK)
+    assert len(monitors.sent) == 2  # once
+
+
+def test_a_deferred_change_is_given_again_once_reachable(scheduler):
+    sched, monitors, clock = scheduler()
+    monitors.detect(DELL)
+    monitors.restoreDeferred.emit("DEL", SCHEDULE)  # it was in standby
+    monitors.set_status("DEL", Status.OK)
+    assert monitors.sent == [("DEL", 100, SCHEDULE), ("DEL", 100, SCHEDULE)]
+
+
+def test_the_laptop_panel_is_never_scheduled_to_black(scheduler):
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(0, "00:00"),))
+    sched, monitors, _ = scheduler(config=config)
+    monitors.detect(PANEL, DELL)
+    assert ("BOE", 1, SCHEDULE) in monitors.sent and ("DEL", 0, SCHEDULE) in monitors.sent
+
+
+def test_turning_on_or_editing_applies_at_once(scheduler):
+    sched, monitors, _ = scheduler(config=BrightnessScheduleConfig(enabled=False))
+    monitors.detect(DELL)
+    assert monitors.sent == []
+    sched.set_config(DAY_NIGHT)
+    assert monitors.sent == [("DEL", 100, SCHEDULE)]
+    sched.set_config(BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(80, "06:00"), SchedulePoint(30, "21:00"))))
+    assert monitors.sent[-1] == ("DEL", 80, SCHEDULE)
+    sched.set_config(BrightnessScheduleConfig(enabled=False))
+    assert sched.state is None and len(monitors.sent) == 2
+
+
+def test_a_transition_moves_each_minute_until_the_user_takes_over(scheduler):
+    config = BrightnessScheduleConfig(enabled=True, points=DAY_NIGHT.points, transition_minutes=30)
+    sched, monitors, clock = scheduler(config=config, now=at(15, 20, 0))
+    monitors.detect(DELL)
+    for minute in (10, 20):
+        clock.now = at(15, 20, minute)
+        sched.evaluate("tick")
+    assert [v for _k, v, _s in monitors.sent] == [100, 83, 67]
+    monitors.set_brightness("DEL", 90)
+    clock.now = at(15, 20, 25)
+    sched.evaluate("tick")
+    assert monitors.sent[-1] == ("DEL", 90, USER)
+
+
+def test_the_repeated_hour_in_autumn_does_not_apply_twice(scheduler):
+    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(30, "01:30"), SchedulePoint(100, "09:00")))
+    sched, monitors, clock = scheduler(config=config, now=datetime(2026, 11, 1, 5, 40, tzinfo=UTC), zone=NEW_YORK)
+    monitors.detect(DELL)
+    monitors.set_brightness("DEL", 55)  # the user, during the first 01:30-02:00
+    clock.now = datetime(2026, 11, 1, 6, 40, tzinfo=UTC)  # 01:40 again, an hour later
+    sched.evaluate("tick")
+    assert monitors.sent[-1] == ("DEL", 55, USER)
+
+
+def test_a_corrupt_state_file_starts_afresh(scheduler, tmp_path):
+    (tmp_path / "schedule.json").write_text("{nope")
+    sched, monitors, _ = scheduler()
+    monitors.detect(DELL)
+    assert monitors.sent == [("DEL", 100, SCHEDULE)]

@@ -77,16 +77,16 @@ def main(out: Path) -> None:
         for dark in (False, True):
             use_scheme(app, dark)
             theme = "dark" if dark else "light"
-            flyout = Flyout(monitors, controller, as_window=True)  # a window: grab() then includes its frame
-            flyout.show()
+            # Rendered with grab() without being shown, so nothing pops up on screen.
+            flyout = Flyout(monitors, controller, as_window=True)
+            flyout.adjustSize()
             settle(app)
             flyout.grab().save(str(out / f"flyout-{theme}.png"))
-            flyout.close()
+            flyout.deleteLater()
             settings = SettingsWindow(controller, config)
-            settings.show()
             settle(app)
             settings.grab().save(str(out / f"settings-{theme}.png"))
-            settings.close()
+            settings.deleteLater()
             print(f"Saved {theme} screenshots to {out}")
     finally:
         controller.shutdown()

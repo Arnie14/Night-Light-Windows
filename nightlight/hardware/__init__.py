@@ -35,9 +35,14 @@ def create_backends(kind: str = "auto") -> tuple[BrightnessBackend, GammaBackend
         return KdeBrightnessBackend(), KWinNightLightBackend()
 
     if sys.platform == "win32":
+        from nightlight.hardware import win32
         from nightlight.hardware.windows import WindowsBrightnessBackend, WindowsGammaBackend
 
         log.info("Using Windows (DDC/CI, WMI and SDR brightness, gamma ramp night light and dimming)")
+        # ctypes layouts are checked against the SDK's before any call; a
+        # mismatch turns off the affected feature instead of corrupting memory.
+        win32.self_check()
+        log.info("Windows capabilities: %s", ", ".join(f"{k}: {v}" for k, v in win32.capabilities().items() if k != "windows"))
         gamma = WindowsGammaBackend()
         return WindowsBrightnessBackend(gamma), gamma
     # DDC/CI works on Linux via i2c-dev, but gamma is Windows-only.

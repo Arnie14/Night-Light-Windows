@@ -69,10 +69,56 @@ class GeneralConfig:
     software_dimming: bool = True  # dim displays without brightness control (TVs) through the gamma ramp
 
 
+class Anchor(StrEnum):
+    """What a brightness schedule point's time is relative to."""
+
+    CLOCK = "clock"  # a time of day
+    SUNRISE = "sunrise"
+    SUNSET = "sunset"
+
+
+@dataclass(frozen=True)
+class SchedulePoint:
+    """From this moment on, displays are set to `level` (until the next point)."""
+
+    level: int = 100
+    at: str = "07:00"  # HH:MM, for Anchor.CLOCK
+    anchor: Anchor = Anchor.CLOCK
+    offset_minutes: int = 0  # before (-) or after (+) sunrise or sunset
+
+    def normalized(self) -> SchedulePoint:
+        return replace(
+            self,
+            level=_clamp(self.level, 0, 100),
+            at=self.at if _is_hhmm(self.at) else "07:00",
+            offset_minutes=_clamp(self.offset_minutes, -MAX_SUN_OFFSET_MINUTES, MAX_SUN_OFFSET_MINUTES),
+        )
+
+
+MAX_SUN_OFFSET_MINUTES = 240
+MAX_SCHEDULE_POINTS = 12
+DEFAULT_SCHEDULE_POINTS = (SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00"))
+
+
+@dataclass(frozen=True)
+class BrightnessScheduleConfig:
+    """Brightness by time of day, like Twinkle Tray's time adjustments."""
+
+    enabled: bool = False
+    preset: str = "day_night"  # the preset the points came from, or "custom"
+    points: tuple[SchedulePoint, ...] = DEFAULT_SCHEDULE_POINTS
+    transition_minutes: int = 0  # 0: change at once; else gradually after each point
+
+    def normalized(self) -> BrightnessScheduleConfig:
+        points = tuple(p.normalized() for p in self.points[:MAX_SCHEDULE_POINTS]) or DEFAULT_SCHEDULE_POINTS
+        return replace(self, points=points, transition_minutes=_clamp(self.transition_minutes, 0, MAX_TRANSITION_MINUTES))
+
+
 @dataclass(frozen=True)
 class AppConfig:
     night_light: NightLightConfig = field(default_factory=NightLightConfig)
     general: GeneralConfig = field(default_factory=GeneralConfig)
+    brightness_schedule: BrightnessScheduleConfig = field(default_factory=BrightnessScheduleConfig)
 
 
 def parse_hhmm(text: str) -> time:
@@ -97,7 +143,17 @@ def load(path: Path) -> AppConfig:
     return AppConfig(
         night_light=_from_dict(NightLightConfig, "night_light", raw.get("night_light")).normalized(),
         general=_from_dict(GeneralConfig, "general", raw.get("general")),
+        brightness_schedule=_schedule_from_dict(raw.get("brightness_schedule")),
     )
+
+
+def _schedule_from_dict(data: object) -> BrightnessScheduleConfig:
+    schedule = _from_dict(BrightnessScheduleConfig, "brightness_schedule", {k: v for k, v in data.items() if k != "points"} if isinstance(data, dict) else None)
+    raw_points = data.get("points") if isinstance(data, dict) else None
+    if isinstance(raw_points, list):
+        points = tuple(_from_dict(SchedulePoint, "brightness_schedule.points", p) for p in raw_points if isinstance(p, dict))
+        schedule = replace(schedule, points=points)
+    return schedule.normalized()
 
 
 def save(config: AppConfig, path: Path) -> None:
@@ -128,6 +184,10 @@ def _from_dict[T](cls: type[T], section: str, data: object) -> T:
 def _coerce(name: str, value: object, default: object) -> object:
     if name == "mode":
         return Mode(value)
+    if name == "anchor":
+        return Anchor(value)
+    if isinstance(default, tuple):
+        raise TypeError(f"{name} is read separately")
     if isinstance(default, bool):
         if isinstance(value, bool):
             return value

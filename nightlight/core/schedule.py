@@ -19,6 +19,7 @@ from astral import Observer
 from astral.sun import sun
 
 from nightlight.config import Mode, NightLightConfig, parse_hhmm
+from nightlight.core.clock import days_around, fixed, local, wall_time
 from nightlight.core.colortemp import NEUTRAL_KELVIN
 
 log = logging.getLogger(__name__)
@@ -65,8 +66,10 @@ class NightLightState:
         return self.next_transition.start if self.next_transition else None
 
 
-def compute_state(config: NightLightConfig, now: datetime, override: Override | None = None) -> NightLightState:
-    """`now` must be timezone-aware."""
+def compute_state(config: NightLightConfig, now: datetime, override: Override | None = None, zone: tzinfo | None = None) -> NightLightState:
+    """`now` must be timezone-aware. `zone` is the local time zone, for days
+    on the other side of a daylight saving change (see core/clock.py);
+    without it, now's offset is used for every day."""
     if override is not None and override.active_at(now):
         if override.kind is OverrideKind.ACTIVATE:
             return NightLightState(config.night_temperature, 1.0, False, None, override)
@@ -77,7 +80,7 @@ def compute_state(config: NightLightConfig, now: datetime, override: Override | 
     if config.mode is Mode.ALWAYS:
         return NightLightState(config.night_temperature, 1.0, False, None)
 
-    transitions = schedule_around(config, now)
+    transitions = schedule_around(config, now, zone)
     factor, transitioning = 0.0, False
     started = [t for t in transitions if t.start <= now]
     if started:
@@ -94,32 +97,33 @@ def compute_state(config: NightLightConfig, now: datetime, override: Override | 
     return NightLightState(temperature, factor, transitioning, upcoming)
 
 
-def next_transition(config: NightLightConfig, now: datetime, to_night: bool) -> Transition | None:
+def next_transition(config: NightLightConfig, now: datetime, to_night: bool, zone: tzinfo | None = None) -> Transition | None:
     """The next evening (to_night) or morning transition of the configured
     day-night cycle, even when night light itself is off or always on. Used
     for "until this evening" / "until tomorrow morning" overrides."""
-    return next((t for t in schedule_around(config, now) if t.start > now and t.to_night == to_night), None)
+    return next((t for t in schedule_around(config, now, zone) if t.start > now and t.to_night == to_night), None)
 
 
-def schedule_around(config: NightLightConfig, now: datetime) -> list[Transition]:
-    days = [now.date() + timedelta(days=offset) for offset in (-1, 0, 1, 2)]
+def schedule_around(config: NightLightConfig, now: datetime, zone: tzinfo | None = None) -> list[Transition]:
+    days = days_around(now, zone)
+    tz = zone or now.tzinfo
     if config.mode is Mode.LOCATION:
-        transitions = _solar_schedule(config.latitude, config.longitude, days, now.tzinfo)
+        transitions = _solar_schedule(config.latitude, config.longitude, days, tz)
         if transitions is None:
             log.debug("No sunrise/sunset at (%s, %s); using 06:00/18:00", config.latitude, config.longitude)
-            transitions = _timed_schedule(FALLBACK_MORNING, FALLBACK_EVENING, FALLBACK_TRANSITION, days, now.tzinfo)
+            transitions = _timed_schedule(FALLBACK_MORNING, FALLBACK_EVENING, FALLBACK_TRANSITION, days, tz)
     else:
         duration = timedelta(minutes=config.transition_minutes)
-        transitions = _timed_schedule(parse_hhmm(config.day_start), parse_hhmm(config.night_start), duration, days, now.tzinfo)
+        transitions = _timed_schedule(parse_hhmm(config.day_start), parse_hhmm(config.night_start), duration, days, tz)
     return sorted(transitions, key=lambda t: t.start)
 
 
-def _timed_schedule(morning: time, evening: time, duration: timedelta, days: list[date], tz: tzinfo | None) -> list[Transition]:
+def _timed_schedule(morning: time, evening: time, duration: timedelta, days: list[date], tz: tzinfo) -> list[Transition]:
     transitions = []
     for day in days:
-        start_morning = datetime.combine(day, morning, tz)
-        start_evening = datetime.combine(day, evening, tz)
-        transitions += [Transition(start_morning, start_morning + duration, False), Transition(start_evening, start_evening + duration, True)]
+        for at, to_night in ((morning, False), (evening, True)):
+            start = wall_time(day, at, tz)
+            transitions.append(Transition(start, local(start + duration, tz), to_night))
     return transitions
 
 
@@ -137,5 +141,6 @@ def _solar_schedule(latitude: float, longitude: float, days: list[date], tz: tzi
             events = sun(observer, date=day, tzinfo=tz)
         except ValueError:
             return None
-        transitions += [Transition(events["dawn"], events["sunrise"], False), Transition(events["sunset"], events["dusk"], True)]
+        dawn, sunrise, sunset, dusk = (fixed(events[name]) for name in ("dawn", "sunrise", "sunset", "dusk"))
+        transitions += [Transition(dawn, sunrise, False), Transition(sunset, dusk, True)]
     return transitions

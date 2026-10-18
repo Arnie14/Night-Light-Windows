@@ -33,6 +33,7 @@ def run(backend: str, out_dir: Path | None) -> int:
     section("System", _system)
     section("Qt screens", _qt_screens)
     if sys.platform == "win32":
+        section("Windows capabilities and ctypes layouts", _capabilities)
         section("Displays (QueryDisplayConfig)", _display_config)
         section("DDC/CI monitors (dxva2, read-only)", _ddc)
         section("Built-in panels (WMI)", _wmi)
@@ -81,6 +82,15 @@ def _qt_screens(out) -> None:
         out(f"  geometry {g.x()},{g.y()} {g.width()}x{g.height()}, available {a.x()},{a.y()} {a.width()}x{a.height()}, scale {screen.devicePixelRatio():g}")
 
 
+def _capabilities(out) -> None:
+    from nightlight.hardware import win32
+
+    win32.display_targets()  # tries the optional HDR query once, so its support is known
+    for name, value in win32.capabilities().items():
+        if name != "windows":
+            out(f"{name}: {', '.join(value) if isinstance(value, list) else value}")
+
+
 def _display_config(out) -> None:
     from nightlight.hardware import win32
 
@@ -97,6 +107,12 @@ def _display_config(out) -> None:
             nits = win32.get_sdr_white_level(target)
             out(f"  SDR content brightness: {f'{nits:.0f} nits' if nits is not None else 'unavailable'}")
         out(f"  instance {target.instance_id or '?'}")
+        if edid := target.edid:
+            size = f', {edid.diagonal_inches:g}"' if edid.diagonal_inches else ""
+            out(f"  EDID: {edid.manufacturer} {edid.product_code:04X} {edid.name or '(no name)'}, made {edid.year}{size}, "
+                f"serial {'present' if edid.serial else 'none'}; identity {target.key}")
+        else:
+            out(f"  EDID: not in the registry; identity {target.key or '?'}")
 
 
 def _ddc(out) -> None:

@@ -2,6 +2,7 @@
 """Layouts of the Windows API structures, and smoke tests that only run on Windows."""
 
 import ctypes
+import time
 import os
 import sys
 
@@ -69,3 +70,80 @@ def test_gamma_ramps_can_be_read():
 def test_physical_monitor_handles_open_and_close():
     for monitor in win32.physical_monitors():
         win32.destroy_physical_monitor(monitor.handle)
+
+
+def test_every_structure_matches_the_sdk_layout():
+    assert win32.layout_problems() == []
+    assert win32.self_check() == []
+
+
+def test_error_codes_are_explained():
+    text = win32.describe_error(win32.ERROR_GRAPHICS_DDCCI_INVALID_MESSAGE_COMMAND)
+    assert text.startswith("0xC0262589") and "DDC/CI may be off" in text
+    assert "disconnected" in win32.describe_error(win32.ERROR_GRAPHICS_MONITOR_NO_LONGER_EXISTS)
+    assert "Remote Desktop" in win32.describe_error(win32.ERROR_ACCESS_DENIED)
+    assert "without an error code" in win32.describe_error(0)  # some drivers fail and leave no code
+
+
+def test_ddc_errors_are_classified_like_monitorian():
+    assert win32.DdcError("x", win32.ERROR_GRAPHICS_DDCCI_VCP_NOT_SUPPORTED).status == "not supported"
+    assert win32.DdcError("x", win32.ERROR_GRAPHICS_I2C_ERROR_TRANSMITTING_DATA).status == "transmission failed"
+    assert win32.DdcError("x", win32.ERROR_GRAPHICS_DDCCI_INVALID_MESSAGE_CHECKSUM).transient
+    assert not win32.DdcError("x", win32.ERROR_GRAPHICS_DDCCI_VCP_NOT_SUPPORTED).transient
+
+
+class _FakeDxva2:
+    def __init__(self, times):
+        self.times = times
+
+    def SetVCPFeature(self, handle, code, value):
+        self.times.append(time.monotonic())
+        return True
+
+
+def test_messages_to_one_monitor_are_spaced_out(monkeypatch):
+    times = []
+    monkeypatch.setattr(win32, "_dxva2", _FakeDxva2(times), raising=False)
+    win32.forget_handle(99)
+    for _ in range(3):
+        win32.set_vcp(99, win32.VCP_LUMINANCE, 50)
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    assert all(gap >= win32.DDC_MIN_INTERVAL - 0.005 for gap in gaps), gaps
+
+
+def test_out_of_range_values_never_reach_windows():
+    with pytest.raises(ValueError):
+        win32.set_vcp(1, 0x10, 70000)
+    with pytest.raises(ValueError):
+        win32.get_vcp(1, 300)
+
+
+@windows_only
+def test_gamma_ramps_must_have_the_right_shape():
+    with pytest.raises(ValueError):
+        win32.set_gamma_ramp("\\\\.\\DISPLAY1", [[0] * 10] * 3)
+
+
+@windows_only
+def test_capabilities_are_detected():
+    caps = win32.capabilities()
+    assert caps["windows"] and caps["build"] > 0 and caps["layout problems"] == "none"
+
+
+@windows_only
+@real_display
+def test_each_display_has_a_stable_identity_from_its_edid():
+    for target in win32.display_targets():
+        assert target.edid is not None, f"no EDID in the registry for {target.instance_id}"
+        assert target.key.startswith(target.edid.hardware_id)
+        assert target.hardware_id == target.edid.hardware_id  # the registry and the device path agree
+
+
+@windows_only
+@real_display
+def test_an_invalid_handle_is_reported_as_a_vanished_monitor():
+    if not win32.ddc_available():
+        pytest.skip("no dxva2")
+    with pytest.raises(win32.DdcError) as raised:
+        win32.get_vcp(0x7FFF1234, win32.VCP_LUMINANCE)
+    assert raised.value.monitor_gone

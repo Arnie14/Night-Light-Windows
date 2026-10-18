@@ -12,9 +12,14 @@ events, the last level set in this app is restored then:
 
 Only those moments: a monitor that stays connected is never changed behind
 the user's back, so its own buttons and Windows' adaptive or battery
-brightness keep working. Only levels set in this app are remembered, not
-levels read from the monitor, so a monitor that wakes up at the wrong level
-can't overwrite the remembered one before it is restored.
+brightness keep working. Only levels set in this app (by the user or the
+brightness schedule) are remembered, not levels read from the monitor, so a
+monitor that wakes up at the wrong level can't overwrite the remembered one
+before it is restored.
+
+Displays are remembered by their stable key (EDID manufacturer, product and
+serial, see win32.DisplayTarget.key). Levels saved by older versions under
+the hardware id alone are carried over the first time the display is seen.
 
 A restore waits until the monitor's current level has been read. Monitors
 often don't answer DDC/CI for a few seconds after waking or being plugged in,
@@ -35,8 +40,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer
 
-from nightlight.hardware.brightness import MonitorInfo
-from nightlight.monitors import MonitorManager
+from nightlight.hardware.brightness import MonitorInfo, legacy_key
+from nightlight.monitors import RESTORE, MonitorManager
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +61,7 @@ class BrightnessMemory(QObject):
         self._save_timer = QTimer(self, singleShot=True, interval=SAVE_DELAY_MS)
         self._save_timer.timeout.connect(self.save)
         monitors.monitorsChanged.connect(self._on_monitors_changed)
-        monitors.brightnessChanged.connect(self._on_brightness)
+        monitors.observed.connect(self._on_observed)
         monitors.brightnessSet.connect(self._on_set)
         monitors.restoreDeferred.connect(self._on_deferred)
 
@@ -88,6 +93,7 @@ class BrightnessMemory(QObject):
 
     def _on_monitors_changed(self, monitors: list[MonitorInfo]) -> None:
         keys = {m.key for m in monitors if m.supported}
+        self._migrate(keys)
         if self._enabled:
             new = keys if self._restore_everything else keys - self._present
             self._due = (self._due | new) & keys & self.levels.keys()
@@ -96,30 +102,35 @@ class BrightnessMemory(QObject):
         self._restore_everything = False
         self._present = keys
 
-    def _on_brightness(self, index: int, value: int | None) -> None:
-        monitor = self._monitors.monitor(index)
-        if monitor is None or monitor.key not in self._due or value is None:
+    def _migrate(self, keys: set[str]) -> None:
+        """Carry levels saved under a display's old key (hardware id only) over to its key now."""
+        for key in keys - self.levels.keys():
+            old = legacy_key(key)
+            if old != key and old in self.levels and not any(k != key and legacy_key(k) == old for k in keys):
+                self.levels[key] = self.levels.pop(old)
+                log.info("Remembered brightness of %s now kept under %s", old, key)
+                self._save_timer.start()
+
+    def _on_observed(self, key: str, value: int | None) -> None:
+        monitor = self._monitors.monitor(key)
+        if monitor is None or key not in self._due or value is None:
             return  # not due, or not answering yet: a later detection retries
-        self._due.discard(monitor.key)
+        self._due.discard(key)
         # Never below what the monitor's slider allows (a laptop panel isn't restored to black).
-        target = max(self.levels[monitor.key], monitor.minimum)
+        target = max(self.levels[key], monitor.minimum)
         if value != target:
             log.info("Restoring %s brightness: %d%% -> %d%%", monitor.name, value, target)
-            self._monitors.restore_brightness(index, target)
+            self._monitors.restore_brightness(key, target)
 
-    def _on_deferred(self, index: int) -> None:
+    def _on_deferred(self, key: str, source: str) -> None:
         """The monitor was asleep or the write failed: restore at a later reading."""
-        monitor = self._monitors.monitor(index)
-        if monitor is not None and self._enabled and monitor.key in self.levels:
-            self._due.add(monitor.key)
+        if source == RESTORE and self._enabled and key in self.levels:
+            self._due.add(key)
 
-    def _on_set(self, index: int, value: int) -> None:
-        monitor = self._monitors.monitor(index)
-        if monitor is None:
-            return
-        self._due.discard(monitor.key)  # the user just chose a level; don't override it
-        if self._enabled and self.levels.get(monitor.key) != value:
-            self.levels[monitor.key] = value
+    def _on_set(self, key: str, value: int, source: str) -> None:
+        self._due.discard(key)  # a level was just chosen; don't override it
+        if self._enabled and self.levels.get(key) != value:
+            self.levels[key] = value
             self._save_timer.start()
 
 

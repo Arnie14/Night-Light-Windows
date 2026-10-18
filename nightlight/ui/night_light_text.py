@@ -46,8 +46,8 @@ def schedule_description(controller: NightLightController) -> str:
     if not config.enabled or config.mode is Mode.ALWAYS:
         return ""
     lines = []
-    evening = next_transition(config, now, to_night=True)
-    morning = next_transition(config, now, to_night=False)
+    evening = next_transition(config, now, to_night=True, zone=controller.zone)
+    morning = next_transition(config, now, to_night=False, zone=controller.zone)
     if evening:
         lines.append(f"Color temperature begins changing to night time at {_hhmm(evening.start)} and is fully changed by {_hhmm(evening.end)}")
     if morning:
@@ -76,7 +76,7 @@ def build_override_menu(controller: NightLightController, menu: QMenu) -> str:
         manual_label = "Until manually disabled"
 
     menu.addAction("For 1 hour", lambda: controller.set_override(kind, controller.now() + timedelta(hours=1)))
-    if transition := next_transition(controller.config, now, to_night):
+    if transition := next_transition(controller.config, now, to_night, zone=controller.zone):
         day = "this" if transition.start.date() == now.date() else "tomorrow"
         menu.addAction(until_label.format(day=day), lambda: controller.set_override(kind, transition.start))
     menu.addAction(manual_label, lambda: controller.set_override(kind, None))

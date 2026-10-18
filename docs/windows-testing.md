@@ -1,8 +1,10 @@
 # Windows test plan
 
-A checklist for the first full run on real Windows hardware. Most of the app has only run on Linux so far, and the Windows backends have unit tests against a fake of the Windows APIs, but have never touched real hardware. The background for many checks is in [windows-notes.md](windows-notes.md).
+A checklist for running Winlight on real Windows hardware. The Windows backends have unit tests against a fake of the Windows APIs; this plan covers what only real hardware and a person at the screen can check. The background for many checks is in [windows-notes.md](windows-notes.md).
 
 Note the hardware for each run: Windows version, GPU and driver, each monitor's model, and how it's connected (HDMI, DisplayPort, USB-C, dock).
+
+**First run so far** (October 2026, a laptop with only its built-in panel; details in [windows-notes.md §10](windows-notes.md#10-first-windows-run-october-2026)): §1 and §2 pass; the backend parts of §4 (laptop panel, software dimming on its gamma ramp), §5 (night light, the warmth limit, crash recovery), §5b (the brightness schedule), §6 (remember brightness) and the sleep handling of §7 were verified by driving the real app and APIs without the GUI. Still to do: the GUI and visual checks (§3, §9), anything needing external monitors, a TV or HDR (§4, §7 hotplug), and the installed app (§10).
 
 ## 0. Setup
 
@@ -27,7 +29,7 @@ Before testing night light:
 pytest
 ```
 
-Expected: everything passes, and **nothing is skipped**. The Windows-only tests check the ctypes structure sizes, `QueryDisplayConfig`, reading gamma ramps and opening DDC/CI handles. A failure in `test_win32.py` means a binding is wrong; send its output.
+Expected: everything passes, and **nothing is skipped**. The Windows-only tests check the ctypes structure sizes, `QueryDisplayConfig`, each display's EDID identity, reading gamma ramps, opening DDC/CI handles, the error for an invalid handle, and (in a separate process with a real window) Windows' power notifications. A failure in `test_win32.py` means a binding is wrong; send its output.
 
 ## 2. Probe report
 
@@ -39,13 +41,25 @@ This prints, and saves to the log folder as `probe.txt`, what each API says abou
 
 Check that:
 
-- [ ] Each monitor appears under "Displays" with its real model name, the right connector, and the right HDR state.
+- [ ] "Windows capabilities and ctypes layouts" says `layout problems: none`.
+- [ ] Each monitor appears under "Displays" with its real model name, the right connector, and the right HDR state, and an "EDID:" line with its identity. Two identical monitors should have different identities if their EDID has a serial ("serial present").
 - [ ] Each external monitor that has DDC/CI on reads a brightness under "DDC/CI monitors" ("VCP 0x10 brightness: N of M").
 - [ ] A laptop panel appears under "Built-in panels (WMI)".
 - [ ] "Warmest night light Windows accepts" shows a temperature, which is the limit described in windows-notes.md.
 - [ ] "What the app sees" lists each display once, with a sensible name and brightness.
 
 **Send the whole report back**, whatever the results; it is the starting point for any fix.
+
+## 2b. Compatibility report
+
+```powershell
+python main.py --report
+```
+
+The user-facing summary (also in Settings > Displays, with Copy and Save). It sends nothing to the displays.
+
+- [ ] Each display is listed once, with the right connection and "Brightness:" matching how it really works (DDC/CI, WMI for the laptop panel, Windows SDR brightness for HDR without DDC/CI, software dimming, or "not controllable" with a reason and something to try).
+- [ ] Settings > Displays shows the same, and hovering over a row shows the details. Copy report puts the same text on the clipboard.
 
 ## 3. Start, tray and flyout
 
@@ -79,15 +93,17 @@ Per external monitor:
 - [ ] After a fast drag, the monitor ends at the slider's final value.
 - [ ] 0% and 100% match the monitor's own menu minimum and maximum.
 - [ ] Change brightness with the monitor's buttons, then reopen the flyout after 5 s or more: the slider shows the new value.
-- [ ] A monitor with DDC/CI switched off in its menu shows "not supported", with advice to turn DDC/CI on (switch it off, then click ⟳).
+- [ ] A monitor with DDC/CI switched off in its menu shows a **disabled** slider with "DDC/CI didn't answer" under it, and advice to turn DDC/CI on in its tooltip (switch it off, then click ⟳).
+- [ ] No slider ever moves without changing anything: whenever a display can't be changed (checking, reading, in standby, not responding, disconnected), its slider is disabled with a few words saying why.
 - [ ] Turn the monitor off with its power button and back on, with Winlight running: it is listed again with working brightness within about 10 s (DisplayPort monitors usually disappear while off; HDMI ones often stay listed).
-- [ ] Sleep the PC with the monitor connected, wake it: the monitor wakes normally and isn't woken or turned on by Winlight on its own. **Note any monitor that stays black or needs unplugging** (some firmware hangs if sent DDC/CI while asleep).
+- [ ] Sleep the PC with the monitor connected, wake it: the monitor wakes normally and isn't woken or turned on by Winlight on its own. **Note any monitor that stays black or needs unplugging** (some firmware hangs if sent DDC/CI while asleep). Right after waking it may briefly say "Not answering yet, retrying" (not "DDC/CI didn't answer"), then work.
 - [ ] Note any **flicker** while dragging the slider, or a monitor that changes in visible steps instead of smoothly.
-- [ ] If the flyout ever shows "A display isn't responding", note which display and what you were doing, and send the log.
+- [ ] If the flyout ever shows "A display isn't responding" or a slider says "Not responding", note which display and what you were doing, and send the log. The other displays should keep working meanwhile.
+- [ ] A monitor that accepts changes but doesn't apply them: the log says "accepted N% but reports M%" and the slider shows what the monitor reports.
 
 TVs and displays without DDC/CI (software dimming):
 
-- [ ] The TV is listed with a slider and "Software dimming" under its name (Settings > General > "Dim displays without brightness control" is on by default). If it says "not supported" instead, send `probe.txt`.
+- [ ] The TV is listed with a slider and "Software dimming" under its name (Settings > Brightness > "Dim displays without brightness control" is on by default). If it says "DDC/CI didn't answer" instead, send `probe.txt`.
 - [ ] Dragging its slider dims the picture smoothly down to 20%. Note how dark 20% looks, and any banding in dark gradients.
 - [ ] With night light on, the TV is both dimmed and warm; turning night light off keeps it dimmed.
 - [ ] Quit Winlight: the TV goes back to full brightness. Start it again: the dimming comes back (with "Remember each display's brightness" on).
@@ -126,7 +142,8 @@ In Configure Night Light, choose "Always on":
 - [ ] Optional: set `GdiIcmGammaRange` (DWORD `256` under `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM`), sign out and in, and check that 2000 K now works.
 - [ ] Quit from the tray menu: the screens return to normal.
 - [ ] With a calibrated monitor (ICC profile with calibration), quitting restores the calibrated look, not a flat one.
-- [ ] At 4500 K or warmer, end the app from Task Manager, so it has no chance to clean up, then start it again. The log says the ramp "already had a tinted gamma ramp", and quitting returns the screen to neutral.
+- [ ] At 4500 K or warmer, end the app from Task Manager, so it has no chance to clean up, then start it again. The log says the display "still had the tint Winlight left when it last stopped unexpectedly", and quitting returns the screen to its normal (calibrated, if it is) look. *(Verified on the first run's laptop, with a calibration.)*
+- [ ] Run `python main.py` in a terminal with night light on and press Ctrl+C: the log says "quitting cleanly" and the colors return to normal. Same with closing the terminal window.
 - [ ] Turn HDR on for a display (Settings > Display > Use HDR): the log warns once and that display isn't tinted, while the others still are.
 
 Schedule:
@@ -139,6 +156,19 @@ Schedule:
 - [ ] Close and reopen the settings (and restart the app): the city or custom location you applied is still selected.
 - [ ] Suspend for 1 hour, then Resume, from both the tray menu and the flyout.
 
+## 5b. Brightness schedule
+
+In Settings > Brightness, tick **Change brightness by time of day**:
+
+- [ ] Each preset fills in its times; editing one switches the preset to "Custom". The line under the schedule says the current level and the next change.
+- [ ] Custom times with a point a couple of minutes ahead, Apply: every display changes at that minute (the log says "Brightness schedule: N% from …"). Displays without control are left alone.
+- [ ] Drag a slider after a point has applied: your level stays until the next point, which then applies to every display.
+- [ ] Quit and start again within the same point: the levels you set come back (remembered), the schedule doesn't reset them.
+- [ ] Sleep through a point (or two), wake: only the latest point applies, once.
+- [ ] A sunrise or sunset point with a Night Light location: the time shown matches a sunrise/sunset table. Without a location, the line says 07:00 and 19:00 are used.
+- [ ] "Change over" (gradual): the displays step towards the new level over that time.
+- [ ] A monitor asleep or not answering at a point gets the level once it answers.
+
 ## 6. Startup
 
 In Settings > General:
@@ -149,7 +179,7 @@ In Settings > General:
 - [ ] Untick **Start minimized in the system tray** and Apply, quit and start again: the settings window opens at start. Tick it again: only the tray icon appears.
 - [ ] With both ticked, sign out and in: still only the tray icon.
 
-Brightness options, also in Settings > General:
+Brightness options, in Settings > Brightness:
 
 - [ ] **Remember each display's brightness** (on by default): set each display to a distinctive level in the flyout (e.g. 23% and 61%), quit and start again: they come back to those levels within a few seconds. The log says "Restoring … brightness".
 - [ ] Change a monitor with **its own buttons**, then wait a minute with Winlight running: Winlight doesn't change it back.
@@ -157,7 +187,7 @@ Brightness options, also in Settings > General:
 - [ ] Unplug a monitor, change its brightness with its buttons, plug it back in: it returns to the Winlight level. Then move it to **another port** (or HDMI ↔ DisplayPort): it is still recognised and restored.
 - [ ] Laptop: drag the built-in display's slider fully left: it stops at 1%, the screen doesn't go black.
 - [ ] Turn the option off and Apply, change levels, restart: nothing is restored.
-- [ ] `%LOCALAPPDATA%\night-light\brightness.json` lists each display by a short code such as `DEL41A2`. Note any that look odd (two monitors sharing one, or an empty one).
+- [ ] `%LOCALAPPDATA%\night-light\brightness.json` lists each display by a short code such as `DEL41A2`, followed by its serial number when the EDID has one (`DEL41A2:7XKJ9F3`). Note any that look odd (two monitors sharing one, or an empty one). Two identical monitors should have different codes, and keep them when swapped between ports.
 - [ ] **Change all displays together**: dragging one slider moves every display's slider and brightness, smoothly.
 
 ## 7. Changes, sleep and hotplug
@@ -165,7 +195,9 @@ Brightness options, also in Settings > General:
 - [ ] Unplug an external monitor: within a few seconds the flyout no longer lists it.
 - [ ] Plug it back in: it reappears within about 10 s, with working brightness.
 - [ ] Change resolution, or the scaling of one display: night light stays applied (it is re-applied within about 1 s).
-- [ ] Sleep the PC for over a minute, then wake it: night light is still applied, and within about 30 s brightness works on every monitor. The log shows "Woke up after…".
+- [ ] Sleep the PC for over a minute, then wake it: night light is still applied, and within about 30 s brightness works on every monitor. The log shows "Windows: suspend", then "Windows: resume" once, and detections at about 3, 8, 15, 30, 60 and 120 s. *(The sequence was verified with real power messages on the first run.)*
+- [ ] Hibernate and resume: the same.
+- [ ] Let Windows turn the screens off (Settings > System > Power > Screen timeout), then wake them: the log shows "Windows: display off" and "display on", nothing is sent to the displays while off, and they are detected again after.
 - [ ] Lock and unlock (Win+L), and turn a monitor off and on with its power button: note anything that stops working.
 
 ## 8. Running alongside other tools
@@ -173,12 +205,14 @@ Brightness options, also in Settings > General:
 - [ ] Start `python main.py` a second time: no second tray icon; the first copy's flyout opens instead.
 - [ ] With Windows Night Light on as well as this app: do the tints stack (extra warm) or does one win? Note what you see.
 - [ ] With f.lux running: the log notes the ramp being changed by something else. Expect the two to fight; just note how bad it looks.
+- [ ] Twinkle Tray or Monitorian running at the same time: both send DDC/CI to the same monitors. Note whether either misbehaves.
 
 ## 9. Display scaling and layout
 
 - [ ] Two monitors with different scaling (for example 100% and 150%): the flyout opens at the right place and size on the one with the taskbar.
 - [ ] The settings window and flyout look right in the Windows dark and light themes: all text readable (including the grey status and hint text), nothing cut off or overlapping, the wide fields in the settings ending on one vertical line.
-- [ ] The settings window resizes itself when switching between Always off, Always on, location and custom times, without leaving empty space or clipping rows.
+- [ ] Switching between Always off, Always on, location and custom times shows and hides rows in the Night Light card without leaving gaps or stray dividers; the window keeps its size, and a page scrolls only when it is taller than the window.
+- [ ] The navigation pane (Night Light, Brightness, Displays, General) shows which page is open; Tab reaches every control (Space opens a page or flips an On/Off switch). The Brightness page with several schedule times, and the Displays page with all displays, keep their rows aligned; the schedule's details fold away while it is off.
 - [ ] Take screenshots of the flyout and the settings window in both themes and send them back.
 
 ## 10. The installed app
@@ -198,7 +232,7 @@ With a build from [Releases](https://github.com/Arnie14/Night-Light-Windows/rele
 
 ## What to send back
 
-- `probe.txt` and `night-light.log`, both from `%LOCALAPPDATA%\night-light\Logs\`.
+- `probe.txt`, `compatibility.txt` and `night-light.log`, all from `%LOCALAPPDATA%\night-light\Logs\`.
 - The screenshots.
 - The failing checklist items, with what happened instead.
 - The output of `pytest`, if anything failed.

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, tzinfo
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -41,16 +41,19 @@ class NightLightController(QObject):
         config: NightLightConfig,
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         parent: QObject | None = None,
+        zone: tzinfo | None = None,
     ) -> None:
         super().__init__(parent)
         self._gamma = gamma
         self._config = config
         self._clock = clock
+        # The local time zone, so schedules stay right across daylight saving changes.
+        self.zone = zone
         self._override: Override | None = None
         self._preview: int | None = None  # live preview while dragging a slider
         self._current: int | None = None  # what the displays show now
         self._animation_target: int | None = None
-        self.state: NightLightState = compute_state(config, clock())
+        self.state: NightLightState = compute_state(config, clock(), zone=zone)
 
         self._animation = QTimer(self)
         self._animation.timeout.connect(self._animation_step)
@@ -100,7 +103,7 @@ class NightLightController(QObject):
         if self._override is not None and not self._override.active_at(now):
             log.info("Night light override expired")
             self._override = None
-        self.state = compute_state(self._config, now, self._override)
+        self.state = compute_state(self._config, now, self._override, self.zone)
         self._retarget(reapply=True)
         self.changed.emit()
 

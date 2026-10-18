@@ -19,7 +19,8 @@ a = Analysis(  # noqa: F821
     # The time zone table for picking a location (nightlight/core/locations.py).
     datas=[(str(root / "nightlight" / "data"), "nightlight/data")],
     # Imported inside functions, only on Windows: listed so they're never missed.
-    hiddenimports=["wmi", "pythoncom", "pywintypes", "win32com.client"],
+    # tzdata: zoneinfo's time zone database, which Windows lacks (schedules across daylight saving changes).
+    hiddenimports=["wmi", "pythoncom", "pywintypes", "win32com.client", "zoneinfo", "tzdata"],
     # Linux-only backends and development tools.
     excludes=["tkinter", "monitorcontrol", "jeepney", "pytest", "_pytest"],
     noarchive=False,
