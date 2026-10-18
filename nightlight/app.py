@@ -65,6 +65,7 @@ class NightLightApp:
             winsystem.idle_seconds,
             lambda: winsystem.display_required() or winsystem.user_busy(),
             lambda: frozenset(d.key for d in self._config.displays if d.hidden),
+            gamma,
         )
         self.brightness_keys = BrightnessKeys(self.monitors, lambda: frozenset(d.key for d in self._config.displays if d.hidden))
         self.controller = NightLightController(gamma, self._config.night_light)
@@ -270,7 +271,7 @@ class NightLightApp:
     def _shutdown(self) -> None:
         self._night_light_check.stop()
         self._exemptions.stop()
-        self.idle_dimmer.wake()  # quitting while dimmed: levels back first (queued before the monitor thread stops)
+        self.idle_dimmer.release()  # quitting while dimmed: levels back first (queued before the monitor thread stops)
         self.controller.shutdown()
         self.brightness_memory.shutdown()
         self.monitors.shutdown()

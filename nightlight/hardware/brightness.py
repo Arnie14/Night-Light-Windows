@@ -32,6 +32,8 @@ class MonitorInfo:
     # panel), "sdr" (Windows' SDR content brightness, for HDR displays) or
     # "software" (dimming the gamma ramp, for displays without either).
     control: str = "hardware"
+    display: str = ""  # Windows' GDI name ("\\.\DISPLAY2"), for its gamma ramp; "" if unknown
+    hdr: bool = False  # HDR on: gamma ramps (night light, software dimming) don't apply
     # The lowest level the slider offers: 1 for laptop panels, which can go
     # fully dark at 0 (KDE keeps them above zero too), and software dimming's
     # floor, below which Windows rejects the ramp.
@@ -143,10 +145,10 @@ class FakeBrightnessBackend:
         self._latency = latency
         # One of each kind of control, and one display without any.
         self._monitors = [
-            MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2"),
-            MonitorInfo(1, "LG 27GP950 (HDR)", True, key="GSM5BBF", control="sdr"),
-            MonitorInfo(2, "Living room TV", True, key="SAM7136", control="software", minimum=20),
-            MonitorInfo(3, "Old projector", False, key="EPS0000", reason="Didn't answer over DDC/CI. Turn DDC/CI on in the display's own menu"),
+            MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2", display=r"\\.\DISPLAY1"),
+            MonitorInfo(1, "LG 27GP950 (HDR)", True, key="GSM5BBF", control="sdr", display=r"\\.\DISPLAY2", hdr=True),
+            MonitorInfo(2, "Living room TV", True, key="SAM7136", control="software", minimum=20, display=r"\\.\DISPLAY3"),
+            MonitorInfo(3, "Old projector", False, key="EPS0000", reason="Didn't answer over DDC/CI. Turn DDC/CI on in the display's own menu", display=r"\\.\DISPLAY4"),
         ]
         self._brightness = {0: 70, 1: 40, 2: 100}
         self.software_dimming = True

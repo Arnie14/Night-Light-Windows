@@ -40,6 +40,11 @@ class FakeGammaBackend:
     def verify(self) -> bool:
         return False
 
+    def set_idle_dim(self, levels: dict[str, int]) -> None:
+        if levels != getattr(self, "idle_dims", {}):
+            log.info("Fake idle dimming: %s", levels or "off")
+        self.idle_dims = dict(levels)
+
     @property
     def dimmed(self) -> bool:
         return any(dim < 100 for dim in self.dims.values())

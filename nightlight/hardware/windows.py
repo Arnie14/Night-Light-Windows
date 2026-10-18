@@ -283,14 +283,16 @@ class WindowsBrightnessBackend:
                     monitor = _Monitor(MonitorInfo(0, name, False, NO_DDC_REASON + (TV_HINT if hdmi else "")))
                 if not monitor.info.supported and not skipped:
                     monitor = self._fallback(monitor, target)
-                monitor.info = replace(monitor.info, key=target.hardware_id, internal=target.internal)
+                monitor.info = replace(monitor.info, key=target.hardware_id, internal=target.internal, display=target.gdi_name, hdr=target.hdr)
                 monitors.append(monitor)
             monitors += responding  # more answering monitors than targets; shouldn't happen
 
         # Displays the display configuration didn't describe (or it failed).
         for physicals in by_display.values():
             for physical in physicals:
-                monitors.append(self._probe(physical) or _Monitor(MonitorInfo(0, physical.description, False)))
+                monitor = self._probe(physical) or _Monitor(MonitorInfo(0, physical.description, False))
+                monitor.info = replace(monitor.info, display=physical.gdi_name)
+                monitors.append(monitor)
         for instance, current, levels in panels:
             info = MonitorInfo(0, "Built-in display", True, key="internal", internal=True, minimum=1)
             monitors.append(_Monitor(info, _WmiControl(self._get_wmi, instance, levels), current))
@@ -444,6 +446,7 @@ class _GammaDisplay:
     last_set: win32.GammaRamp | None = None
     warmest: int = 0  # warmest temperature Windows accepted here, once it refused one
     dim: int = 100  # software dimming, percent (100: none)
+    idle_dim: int = 100  # dimming while the PC is left alone, a separate layer; the darker of the two wins
     dim_floor: int = 0  # darkest dimming Windows accepted here, once it refused one
     leftover: bool = False  # found tinted (a crash, f.lux): put neutral back even if we never set it
     kelvin_override: int | None = None  # this display's own temperature (night light paused for an app)
@@ -475,7 +478,18 @@ class WindowsGammaBackend:
     @property
     def dimmed(self) -> bool:
         """Some display is dimmed, so its ramp must be kept even while night light is off."""
-        return any(d.dim < 100 for d in self._displays.values())
+        return any(min(d.dim, d.idle_dim) < 100 for d in self._displays.values())
+
+    def set_idle_dim(self, levels: dict[str, int]) -> None:
+        """Dim these displays (GDI name -> percent) for idle, undim the rest.
+        Software only: no DDC/CI writes. HDR displays are skipped, since
+        Windows ignores gamma ramps there."""
+        with self._lock:
+            for display in self._current_displays():
+                level = 100 if display.hdr else max(SOFTWARE_DIM_MIN, min(100, levels.get(display.name, 100)))
+                if level != display.idle_dim:
+                    display.idle_dim = level
+                    self._apply(display)
 
     def displays_changed(self) -> None:
         """Displays were added, removed or reconfigured: look at them again.
@@ -486,7 +500,7 @@ class WindowsGammaBackend:
                 display.warmest = 0
                 display.dim_floor = 0
             for display in self._current_displays():
-                if display.dim < 100:
+                if min(display.dim, display.idle_dim) < 100:
                     self._apply(display)
 
     def apply(self, kelvin: int) -> None:
@@ -501,7 +515,7 @@ class WindowsGammaBackend:
         with self._lock:
             self._kelvin = NEUTRAL_KELVIN
             for display in self._current_displays():
-                if display.dim < 100 or display.kelvin_override is not None:
+                if min(display.dim, display.idle_dim) < 100 or display.kelvin_override is not None:
                     self._apply(display)
                 elif self._owned(display):
                     base = display.base or identity_ramp(win32.RAMP_SIZE)
@@ -513,6 +527,7 @@ class WindowsGammaBackend:
         with self._lock:
             for display in self._current_displays():
                 display.kelvin_override = None
+                display.idle_dim = 100
                 if self._owned(display):
                     self._set(display, display.base or identity_ramp(win32.RAMP_SIZE))
 
@@ -549,7 +564,7 @@ class WindowsGammaBackend:
                     continue
                 log.debug("The gamma ramp of %s was reset; applying it again", display.name)
                 self._sync_base(display)
-                active = self._kelvin < NEUTRAL_KELVIN or display.dim < 100 or display.kelvin_override is not None
+                active = self._kelvin < NEUTRAL_KELVIN or min(display.dim, display.idle_dim) < 100 or display.kelvin_override is not None
                 if active:
                     self._apply(display)
                 elif display.leftover:
@@ -595,7 +610,7 @@ class WindowsGammaBackend:
             return
         own = display.kelvin_override if display.kelvin_override is not None else self._kelvin
         kelvin = max(own, display.warmest)
-        dim = max(display.dim, display.dim_floor)
+        dim = max(min(display.dim, display.idle_dim), display.dim_floor)
         if self._try(display, kelvin, dim) or (kelvin >= NEUTRAL_KELVIN and dim >= 100):
             return
         # Windows rejects ramps far from identity unless the GdiIcmGammaRange

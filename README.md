@@ -51,7 +51,7 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 | Private logs and reports | 🧪 Needs Windows testing | User name, computer name, home folder and emails are scrubbed from every log line and report; no location, custom names or listed app names are written. |
 | Never steals focus from fullscreen games | 🧪 Needs Windows testing | Windows' "don't interrupt" state and fullscreen detection keep Winlight from opening windows on its own over a game, video or presentation. |
 | Laptop brightness keys move external displays too | 🧪 Needs Windows testing | Optional. Follows the laptop panel's level rather than intercepting the keys. |
-| Dim when idle | 🧪 Needs Windows testing | Optional: displays dim after a few minutes without input and come back on the first key or mouse move. Not while a video, game or presentation keeps the screen on. |
+| Dim when idle | 🧪 Needs Windows testing | Optional: displays dim after a few minutes without input and come back on the first key or mouse move. Not while a video, game or presentation keeps the screen on. External displays dim in software (no DDC/CI writes), the laptop panel through Windows (saving power), HDR displays through their SDR brightness or not at all. |
 | Displays followed after sleep | 🧪 Needs Windows testing | Re-detection at 2 s to 2 min after waking, each pass logged with its timing, stopping once every display is back. |
 | Multi-display detection, hotplug and sleep | 🧪 Needs Windows testing | Re-detection after display changes and waking, several times, as monitors are often slow to answer. |
 | Start at sign-in, start minimized | ✅ Ready | The current user's Run registry key; no administrator rights. |

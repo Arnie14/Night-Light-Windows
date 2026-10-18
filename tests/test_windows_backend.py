@@ -493,3 +493,22 @@ def test_a_display_can_pause_night_light_on_its_own(monkeypatch):
     assert peak_blue(gdi, d2) == 1.0
     gamma.set_override(d2, None)
     assert peak_blue(gdi, d2) == pytest.approx(peak_blue(gdi, D1))
+
+
+def test_idle_dimming_is_a_layer_that_skips_hdr_displays(monkeypatch):
+    d2 = r"\\.\DISPLAY2"
+    gdi = FakeGdi({D1: identity_ramp(), d2: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "TV"), target(d2, "HDR", hdr=True)])
+    gamma = windows.WindowsGammaBackend()
+    gamma.set_dimming(D1, 60)  # the TV's own software level
+    own = mid(gdi)
+    gamma.set_idle_dim({D1: 30, d2: 30})
+    assert mid(gdi) < own  # darker while idle
+    assert gdi.ramps[d2] == identity_ramp()  # HDR: never touched
+    gamma.set_idle_dim({})
+    assert mid(gdi) == pytest.approx(own, abs=0.01)  # back to the TV's own level
+    gamma.set_idle_dim({D1: 90})  # lighter than its own level: its own level stays
+    assert mid(gdi) == pytest.approx(own, abs=0.01)
+    gamma.set_idle_dim({D1: 30})
+    gamma.release()
+    assert gdi.ramps[D1] == identity_ramp()

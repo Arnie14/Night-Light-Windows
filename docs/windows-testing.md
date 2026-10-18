@@ -222,7 +222,7 @@ Dimming when idle (Settings > Brightness > When idle, e.g. 1 minute to 20%):
 - [ ] Play a video in a browser or player (not fullscreen) and leave it: nothing dims. The same with a fullscreen game or a PowerPoint slideshow.
 - [ ] With the brightness schedule on, stay away across a step's time: coming back sets the step's level, not the old one.
 - [ ] Quit Winlight while dimmed: the displays come back first.
-- [ ] Hidden displays and displays without brightness control stay as they are.
+- [ ] Hidden displays stay as they are. External monitors dim through their colors (night light still on top), not their backlight: their own on-screen menu still shows the same brightness while dimmed. The laptop panel really dims (Windows' brightness slider moves too). An HDR display dims only if its slider says "SDR content brightness"; otherwise it stays as it is.
 
 Diagnostics and safe mode:
 

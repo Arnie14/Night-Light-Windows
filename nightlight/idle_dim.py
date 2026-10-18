@@ -9,11 +9,23 @@ for exactly this), nor while a game or video is fullscreen or Windows says
 not to interrupt; Twinkle Tray has the same two exceptions ("fullscreen apps
 block idle detection", "media blocks idle detection").
 
+How each display is dimmed, the safe way for each:
+- External displays (DDC/CI monitors, TVs, displays without control) are
+  dimmed in software, a separate "idle" layer of the gamma ramp, composed
+  with night light and with a TV's own software dimming. No DDC/CI writes:
+  idle cycles happen several times a day, and some monitors save every
+  change to their memory, or misbehave when written to unprompted.
+- The laptop panel is dimmed for real through WMI, Windows' own control,
+  which also saves power (Windows dims it the same way when idle).
+- HDR displays ignore gamma ramps, so they're dimmed through Windows' SDR
+  content brightness where that is their control (also Windows' own,
+  nothing sent to the display), and otherwise left alone.
+
 Safety rules:
 - Dimming only ever lowers a display, never brightens one already below
   the idle level, and leaves hidden displays alone.
-- It goes through MonitorManager.restore_brightness: it isn't the user's
-  choice (not remembered), and monitors that say they're asleep are skipped.
+- Laptop panels and SDR levels go through MonitorManager.restore_brightness:
+  not the user's choice (not remembered), skipped if asleep.
 - Coming back, each display gets the level it should have now, by the same
   rule as restores and the brightness schedule (BrightnessMemory.target), so
   a schedule step that passed while away isn't undone; else its level
@@ -36,6 +48,9 @@ log = logging.getLogger(__name__)
 
 CHECK_MS = 5000  # while waiting to dim
 WATCH_MS = 300  # while dimmed: notice input quickly
+# The software layer fades in these steps (the hardware ones fade by themselves).
+FADE_STEPS = 8
+FADE_STEP_MS = 60
 
 
 class IdleDimmer(QObject):
@@ -46,6 +61,7 @@ class IdleDimmer(QObject):
         idle_seconds: Callable[[], float],
         keeps_display_on: Callable[[], bool],
         hidden: Callable[[], frozenset[str]] = frozenset,
+        gamma=None,  # a gamma backend with set_idle_dim, for software dimming
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -57,13 +73,37 @@ class IdleDimmer(QObject):
         self._enabled = False
         self._after_s = 300.0
         self._level = 20
+        self._gamma = gamma if hasattr(gamma, "set_idle_dim") else None
         self._before: dict[int, int] | None = None  # index -> level before dimming, while dimmed
+        self._software: list[str] = []  # displays dimmed in software, while dimmed
+        self._fade: list[dict[str, int]] = []  # software levels still to apply, one per step
+        self._fade_timer = QTimer(self, interval=FADE_STEP_MS)
+        self._fade_timer.timeout.connect(self._fade_step)
         self._timer = QTimer(self, interval=CHECK_MS)
         self._timer.timeout.connect(self.check)
 
     @property
     def dimmed(self) -> bool:
         return self._before is not None
+
+    def plan(self) -> tuple[dict[int, int], list[str]]:
+        """Which displays to dim, and how: (index -> hardware/SDR level for the
+        laptop panel and SDR-controlled HDR displays, never brighter than now),
+        [GDI names to dim in software]."""
+        hidden = self._hidden()
+        levels, software = {}, []
+        for monitor in self._monitors.monitors:
+            if monitor.key in hidden:
+                continue
+            current = self._monitors.brightness.get(monitor.index)
+            if monitor.supported and (monitor.internal and monitor.control == "hardware" or monitor.control == "sdr"):
+                target = max(monitor.minimum, self._level)
+                if current is not None and target < current:
+                    levels[monitor.index] = target
+            elif not monitor.hdr and not monitor.internal and monitor.display and self._gamma is not None:
+                if monitor.display not in software:  # cloned displays share one ramp
+                    software.append(monitor.display)
+        return levels, software
 
     def configure(self, enabled: bool, minutes: int, level: int) -> None:
         self._enabled = enabled
@@ -94,23 +134,47 @@ class IdleDimmer(QObject):
             if monitor.index in before:
                 level = self._memory.target(monitor)
                 self._monitors.restore_brightness(monitor.index, before[monitor.index] if level is None else level, fade=True)
+        self._fade_software(self._level, 100, self._software)
+        self._software = []
         if self._enabled:
             self._timer.start(CHECK_MS)
 
+    def release(self) -> None:
+        """Quitting: undo at once, without fading."""
+        self._fade_timer.stop()
+        self._fade = []
+        if self.dimmed:
+            self.wake()
+        self._fade_timer.stop()
+        if self._gamma is not None:
+            self._gamma.set_idle_dim({})
+
     def _dim(self, idle: float) -> None:
-        hidden = self._hidden()
-        before = {}
-        for monitor in self._monitors.monitors:
-            current = self._monitors.brightness.get(monitor.index)
-            if not monitor.supported or monitor.key in hidden or current is None:
-                continue
-            target = max(monitor.minimum, self._level)
-            if target < current:  # never brighten
-                before[monitor.index] = current
-                self._monitors.restore_brightness(monitor.index, target, fade=True)
-        if not before:
+        levels, software = self.plan()
+        if not levels and not software:
             return
-        log.info("No input for %.0f min; dimming %d display(s) to %d%%", idle / 60, len(before), self._level)
-        self._before = before
+        log.info(
+            "No input for %.0f min; dimming to %d%%: %d display(s) in software, %d through Windows",
+            idle / 60, self._level, len(software), len(levels),
+        )
+        self._before = {index: self._monitors.brightness[index] for index in levels}
+        for index, level in levels.items():
+            self._monitors.restore_brightness(index, level, fade=True)
+        self._software = software
+        self._fade_software(100, self._level, software)
         self._memory.set_held(True)
         self._timer.start(WATCH_MS)
+
+    def _fade_software(self, start: int, end: int, displays: list[str]) -> None:
+        if self._gamma is None or not displays:
+            return
+        steps = [round(start + (end - start) * i / FADE_STEPS) for i in range(1, FADE_STEPS + 1)]
+        self._fade = [{d: level for d in displays} if level < 100 else {} for level in steps]
+        self._fade_timer.start()
+        self._fade_step()
+
+    def _fade_step(self) -> None:
+        if not self._fade:
+            self._fade_timer.stop()
+            return
+        self._gamma.set_idle_dim(self._fade.pop(0))
