@@ -21,7 +21,7 @@ Brightness and night light for every display on Windows: external monitors, TVs 
   <img src="docs/screenshots/settings-light.png" alt="Winlight settings: Night Light schedule and temperatures, startup and brightness options" width="520">
 </p>
 
-[⬇️ Download the latest release](https://github.com/Arnie14/Night-Light-Windows/releases) · Windows 10 and 11, 64-bit
+[⬇️ Download the latest release](https://github.com/Arnie14/Night-Light-Windows/releases/latest) · Windows 10 and 11, 64-bit
 
 ## ✨ Features
 

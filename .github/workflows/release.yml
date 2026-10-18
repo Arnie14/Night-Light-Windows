@@ -1,9 +1,11 @@
 # Builds the Windows app on GitHub's Windows machines: tests, then the app
 # folder, portable zip and installer (packaging/build.py).
 #
-# - Push a version tag (git tag v0.1.0-beta.1 && git push origin v0.1.0-beta.1)
-#   to publish a GitHub release with the files. Tags with a "-" (beta, rc)
-#   become pre-releases.
+# - Push a version tag (git tag -a v0.1.0-beta.3 -m "..." && git push origin
+#   v0.1.0-beta.3) to publish a GitHub release with the files, titled e.g.
+#   "Winlight 0.1.0 Beta 3". Releases and betas are full releases, marked
+#   Latest (so "Download the latest release" links work); only -alpha, -rc
+#   and -dev tags become pre-releases, for builds not meant for everyone.
 # - A push to main, or running it by hand from the Actions tab, tests and
 #   builds the files as a downloadable artifact, without a release.
 name: Build Windows app
@@ -60,14 +62,33 @@ jobs:
             dist/Winlight-*-portable.zip
           if-no-files-found: error
 
+      - name: Name the release
+        if: github.ref_type == 'tag'
+        id: release
+        shell: pwsh
+        run: |
+          # v0.1.0-beta.3 -> "Winlight 0.1.0 Beta 3"; v1.0.0 -> "Winlight 1.0.0"
+          $tag = "$env:GITHUB_REF_NAME".TrimStart("v")
+          $parts = $tag -split "-", 2
+          $title = "Winlight $($parts[0])"
+          if ($parts.Count -gt 1) {
+            $label = ($parts[1] -replace "\.", " ")
+            $title += " " + $label.Substring(0, 1).ToUpper() + $label.Substring(1)
+          }
+          $prerelease = if ($tag -match "-(alpha|rc|dev)") { "true" } else { "false" }
+          "title=$title" >> $env:GITHUB_OUTPUT
+          "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
+
       - name: Publish the release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ steps.release.outputs.title }}
           files: |
             dist/Winlight-*-setup.exe
             dist/Winlight-*-portable.zip
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ steps.release.outputs.prerelease }}
+          make_latest: ${{ steps.release.outputs.prerelease == 'false' }}
           generate_release_notes: true
           body: |
             <img src="https://raw.githubusercontent.com/Arnie14/Night-Light-Windows/${{ github.ref_name }}/docs/screenshots/flyout-light.png" width="300" alt="Winlight">
