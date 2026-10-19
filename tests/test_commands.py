@@ -129,6 +129,14 @@ def test_a_display_that_cannot_be_changed_now_says_why(handler):
     assert not reply["ok"] and "can't be changed right now: not responding" in reply["output"]
     assert commands.handle({"command": "set", "value": "40"})["ok"]  # all: the others still change
     assert monitors.faded == [("BOE0812", 40)]
+    for key in ("BOE0812", "SAM7136"):  # now every display is paused, as while the PC sleeps
+        paused = DisplayState(next(m for m in MONITORS if m.key == key), Status.PAUSED)
+        paused.message = "Paused"
+        monitors.states[key] = paused
+    reply = commands.handle({"command": "set", "value": "40"})
+    assert not reply["ok"] and reply["output"].startswith("No display can be changed right now: DELL U2720Q (not responding)")
+    monitors.states["BOE0812"] = DisplayState(MONITORS[1], Status.OK)
+    monitors.states.pop("SAM7136")
     listed = commands.handle({"command": "list"})["data"]["displays"]
     assert [d["status"] for d in listed] == ["not responding", "ok", "ok", "unsupported"]
 

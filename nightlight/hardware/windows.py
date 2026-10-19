@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sys
 import threading
 import time
@@ -48,6 +47,7 @@ from nightlight.core.colortemp import (
     ramps_match,
     whitepoint,
 )
+from nightlight.files import write_atomic
 from nightlight.hardware import win32
 from nightlight.hardware.brightness import (
     DisplayDetails,
@@ -77,6 +77,15 @@ if sys.platform == "win32":
 # How long detection waits for the DDC/CI probes, which run side by side. A
 # healthy monitor answers within a second, even with retries.
 PROBE_TIMEOUT_S = 4.0
+# Another program (f.lux, a GPU color tool, a game) setting the gamma ramp
+# too: this many changes within the window means it keeps doing so, and
+# putting night light back each time would make the screen flicker between
+# the two forever. Winlight backs off from that display for a while, longer
+# each time it happens again.
+CONTEST_CHANGES = 3
+CONTEST_WINDOW_S = 30.0
+CONTEST_BACKOFF_S = 120.0
+CONTEST_BACKOFF_MAX_S = 1800.0
 
 # Short reasons, shown under a disabled slider, and the longer advice that
 # goes with them (tooltip and compatibility report).
@@ -626,11 +635,12 @@ class WindowsBrightnessBackend:
             return []
         keys = keys or []
         calls = []
+        returned_late: set[str] = set()  # keys whose probe returned after its deadline; guarded by _stuck_lock
         for i, physical in enumerate(physicals):
             key = keys[i] if i < len(keys) else ""
             calls.append((physical, key, start_side_call(lambda p=physical, k=key: self._probe_marked(p, k),
                                                           f"probing {physical.description} on {physical.gdi_name}",
-                                                          on_late=lambda p=physical, k=key: self._late_probe(p, k))))
+                                                          on_late=lambda p=physical, k=key: self._late_probe(p, k, returned_late))))
         deadline = time.monotonic() + PROBE_TIMEOUT_S
         results = []
         for physical, key, call in calls:
@@ -640,7 +650,9 @@ class WindowsBrightnessBackend:
                 log.warning("%s on %s didn't answer within %g s; leaving it alone until it does", physical.description, physical.gdi_name, PROBE_TIMEOUT_S)
                 if key:
                     with self._stuck_lock:
-                        self._stuck[key] = f"probing {physical.description}"
+                        # Unless the probe returned in the meantime (its clean-up already ran).
+                        if key not in returned_late:
+                            self._stuck[key] = f"probing {physical.description}"
                 results.append(_HUNG)
             except Exception:
                 log.exception("Probing %s on %s failed", physical.description, physical.gdi_name)
@@ -657,11 +669,12 @@ class WindowsBrightnessBackend:
         with self.safe_mode.risky(key or physical.gdi_name, f"detecting {name} on {physical.gdi_name}"):
             return self._probe(physical)
 
-    def _late_probe(self, physical: win32.PhysicalMonitor, key: str) -> None:
+    def _late_probe(self, physical: win32.PhysicalMonitor, key: str, returned_late: set[str]) -> None:
         """A probe that was given up on returned: release its handle, and its display."""
         self._destroy_quietly(physical.handle)
         if key:
             with self._stuck_lock:
+                returned_late.add(key)
                 self._stuck.pop(key, None)
 
     def _probe(self, physical: win32.PhysicalMonitor) -> _Monitor | None:
@@ -829,10 +842,7 @@ class GammaJournal:
         if self.path is None:
             return
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"version": 1, "displays": self._entries}), encoding="utf-8")
-            os.replace(tmp, self.path)
+            write_atomic(self.path, json.dumps({"version": 1, "displays": self._entries}))
         except OSError:
             log.warning("Could not save %s", self.path, exc_info=True)
 
@@ -865,6 +875,10 @@ class _GammaDisplay:
     dim_floor: int = 0  # darkest dimming Windows accepted here, once it refused one
     leftover: bool = False  # found tinted (a crash, f.lux): put neutral back even if we never set it
     kelvin_override: int | None = None  # this display's own temperature (night light paused for an app)
+    foreign: list[float] = field(default_factory=list)  # when another program changed the ramp lately
+    contested: bool = False  # backing off from another program changing the ramp
+    contested_until: float = 0.0
+    backoff: float = 0.0  # the last back-off, doubled if it happens again
 
     @property
     def effective_dim(self) -> int:
@@ -907,7 +921,8 @@ class WindowsGammaBackend:
     @property
     def dimmed(self) -> bool:
         """Some display is dimmed, so its ramp must be kept even while night light is off."""
-        return any(d.effective_dim < 100 for d in self._displays.values())
+        with self._lock:
+            return any(d.effective_dim < 100 for d in self._displays.values())
 
     def set_idle_dim(self, levels: dict[str, int]) -> None:
         """Dim these displays (GDI name -> percent) for idle, undim the rest.
@@ -940,7 +955,15 @@ class WindowsGammaBackend:
             self._reapplied = False
             displays = self._current_displays()
             reapplied = self._reapplied  # found reset while the list was refreshed (and already re-applied)
+            now = time.monotonic()
             for display in displays:
+                if display.contested and now >= display.contested_until:
+                    display.contested = False
+                    log.info("No other program changed the colors of %s for a while; putting night light back", display.name)
+                    if not display.hdr and self._active(display):
+                        self._isolated(display, self._apply)
+                        reapplied = True
+                    continue
                 if display.hdr or display.last_set is None:
                     continue
                 try:
@@ -956,7 +979,7 @@ class WindowsGammaBackend:
                     self._isolated(display, self._apply)
                 elif display.leftover:
                     self._set(display, display.base or identity_ramp(win32.RAMP_SIZE))
-                reapplied = reapplied or active
+                reapplied = reapplied or (active and not display.contested)
         return reapplied
 
     def warmest_accepted(self) -> dict[str, int]:
@@ -1060,6 +1083,8 @@ class WindowsGammaBackend:
             log.exception("Changing the gamma ramp of %s failed", display.name)
 
     def _apply(self, display: _GammaDisplay) -> None:
+        if display.contested and time.monotonic() < display.contested_until:
+            return  # another program keeps changing it; see _foreign_change
         if display.hdr:
             self._warn_once(
                 display.name,
@@ -1172,7 +1197,7 @@ class WindowsGammaBackend:
         if display.last_set is not None:
             # Windows resets ramps on display changes and when it reloads a
             # calibration; another color tool may have changed it too.
-            log.info("The gamma ramp of %s was changed by something else; using it as the new base", display.name)
+            self._foreign_change(display)
         display.last_set = None
         key = display.key or display.name
         if not plausible_base(current):
@@ -1195,6 +1220,27 @@ class WindowsGammaBackend:
             else:
                 display.base = current
                 log.info("Keeping the existing gamma ramp of %s (its calibration) as the base for night light", display.name)
+
+    def _foreign_change(self, display: _GammaDisplay) -> None:
+        """Our ramp was replaced: once is Windows (a reset) or a tool starting;
+        again and again is another program fighting over it (see CONTEST_CHANGES)."""
+        now = time.monotonic()
+        display.foreign = [t for t in display.foreign if now - t < CONTEST_WINDOW_S] + [now]
+        if display.contested:
+            display.contested_until = now + display.backoff  # still at it: keep away
+            log.debug("The gamma ramp of %s was changed by another program again", display.name)
+            return
+        if len(display.foreign) < CONTEST_CHANGES:
+            log.info("The gamma ramp of %s was changed by something else; using it as the new base", display.name)
+            return
+        display.backoff = min(CONTEST_BACKOFF_MAX_S, display.backoff * 2) if display.backoff else CONTEST_BACKOFF_S
+        display.contested, display.contested_until = True, now + display.backoff
+        display.foreign.clear()
+        log.warning(
+            "Another program keeps changing the colors of %s (f.lux, a GPU color tool or a game?). To stop the screen flickering "
+            "between the two, Winlight leaves that display alone for %.0f min; close the other program or turn off its color changes",
+            display.name, display.backoff / 60,
+        )
 
     def _warn_once(self, display: str, kind: str, message: str, *args) -> None:
         if (display, kind) not in self._warned:

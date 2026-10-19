@@ -205,7 +205,7 @@ Brightness options, in Settings > Brightness:
 
 - [ ] Start `python main.py` a second time: no second tray icon; the first copy's flyout opens instead.
 - [ ] Turn Windows Night Light on (Settings > System > Display > Night light > Turn on now): within about 10 s the panel and Settings show "Windows Night Light is on too", and the button opens Windows' Night light page. Turn it off there: the notice goes away. If the notice never appears, export this registry key with regedit once with Windows Night Light on and once off, and send both: `HKCU\Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\default$windows.data.bluelightreduction.bluelightreductionstate`.
-- [ ] With f.lux running: the log notes the ramp being changed by something else. Expect the two to fight; just note how bad it looks.
+- [ ] With f.lux running: the log notes the ramp being changed by something else, and within a few seconds warns that "another program keeps changing the colors" of that display; from then on the screen shows f.lux's colors without flickering between the two. Quit f.lux: within about 2 minutes Winlight's night light is back. *(Verified with a program rewriting the ramp; not with f.lux itself.)*
 - [ ] Twinkle Tray or Monitorian running at the same time: both send DDC/CI to the same monitors. Note whether either misbehaves.
 
 ## 9. Display scaling and layout

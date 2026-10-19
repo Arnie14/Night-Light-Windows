@@ -314,6 +314,7 @@ class SystemEvents(QObject):
         now = self._clock()
         if what == RESUMED:
             if self._resumed_at is not None and now - self._resumed_at < RESUME_MERGE_S:
+                log.debug("Windows: resumed again %.1f s later; the same wake", now - self._resumed_at)
                 return
             self._resumed_at = now
         elif what == SUSPENDING:
@@ -321,8 +322,10 @@ class SystemEvents(QObject):
         elif what in (DISPLAY_ON, DISPLAY_OFF):
             if self._display_state is None:
                 self._display_state = what  # Windows reports the current state on registering
+                log.debug("Windows: %s (the current state, reported on registering)", what)
                 return
             if what == self._display_state:
+                log.debug("Windows: %s again; no change", what)
                 return
             self._display_state = what
         log.info("Windows: %s", what)
@@ -369,6 +372,8 @@ class SystemEvents(QObject):
         self._filter = _Filter(self._on_message)
         app.installNativeEventFilter(self._filter)
         self.listening = True
+        log.debug("Listening for sleep, display and session notifications on window 0x%X (power settings registered: %s)",
+                  self._hwnd, ", ".join("yes" if h else "no" for h in self._power))
 
     def _on_message(self, msg) -> None:
         # Broadcasts reach every top-level window of the app: take only ours.
@@ -488,8 +493,16 @@ if sys.platform == "win32":
     _shell32.SHQueryUserNotificationState.argtypes = [ctypes.POINTER(ctypes.c_int)]
     _shell32.SHQueryUserNotificationState.restype = ctypes.c_long
 
+    _kernel32.GetTickCount.argtypes = []
+    _user32.GetForegroundWindow.argtypes = []
     _user32.GetForegroundWindow.restype = wintypes.HWND
     _user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    _user32.GetClassNameW.restype = ctypes.c_int
+    _user32.GetWindowRect.restype = wintypes.BOOL
+    _user32.IsWindowVisible.restype = wintypes.BOOL
+    _user32.GetWindowTextLengthW.restype = ctypes.c_int
+    _user32.EnumWindows.restype = wintypes.BOOL
+    _kernel32.CloseHandle.restype = wintypes.BOOL
     _user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     _user32.GetWindowThreadProcessId.restype = wintypes.DWORD
     _user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]

@@ -157,6 +157,13 @@ class Error:
     message: str
 
 
+def _summary(result: object) -> str:
+    """A backend call's result, short enough for the log."""
+    if isinstance(result, list):
+        return f"{len(result)} item(s)"
+    return "done" if result is None else repr(result)
+
+
 class MonitorService:
     """The single serialized queue of backend calls (see the module docstring).
 
@@ -187,6 +194,7 @@ class MonitorService:
         self._detected_at: float | None = None
         self._gone_at: float | None = None
         self._detection_stuck = False
+        self._detect_failures = 0  # in a row
         self._hung: dict[str, str] = {}  # key -> the call stuck in it; guarded by _cond
         self.busy: str | None = None  # the call in progress, for the log and shutdown
 
@@ -263,8 +271,16 @@ class MonitorService:
     # Worker ------------------------------------------------------------------
 
     def run(self) -> None:
-        while self.step(block=True) is not None:
-            pass
+        while True:
+            try:
+                if self.step(block=True) is None:
+                    return
+            except Exception:
+                # step() catches what the work raises; this is for anything
+                # else. The thread must not die: brightness control would stop
+                # for the rest of the session without a word.
+                log.exception("The monitor service hit an unexpected error; carrying on")
+                time.sleep(0.5)
 
     def step(self, block: bool = False) -> str | None:
         """Do one piece of pending work and say which ("detect", "write",
@@ -319,12 +335,16 @@ class MonitorService:
             return "read", sorted(reads)
         return None
 
+    def _detect_interval(self) -> float:
+        """Detections are at least this far apart; longer after failed ones (1, 2, 4… up to 64 s)."""
+        return MIN_DETECT_INTERVAL_S * 2 ** min(self._detect_failures, 6)
+
     def _detection_due(self) -> bool:
-        return self._detect_forced or self._detected_at is None or self._clock() - self._detected_at >= MIN_DETECT_INTERVAL_S
+        return self._detect_forced or self._detected_at is None or self._clock() - self._detected_at >= self._detect_interval()
 
     def _wait_time(self) -> float | None:
         if self._detect and self._detected_at is not None and not self._detection_due():
-            return max(0.01, MIN_DETECT_INTERVAL_S - (self._clock() - self._detected_at))
+            return max(0.01, self._detect_interval() - (self._clock() - self._detected_at))
         return None
 
     def _call(self, fn, timeout: float, what: str, key: str | None = None):
@@ -332,13 +352,24 @@ class MonitorService:
         left alone until the call returns."""
         self.busy = what
         on_late = (lambda: self._call_returned(key)) if key else None
+        started = time.perf_counter()
         try:
-            return self._runner.call(fn, timeout, what, on_late=on_late)
+            result = self._runner.call(fn, timeout, what, on_late=on_late)
         except CallTimeout:
             if key:
                 with self._cond:
                     self._hung[key] = what
+                log.info("%s [%s]: left alone until that call returns; the other displays carry on", what, key)
+            raise  # the runner logs the time-out itself
+        except Exception as exc:
+            # Every backend call is traced at debug level: what, which display,
+            # how long, and what came back, so a report isolates the call
+            # and the display that misbehaved.
+            log.debug("%s%s failed after %.0f ms: %s: %s", what, f" [{key}]" if key else "",
+                      1000 * (time.perf_counter() - started), type(exc).__name__, exc)
             raise
+        log.debug("%s%s: %s in %.0f ms", what, f" [{key}]" if key else "", _summary(result), 1000 * (time.perf_counter() - started))
+        return result
 
     def _call_returned(self, key: str) -> None:
         with self._cond:
@@ -377,9 +408,24 @@ class MonitorService:
             self._emit(DetectionStuck(exc.what))
             return
         except Exception as exc:
-            log.exception("Monitor detection failed")
-            self._emit(Error(f"Monitor detection failed: {exc}"))
-            monitors = []
+            # Windows' display APIs can fail for a moment (e.g. right after
+            # waking). That isn't "no displays": keep the ones found before
+            # (after waking, changes keep waiting for a detection that works)
+            # and try again, less often each time.
+            self._detect_failures += 1
+            self._detected_at = self._clock()
+            if self._detect_failures == 1:
+                log.exception("Monitor detection failed; keeping the displays found before and trying again")
+                self._emit(Error(f"Monitor detection failed: {exc}"))
+            else:
+                (log.warning if self._detect_failures <= 3 else log.debug)(
+                    "Monitor detection failed again (%d in a row; next try in %g s): %s", self._detect_failures, self._detect_interval(), exc)
+            with self._cond:
+                self._detect = True
+            return
+        if self._detect_failures:
+            log.info("Monitor detection works again, after %d failure(s)", self._detect_failures)
+            self._detect_failures = 0
         self._detected_at = self._clock()
         monitors = with_unique_keys(monitors)
         with self._cond:
@@ -441,6 +487,10 @@ class MonitorService:
                     log.info("%s is in standby; setting its brightness later", info.name)
                     self._emit(Deferred(write.key, write.value, write.source, "asleep"))
                     return
+                if self._held_back():  # the PC went to sleep during that check
+                    with self._cond:
+                        self._writes.setdefault(write.key, write)
+                    return
             if not self._set_level(info, write):
                 return  # a newer change for this display came while fading; it goes next
         except CallTimeout as exc:
@@ -464,7 +514,9 @@ class MonitorService:
         """Set a display's level, fading if asked. False if a newer change for
         it arrived mid-fade (the fade stops where it is; the newer one runs next)."""
         steps = [write.value]
-        if write.fade:
+        # Windows eases a laptop panel's backlight to each level set through
+        # WMI by itself; fading on top of that makes it bounce.
+        if write.fade and info.channel != "wmi":
             start = self._call(lambda: self._backend.get_brightness(info.index), READ_TIMEOUT_S, f"reading the brightness of {info.name}", info.key)
             if start is not None and start != write.value:
                 steps = [round(start + (write.value - start) * i / FADE_STEPS) for i in range(1, FADE_STEPS + 1)]
@@ -474,14 +526,33 @@ class MonitorService:
                     log.debug("A newer change for %s came while fading; stopping at %d%%", info.name, steps[i - 1])
                     return False
                 time.sleep(FADE_STEP_S)
+                if self._held_back():
+                    # Sleep came mid-fade: the level still goes out, after
+                    # waking and detecting again (unless a newer one replaces it).
+                    with self._cond:
+                        self._writes.setdefault(write.key, replace(write, fade=False))
+                    log.debug("Sleep came while fading %s; setting %d%% after waking", info.name, write.value)
+                    return False
             self._call(lambda step=step: self._backend.set_brightness(info.index, step), WRITE_TIMEOUT_S,
                        f"setting the brightness of {info.name}", info.key)
             if step != write.value:
                 self._emit(Commanded(write.key, step, write.source))  # the fade so far, for the slider
         return True
 
+    def _held_back(self) -> bool:
+        """Asleep, or awake but not detected again yet: nothing may be sent now.
+        Work that spans several calls checks this between them."""
+        with self._cond:
+            return self._suspended or self._awaiting_detection or self._closing
+
     def _do_read(self, keys: list[str]) -> None:
         for key in keys:
+            if self._held_back():
+                # Sleep came while reading several displays: the rest would go
+                # to sleeping monitors, or after waking to stale handles. The
+                # detection after waking reads them all again.
+                log.debug("Not reading the remaining displays now (sleep, or not detected again yet)")
+                break
             info = self._by_key.get(key)
             if info is None or not info.supported or self._hung_call(key):
                 continue
@@ -557,7 +628,7 @@ STATUS_TEXT = {
     Status.READING: ("Reading its brightness…", ""),
     Status.UNREADABLE: ("Couldn't read its brightness", "It is read again when the panel opens, and at the next detection."),
     Status.ASLEEP: ("In standby", "The display says it is in standby, so Winlight waits until it is on before changing it."),
-    Status.PAUSED: ("Paused while the displays are off", "Nothing is sent to displays while the PC sleeps or the screens are off."),
+    Status.PAUSED: ("Paused while asleep or the screens are off", "Nothing is sent to displays while the PC sleeps or the screens are off."),
     Status.GONE: ("Disconnected", "It stopped answering as if unplugged; Winlight is detecting displays again."),
     Status.FAILING: ("Changes aren't working", "The last changes failed. Winlight checks the display again shortly."),
     Status.NOT_RESPONDING: ("Not responding", "A call to this display didn't return. Winlight leaves it alone until it does."),
@@ -613,6 +684,10 @@ class MonitorManager(QObject):
     # A level was chosen by the user or the schedule (key, value, source):
     # what BrightnessMemory remembers.
     brightnessSet = Signal(str, int, str)
+    # A level set outside the app (key, value): the laptop's brightness keys,
+    # Windows' slider, battery saver. Not remembered as a choice (Windows
+    # changes it by itself too), but nothing older is put back over it.
+    changedElsewhere = Signal(str, int)
     # A reading (key, value or None), the first after detection included.
     observed = Signal(str, object)
     # An unprompted change (restore or schedule) wasn't made: key, source.
@@ -723,9 +798,10 @@ class MonitorManager(QObject):
         self._service.request_read([key])
 
     def note_level(self, key: str, value: int) -> None:
-        """A level learnt without reading the display (Windows reported the
-        laptop panel's): handled like a reading."""
+        """A level set outside the app, learnt without reading the display
+        (Windows reported the laptop panel's): handled like a reading."""
         self._on_Observed(Observed(key, value))
+        self.changedElsewhere.emit(key, value)
 
     def set_brightness(self, key: str, value: int, source: str = USER, fade: bool = False) -> None:
         """Set a display's level, chosen by the user or the schedule."""
@@ -770,6 +846,8 @@ class MonitorManager(QObject):
         if self._paused:
             return
         self._paused = True
+        pending = sum(1 for state in self.states.values() if state.desired is not None)
+        log.info("Display control paused (sleep or displays off)%s", f"; {pending} change(s) wait" if pending else "")
         self._service.suspend()
         self.cancel_scheduled()
         for state in self.states.values():
@@ -779,6 +857,9 @@ class MonitorManager(QObject):
     def resume(self, rescan_after_s: Iterable[float] = ()) -> None:
         """Awake again: what was read before may be stale, and handles too.
         Detection follows at the given delays (or as the caller schedules it)."""
+        rescan_after_s = tuple(rescan_after_s)
+        when = f" (at {', '.join(f'{d:g}' for d in rescan_after_s)} s)" if rescan_after_s else ""
+        log.info("Display control resumed; changes wait for the next detection%s", when)
         self._paused = False
         self._service.resume()
         for state in self.states.values():

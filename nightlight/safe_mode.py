@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+
+from nightlight.files import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -113,9 +114,6 @@ class SafeMode:
 
     def _save(self) -> None:
         try:
-            self._skip_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._skip_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(sorted(self.skipped)), encoding="utf-8")
-            os.replace(tmp, self._skip_file)
+            write_atomic(self._skip_file, json.dumps(sorted(self.skipped)))
         except OSError:
             log.warning("Could not save %s", self._skip_file, exc_info=True)

@@ -5,6 +5,7 @@ import logging
 import logging.handlers
 import signal
 import sys
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
@@ -62,6 +63,7 @@ def main() -> int:
         return cli.run(args)
 
     setup_logging(args.debug)
+    log_uncaught()
 
     # Ctrl+C before the app runs just stops; once it runs, see quit_on_signals.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -179,7 +181,29 @@ def set_app_id() -> None:
 
 
 # Scrubbed: logs end up in public bug reports (see nightlight/privacy.py).
-LOG_FORMAT = ScrubbingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+# The thread names (MainThread, monitor-service, monitor-calls-N) tell a stuck call from a busy UI.
+LOG_FORMAT = ScrubbingFormatter("%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s")
+
+
+def log_uncaught() -> None:
+    """Exceptions nothing caught, in Qt slots and timers or in a thread, go to
+    the log with their traceback: the installed app has no console to print
+    them to, so they would otherwise vanish without a trace."""
+
+    def hook(kind, value, traceback) -> None:
+        if issubclass(kind, KeyboardInterrupt):
+            sys.__excepthook__(kind, value, traceback)
+            return
+        log.critical("Uncaught exception", exc_info=(kind, value, traceback))
+
+    def thread_hook(args: threading.ExceptHookArgs) -> None:
+        if args.exc_type is SystemExit:
+            return
+        name = args.thread.name if args.thread is not None else "?"
+        log.critical("Uncaught exception in thread %s", name, exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    sys.excepthook = hook
+    threading.excepthook = thread_hook
 
 
 def setup_logging(debug: bool) -> None:

@@ -44,6 +44,9 @@ RESCAN_AFTER_CHANGE_S = (2, 8)
 RESCAN_AFTER_DISPLAYS_ON_S = (3, 8, 20)
 # How often to look whether Windows' own Night Light is on (a registry read).
 WINDOWS_NIGHT_LIGHT_CHECK_MS = 10_000
+# How often to look whether the time zone changed (travel, or changed by
+# hand), besides when Windows reports a clock change.
+ZONE_CHECK_MS = 60_000
 
 
 def system_zone():
@@ -152,6 +155,9 @@ class NightLightApp:
         self._night_light_check.timeout.connect(self._check_windows_night_light)
         self._night_light_check.start()
         self._check_windows_night_light()
+        self._zone_check = QTimer(interval=ZONE_CHECK_MS)
+        self._zone_check.timeout.connect(self._check_zone)
+        self._zone_check.start()
 
         qapp.aboutToQuit.connect(self._shutdown)
         self.monitors.refresh()
@@ -233,7 +239,12 @@ class NightLightApp:
             except OSError as exc:
                 reply({"ok": False, "output": f"Could not save the diagnostics: {exc}"})
             return
-        reply(self.commands.handle(request))
+        try:
+            answer = self.commands.handle(request)
+        except Exception:  # a bug must still get an answer, not leave the command line waiting
+            log.exception("Handling a command-line request failed")
+            answer = {"ok": False, "output": "Winlight couldn't do that; see its log for why."}
+        reply(answer)
 
     def _diagnostics_sources(self) -> diagnostics.Sources:
         return diagnostics.Sources(
@@ -335,8 +346,21 @@ class NightLightApp:
         self._reapply_colors()
 
     def _on_clock_changed(self) -> None:
+        if not self._check_zone():
+            self.controller.update()
+            self.scheduler.evaluate("clock")
+
+    def _check_zone(self) -> bool:
+        """Follow a change of time zone: both schedules are laid out in it.
+        True if it changed (and the schedules were brought up to date)."""
+        zone = system_zone()
+        if zone is None or zone == self.controller.zone:
+            return False
+        log.info("The time zone changed; both schedules follow it")  # which one isn't logged (privacy.py)
+        self.controller.zone = self.scheduler.zone = zone
         self.controller.update()
-        self.scheduler.evaluate("clock")
+        self.scheduler.evaluate("time zone")
+        return True
 
     def _on_displays_changed(self, rescan_after_s: tuple[float, ...]) -> None:
         self._reapply_colors()
@@ -354,6 +378,7 @@ class NightLightApp:
             return  # quitting after signing out started it already
         self._shut_down = True
         self._night_light_check.stop()
+        self._zone_check.stop()
         self._exemptions.stop()
         self.idle_dimmer.release()  # quitting while dimmed: levels back first (queued before the monitor thread stops)
         self.scheduler.shutdown()

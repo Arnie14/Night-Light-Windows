@@ -45,11 +45,18 @@ class ScriptedBackend:
         self.failing: set[str] = set()
         self.blocked: dict[str, threading.Event] = {}  # key -> released when set
         self.block_detection: threading.Event | None = None
+        self.failing_detections = 0  # the next this many detections raise
         self.during_set = None  # called inside a set, to interleave events
+        self.during_get = None  # likewise inside a read
+        self.during_power = None  # likewise inside a power check
 
     def list_monitors(self):
         if self.block_detection is not None:
             self.block_detection.wait(5)
+        if self.failing_detections:
+            self.failing_detections -= 1
+            self.calls.append(("list failed",))
+            raise OSError("QueryDisplayConfig failed")
         layout = self.layouts.pop(0) if len(self.layouts) > 1 else self.layouts[0]
         self.current = [MonitorInfo(i, key, supported, key=key, reason="" if supported else "DDC/CI didn't answer",
                                     status="ok" if supported else "unsupported") for i, (key, supported) in enumerate(layout)]
@@ -63,6 +70,9 @@ class ScriptedBackend:
         key = self._key(index)
         self.calls.append(("get", key))
         self._maybe_block(key)
+        if self.during_get is not None:
+            hook, self.during_get = self.during_get, None
+            hook()
         if key in self.gone:
             raise MonitorGoneError(key)
         if key in self.failing:
@@ -85,6 +95,9 @@ class ScriptedBackend:
     def is_powered_on(self, index):
         key = self._key(index)
         self.calls.append(("power", key))
+        if self.during_power is not None:
+            hook, self.during_power = self.during_power, None
+            hook()
         return key not in self.asleep
 
     def _maybe_block(self, key):
@@ -309,6 +322,52 @@ def test_suspending_during_a_write_holds_back_the_rest():
     assert backend.sets() == [("A", 10), ("B", 20)]
 
 
+def test_suspending_while_reading_several_displays_stops_the_rest():
+    # Found by test_chaos: one read request covers several displays, and the
+    # rest went out after sleep began, or after waking to stale handles.
+    backend = ScriptedBackend([("A", True), ("B", True), ("C", True)])
+    service, events, clock = make(backend)
+    detect(service, clock)
+    backend.calls.clear()
+    service.request_read()
+    backend.during_get = service.suspend  # sleep starts while A is being read
+    service.run_pending()
+    assert [c for c in backend.calls if c[0] == "get"] == [("get", "A")]  # B and C aren't asked
+    service.resume()
+    service.run_pending()
+    assert [c for c in backend.calls if c[0] == "get"] == [("get", "A")]  # nor after waking, before detecting
+    detect(service, clock)
+    assert {c[1] for c in backend.calls if c[0] == "get"} == {"A", "B", "C"}  # detection reads them all
+
+
+def test_suspending_during_the_power_check_holds_the_change_until_after_waking():
+    backend = ScriptedBackend([("A", True)])
+    service, events, clock = make(backend)
+    detect(service, clock)
+    service.request_write(Write("A", 30, RESTORE, require_awake=True))
+    backend.during_power = service.suspend
+    service.run_pending()
+    assert backend.sets() == []  # not sent to a PC going to sleep
+    service.resume()
+    detect(service, clock)
+    assert backend.sets() == [("A", 30)]  # sent once awake and detected again
+
+
+def test_sleep_during_a_fade_sets_the_level_after_waking(monkeypatch):
+    monkeypatch.setattr(monitors_module, "FADE_STEP_S", 0)
+    backend = ScriptedBackend([("A", True)])
+    backend.values["A"] = 20
+    service, events, clock = make(backend)
+    detect(service, clock)
+    service.request_write(Write("A", 80, fade=True))
+    backend.during_set = service.suspend  # sleep starts during the first step
+    service.run_pending()
+    assert backend.sets() == [("A", 30)]  # the fade stops there
+    service.resume()
+    detect(service, clock)
+    assert backend.sets() == [("A", 30), ("A", 80)]  # the chosen level, at once (no fade from a stale level)
+
+
 def test_unprompted_changes_leave_a_monitor_in_standby_alone():
     backend = ScriptedBackend([("A", True)])
     backend.asleep = {"A"}
@@ -460,3 +519,70 @@ def test_a_failed_write_is_reported_and_the_queue_carries_on():
     service.run_pending()
     assert of(events, Failed)[0].key == "A" and not of(events, Failed)[0].timeout
     assert backend.sets() == [("B", 20)]
+
+
+# --- Detection failing ---------------------------------------------------------
+
+
+def test_a_failed_detection_keeps_the_displays_and_tries_again_less_often():
+    # It used to count as "no displays": every display vanished from the panel,
+    # and came back as if reconnected (restoring levels).
+    backend = ScriptedBackend([("A", True)])
+    service, events, clock = make(backend)
+    detect(service, clock)
+    backend.failing_detections = 2
+    events.clear()
+    detect(service, clock)
+    assert of(events, Detected) == [] and [m.key for m in service.monitors] == ["A"]  # still known
+    assert service.run_pending() == []  # the retry waits a moment...
+    clock.now += 2.1
+    assert service.run_pending() == ["detect"]  # ...fails again...
+    clock.now += 2.1
+    assert service.run_pending() == []  # ...and the next waits longer (4 s)
+    clock.now += 2
+    service.run_pending()
+    assert [d.monitors[0].key for d in of(events, Detected)] == ["A"]  # then works
+    service.request_write(Write("A", 30))
+    service.run_pending()
+    assert backend.sets() == [("A", 30)]
+
+
+def test_after_waking_changes_wait_until_a_detection_works():
+    backend = ScriptedBackend([("A", True)])
+    service, events, clock = make(backend)
+    detect(service, clock)
+    service.suspend()
+    service.resume()
+    backend.failing_detections = 1
+    service.request_write(Write("A", 30))
+    detect(service, clock)
+    assert backend.sets() == []  # the handles from before sleep may be stale
+    clock.now += 2.1
+    service.run_pending()
+    assert backend.sets() == [("A", 30)]
+
+
+
+def test_the_worker_survives_an_unexpected_error(monkeypatch):
+    backend = ScriptedBackend([("A", True)])
+    service, events, clock = make(backend)
+    original = service._take_work
+    calls = [0]
+
+    def broken_once():
+        calls[0] += 1
+        if calls[0] == 1:
+            raise RuntimeError("a bug")
+        return original()
+
+    monkeypatch.setattr(service, "_take_work", broken_once)
+    service.request_detect()
+    thread = threading.Thread(target=service.run, daemon=True)
+    thread.start()
+    for _ in range(200):
+        if backend.calls:
+            break
+        time.sleep(0.01)
+    service.close()
+    thread.join(2)
+    assert backend.calls and backend.calls[0][0] == "list" and not thread.is_alive()

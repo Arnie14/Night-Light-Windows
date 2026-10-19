@@ -237,6 +237,8 @@ def test_a_real_window_receives_windows_broadcasts():
                             cwd=Path(__file__).resolve().parent.parent)
     assert result.returncode == 0, result.stderr
     listening, closed, seen = result.stdout.strip().splitlines()[-1].split(" ", 2)
+    if listening == "False" and os.environ.get("CI"):
+        pytest.skip("Windows didn't register the window for notifications: no interactive desktop on this CI runner")
     assert (listening, closed) == ("True", "False")
     signals = seen.split(",")
     # The display state the first time is Windows' current one (ignored, if it hasn't sent its own already).

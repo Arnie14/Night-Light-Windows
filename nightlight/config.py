@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, time
 from enum import StrEnum
@@ -20,6 +19,7 @@ from pathlib import Path
 import platformdirs
 
 from nightlight.core.colortemp import MAX_KELVIN, MIN_KELVIN
+from nightlight.files import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -203,12 +203,8 @@ def load(path: Path) -> AppConfig:
 
 
 def save(config: AppConfig, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = {"version": CONFIG_VERSION, **_to_json(config)}
-    # Write then rename, so a crash mid-write can't leave a truncated file.
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    write_atomic(path, json.dumps(data, indent=2))  # a crash mid-write can't leave a truncated file
 
 
 def _from_dict[T](cls: type[T], section: str, data: object) -> T:

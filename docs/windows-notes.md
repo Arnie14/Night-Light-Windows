@@ -158,6 +158,8 @@ From Twinkle Tray's [display detection page](https://github.com/xanderfrangos/tw
 | Writes that are acknowledged but ignored | Monitorian notes `SetMonitorBrightness` may report success | ✅ Each display keeps its desired, commanded and observed level; it is read back once, 1.5 s after the last change, and a mismatch is logged once and shown as it is |
 | Monitors answering other codes than 0x10 | Twinkle Tray tries 0x13, 0x6B (and lets users pick a code) | ✅ `--probe` reports 0x12, 0x13 and 0x6B for each monitor. 📋 Fall back to them if testing finds such a monitor |
 | Flicker when written to quickly | Twinkle Tray's update rate setting goes up to 2 s | ✅ 100 ms throttle, latest value only. 📋 A setting if testing finds flicker |
+| Another program setting gamma ramps too (f.lux, GPU color tools) | f.lux warns about other color apps; fighting over the ramp makes the screen flicker | ✅ A reset now and then is put back at once; 3 changes within 30 s mean another program keeps doing it, and that display is left alone for 2 minutes (doubling up to 30), with one warning |
+| Display detection failing for a moment (right after waking) | Monitorian #50: monitors scanned before Windows is ready | ✅ The displays found before are kept and detection is tried again with growing gaps; after waking, changes wait for a detection that works |
 | A monitor turned off with its button and back on | DisplayPort monitors disappear and come back (a display change); HDMI ones often stay listed | ✅ Display changes re-detect, and so do the displays turning back on (as Monitorian), at 3, 8 and 20 s; unlocking re-applies night light at once |
 
 ## 7. Design choices taken from their source code

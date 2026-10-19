@@ -829,3 +829,88 @@ def test_a_neutral_display_is_not_touched_when_the_list_is_refreshed(monkeypatch
     sets = gdi.sets
     gamma._listed_at = None
     assert gamma.verify() is False and gdi.sets == sets and gdi.ramps[D1] == calibration
+
+
+def test_a_probe_returning_as_it_is_given_up_on_does_not_leave_its_display_stuck(monkeypatch):
+    # The probe's late clean-up ran before the display was marked stuck, so
+    # the mark was never cleared and the display was never probed again.
+    from nightlight.hardware.calls import CallTimeout
+
+    class ReturnsJustTooLate:
+        def __init__(self, fn, what, on_late=None):
+            self._on_late = on_late
+
+        def result(self, timeout):
+            self._on_late()  # the probe finished in the gap...
+            raise CallTimeout("probing", timeout)  # ...after its deadline had passed
+
+    targets = [with_edid(r"\.\DISPLAY1", "Slow", "S1")]
+    FakeDdc([PhysicalMonitor(r"\.\DISPLAY1", 7, "x")], {7: (40, 100)}).install(monkeypatch, targets)
+    monkeypatch.setattr(windows, "start_side_call", ReturnsJustTooLate)
+    backend = backend_with()
+    backend.list_monitors()
+    assert backend.stuck == {}
+
+
+def test_another_program_fighting_over_the_ramp_is_backed_off_from(monkeypatch, caplog):
+    # Found by running f.lux-like changes against the app: each one was undone
+    # within 1.5 s, the screen flickered between the two for as long as both
+    # ran, and every round logged two lines.
+    import logging
+
+    monkeypatch.setattr(windows, "CONTEST_BACKOFF_S", 0.2)
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.apply(4500)
+    ours = gdi.ramps[D1]
+    theirs = gamma_ramp(whitepoint(2500))  # f.lux's strong tint
+    with caplog.at_level(logging.INFO):
+        for _ in range(2):
+            gdi.ramps[D1] = theirs
+            assert gamma.verify() is True and gdi.ramps[D1] == ours  # a reset, or once: put back
+        gdi.ramps[D1] = theirs
+        assert gamma.verify() is False and gdi.ramps[D1] == theirs  # the third time within 30 s: back off
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "keeps changing the colors" in r.getMessage()]
+        assert len(warnings) == 1
+        sets = gdi.sets
+        for kelvin in (4400, 4300):
+            gamma.apply(kelvin)  # night light moving on meanwhile doesn't fight either
+            gamma.verify()
+        assert gdi.sets == sets and gdi.ramps[D1] == theirs
+    time.sleep(0.25)  # the other program has gone quiet
+    assert gamma.verify() is True and gdi.ramps[D1] != theirs  # night light is back
+    gamma.release()
+    assert gdi.ramps[D1] == identity_ramp()  # its tint wasn't a base worth keeping
+
+
+def test_backing_off_takes_longer_each_time_it_happens_again(monkeypatch):
+    monkeypatch.setattr(windows, "CONTEST_BACKOFF_S", 0.05)
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.apply(4500)
+    backoffs = []
+    for _ in range(3):
+        for _ in range(3):
+            gdi.ramps[D1] = gamma_ramp(whitepoint(2500))
+            gamma.verify()
+        display = gamma._displays[D1]
+        backoffs.append(display.backoff)
+        time.sleep(display.backoff + 0.02)
+        gamma.verify()  # the back-off ends: night light back
+    assert backoffs == [0.05, 0.1, 0.2]
+
+
+def test_one_reset_now_and_then_is_not_a_fight(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.apply(4500)
+    ours = gdi.ramps[D1]
+    monkeypatch.setattr(windows, "CONTEST_WINDOW_S", 0.02)  # so "every few minutes" can be a few hundredths of a second
+    for _ in range(5):  # the lock screen, every few minutes
+        time.sleep(0.03)
+        gdi.ramps[D1] = identity_ramp()
+        assert gamma.verify() is True and gdi.ramps[D1] == ours
+    assert not gamma._displays[D1].contested

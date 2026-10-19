@@ -96,7 +96,7 @@ Most of these were learned from [Monitorian](https://github.com/emoacht/Monitori
 
 - DDC/CI support varies by monitor, cable, and dock. Some monitors have it disabled in their on-screen menu, and DisplayLink-based USB docks can't pass it at all.
 - DDC/CI calls are slow and sometimes fail for a moment, so they run off the UI thread in one queue, are retried on transient errors, and only the latest slider value is sent. Every call has a time limit: a monitor that hangs is left alone until its call returns, and the others carry on.
-- Sleep and hibernation cause most trouble: monitors vanish, handles go stale, and DDC/CI to a sleeping monitor can wake it or hang it. Nothing is sent while the PC sleeps or the screens are off, and after waking, changes wait until the displays have been detected again.
+- Sleep and hibernation cause most trouble: monitors vanish, handles go stale, and DDC/CI to a sleeping monitor can wake it or hang it. Nothing is sent while the PC sleeps or the screens are off, and after waking, changes wait until the displays have been detected again (successfully: a detection that fails for a moment keeps the displays known before and tries again).
 - Monitors often don't answer DDC/CI for several seconds after being plugged in or waking from sleep, so detection runs again a few times.
 - Requesting a monitor's DDC/CI capabilities string is slow and can hang on some monitors, so the Windows backend never asks for it; names come from the EDID.
 - Windows refuses gamma ramps that are too far from neutral, which limits how warm night light can go unless the `GdiIcmGammaRange` registry value is raised.
@@ -106,8 +106,8 @@ Most of these were learned from [Monitorian](https://github.com/emoacht/Monitori
 - Most TVs don't support DDC/CI.
 - Gamma ramps belong to displays, not windows, so pausing night light for an app pauses it for that app's whole display.
 - Windows Night Light's state has no API; Winlight reads its undocumented registry value, and shows nothing if it can't tell.
-- Laptop brightness keys are handled by the laptop's firmware and Windows, not passed to apps, so Winlight can't take them over. It follows the brightness they set instead, which is reliable and doesn't need a keyboard hook (which games' anti-cheat may flag).
-- Running alongside Windows Night Light, f.lux or GPU color settings (such as AMD's "Custom Colors") may cause conflicts.
+- Laptop brightness keys are handled by the laptop's firmware and Windows, not passed to apps, so Winlight can't take them over. It follows the brightness they set instead, which is reliable and doesn't need a keyboard hook (which games' anti-cheat may flag), and a level set with them isn't undone at the next start.
+- Running alongside Windows Night Light, f.lux or GPU color settings (such as AMD's "Custom Colors") may cause conflicts. When another program keeps changing a display's colors, Winlight backs off from that display for a while (and says so in the log) rather than fighting over it and making the screen flicker.
 
 ## 🗺️ Roadmap
 

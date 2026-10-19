@@ -7,9 +7,10 @@ Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability,
 - **Base architecture: the reliability branch.** One serialized monitor queue with time limits, stable display identity, each display's desired, commanded and observed state, an idempotent brightness scheduler, daylight-saving-safe times, the gamma crash journal, and the redesigned settings window.
 - **Every beta 3 and 4 feature kept, ported onto that base.** Night light pausing for apps and fullscreen, the command line, diagnostics and privacy scrubbing, crash safe mode, the fullscreen focus guard, laptop brightness keys, the wake report, idle dimming, renaming and hiding displays, and the Windows Night Light notice.
 - **No feature removed.** Nothing conflicted badly enough to need a decision from you; the few deliberate behavior changes are listed below.
-- **Tests:** 504, all passing on Windows 11 (beta 4 had 299, the reliability branch 332). Every test from both sides is kept or ported under the same or an equivalent assertion (see [Tests](#tests)).
+- **Tests:** 529, all passing on Windows 11 (beta 4 had 299, the reliability branch 332). Every test from both sides is kept or ported under the same or an equivalent assertion (see [Tests](#tests)).
 - **Real Windows checks on this machine:** 113 of 113 passed. They drove the real APIs: ctypes display configuration, DDC/CI error paths, WMI, gamma ramps, safe mode, the journal, and winsystem's queries. The app itself was also run end to end through the command line.
 - **Bugs found and fixed while integrating:** 9, several of them present in beta 4 as well (see [Bugs found while integrating](#bugs-found-while-integrating)).
+- **Hardening pass:** 13 more bugs fixed, in concurrency, sleep, clashes with other software, files, logging and the CLI (see [Hardening pass](#hardening-pass)).
 
 ## What changed, by area
 
@@ -58,7 +59,7 @@ The backend investigation also found that WMI calls from the monitor thread are 
 
 ## Tests
 
-- **504 tests, all passing** (`pytest`, Python 3.15, Windows 11 26200), run repeatedly. `ruff --select F` is clean.
+- **529 tests, all passing** (`pytest`, Python 3.15, Windows 11 26200), run repeatedly. `ruff --select F` is clean.
 - **Nothing was dropped to make the suite pass.** Every test name from both sides was checked. The ones without the same name were ported under an equivalent assertion:
   - beta 4's memory-schedule tests are now scheduler tests: current point once, user change until the next point, turning on applies at once, sleeping monitor, idle hold. Two new integration tests on the real `MonitorManager` cover "a new point wins over an old remembered level" and "the user's level stands within a point".
   - beta 4's step-schedule tests are the points tests, with the same cases (off/empty, latest point, overnight, sun offsets, fallback 06:00/18:00, polar).
@@ -82,7 +83,7 @@ Windows 11 Pro 26200, one laptop panel (AUO 24ED, WMI, a calibrated gamma ramp),
   - the gamma journal after a real process kill
   - safe mode around real detection, including beta 4's marker
   - `idle_seconds`, `display_required`, `user_busy`, `foreground_app`, `running_apps` and the Windows Night Light registry read
-  - a WMI fade through the manager (5 steps in 0.5 s)
+  - a change through the manager to the WMI panel (one write, which Windows eases; see the hardening pass)
   - suspend holding writes, then resume and detection releasing them
   - the compatibility report's privacy
 - **`--probe`** runs cleanly and puts the original ramp back.
@@ -95,15 +96,100 @@ Windows 11 Pro 26200, one laptop panel (AUO 24ED, WMI, a calibrated gamma ramp),
 - **Screenshots** regenerated from the merged UI (`tools/screenshots.py`) and checked.
 - The panel was left at 100% with its calibration restored.
 
+## Hardening pass
+
+A second pass before release, about finding and fixing bugs rather than adding features: concurrency and idempotency, sleep and hibernation, DDC/CI and ctypes, clashes with other software, dependencies, and logging. It was checked against the original goals of the reliability work and against the untouched backup of that work (`c3ab673`; the Desktop copy is identical, all 81 files compared).
+
+### The original goals, checked
+
+| Goal | Where it stands | Evidence |
+|---|---|---|
+| Brightness schedule presets | ✅ | `core/brightness_schedule.py` presets; settings tests |
+| Compatible displays list with the channel (DDC/CI, WMI, SDR, software) | ✅ | `compat.py`; real report names "WMI (laptop panel)" |
+| One serialized queue, bounded time limits and retries | ✅ | `monitors.py`, `hardware/calls.py`; DDC/CI transient retries in `win32.py` |
+| Races between sliders, sleep/wake and discovery tested | ✅ | `test_monitor_service.py` (interleaved step by step), `test_chaos.py` (everything at once) |
+| Idempotent scheduler, not a sequence of commands | ✅ | Saved point id; "applied once", restart, sleep-through and autumn-hour tests |
+| Daylight saving, sleeping through a point, starting after one | ✅ | Scheduler tests; time zone changes while running now followed too |
+| Trust: HDR, DDC/CI hangs, two schedules at once, termination mid-operation, a different display on the same port, a display vanishing mid-write | ✅ | Backend, service, app and chaos tests; the journal tested with a real process kill |
+| Recovery: no stale state, no call to the wrong display, no indefinite blocking | ✅ | Chaos invariants; 4 fixes below (all three were possible before) |
+| Disabled sliders with a short reason | ✅ | Flyout tests; reasons for sleep, standby, not responding, safe mode |
+| Hardware compatibility report | ✅ | Settings > Displays, `--report`, diagnostics zip |
+| ctypes calls reviewed | ✅ | Every native function in `win32.py` and `winsystem.py` declares its argument and return types (audited); struct layouts self-checked at start |
+| DDC/CI probed conservatively | ✅ | No capability strings; laptop panels never probed over DDC/CI; probes only at detection, side by side under one deadline |
+| Per-display failures isolated | ✅ | Stuck calls quarantine one display; chaos and hang tests |
+| API adapters, runtime capability detection, native errors logged | ✅ | `DisplayApi`, one `_Control` per kind; `win32.capabilities()`; Windows error codes with their text |
+| Sleep and hibernation handled | ✅ | Real messages sent to the running app, a real screen-off; see below |
+| Desired, commanded and observed states | ✅ | `DisplayState`; settling readings no longer mistaken for the truth |
+| Stable display identity | ✅ | EDID serial keys; older keys still found |
+| Lessons from Monitorian and Twinkle Tray | ✅ | `docs/windows-notes.md` |
+| Logging that isolates a problem | ✅ | Every backend call traced at debug level (what, which display, how long, the result); thread names; nothing uncaught is lost (below) |
+
+### Bugs found and fixed
+
+Each has a test that fails without the fix (checked by undoing it).
+
+| Area | Bug | Fix |
+|---|---|---|
+| Concurrency | A call returning at the moment it was given up on could stay listed as stuck forever. Detection then never ran again, monitor handles were never released, and quitting thought a call was hung | Listed and taken off the list under one lock (`calls.py`) |
+| Concurrency | The same race for a DDC/CI probe: its display could stay "not responding" until restart | `_probe_all` and the probe's late clean-up agree under one lock |
+| Sleep | A read of several displays went on after sleep began, and could reach stale handles after waking | Multi-call work checks between calls; reads stop, a fade's level is sent after waking, a write's power check is followed by a check too |
+| Robustness | A failed detection (Windows' display APIs erroring for a moment, e.g. right after waking) counted as "no displays": every display left the panel and came back as if reconnected | Keeps the displays found before, retries with growing gaps (1 s up to about a minute), logs the traceback once |
+| Robustness | An unexpected error outside the work itself would end the monitor thread for the session without a word | The worker logs it and carries on |
+| Time | Changing the time zone while running left both schedules on the old zone until restart | Re-read on Windows' clock-change message and every minute |
+| Clashes | Another program setting gamma ramps (f.lux, GPU colour tools) was undone within 1.5 s, forever. The screen flickered between the two, two log lines were written per round, and a mild tint of theirs was tinted again | After 3 changes within 30 s, that display is left alone for 2 minutes, doubling up to 30 minutes if it keeps happening; one warning says why |
+| Usability | A level set with the laptop's brightness keys was undone at the next start by an older remembered one (Twinkle Tray's classic "startup overwrites my level") | A level changed outside the app is no longer put back over; the schedule treats it like the user's own change |
+| Usability | A change on a WMI laptop panel was faded in six steps on top of Windows' own easing, so the backlight bounced (Windows reported 85, 80, 85, 75, 70, 75…) | One write; Windows eases it |
+| Files | Saving state failed with "Access is denied" while antivirus or the indexer held the file, losing the save | `files.write_atomic` retries briefly; every state file uses it |
+| Logging | Exceptions nothing caught (in Qt slots, timers, threads) went to stderr, which the installed app doesn't have | Logged with their traceback |
+| CLI | During sleep `--set` said "No display with brightness control matched" | Says no display can be changed right now, and why |
+| CLI | An unexpected error while handling a request left the CLI waiting 10 s for "didn't answer" | Answered at once, and logged |
+
+### Logging, as it reads now
+
+```
+INFO [MainThread] nightlight.hardware.winsystem: Windows: suspending
+INFO [MainThread] nightlight.monitors: Display control paused (sleep or displays off)
+INFO [MainThread] nightlight.hardware.winsystem: Windows: resumed
+INFO [MainThread] nightlight.wake_report: Woke up; detecting displays again at 2, 5, 10, 20, 30, 60, 120 s
+DEBUG [MainThread] nightlight.hardware.winsystem: Windows: resumed again 0.0 s later; the same wake
+DEBUG [monitor-service] nightlight.monitors: detecting displays: 1 item(s) in 11 ms
+DEBUG [monitor-service] nightlight.monitors: reading the brightness of Built-in display [AUO24ED]: 70 in 0 ms
+INFO [MainThread] nightlight.wake_report: After waking +2 s: 1 of 1 answering (Built-in display 70%), detection took 0.0 s
+WARNING [monitor-service] nightlight.hardware.calls: setting the brightness of DELL U2720Q didn't return within 5 s; carrying on without it
+INFO [monitor-service] nightlight.monitors: setting the brightness of DELL U2720Q [DEL41A2:…J9F3]: left alone until that call returns; the other displays carry on
+```
+
+Thread names tell the UI, the queue and a stuck call apart, every backend call is traced at debug level, and decisions (paused, resumed, deferred and why, backed off from another program) are logged at info level. The notification window's handle and its registrations are logged at debug level, so a report shows whether Windows' messages could arrive at all. Privacy rules still apply: the file is scrubbed, serials are shortened, and no time zone or app names are written.
+
+### Verified on this machine in this pass
+
+- **Sleep and session, in the running app (source and the PyInstaller build):** suspend, resume (both messages merged into one wake), lock, unlock, display change, clock change and sign-out were sent to its real notification window from another process. The screen was also really turned off and on (`SC_MONITORPOWER`).
+  - Nothing was sent while asleep.
+  - Changes waited for a fresh detection after waking.
+  - The wake report stopped early once the display was back.
+  - Sign-out shut down cleanly in 0.3 s, removing the tint and marking the journal clean.
+- **Observed on this laptop:** turning the screen off and on resets its gamma ramp to a flat one, dropping the ICC calibration (Windows does this without Winlight too). Winlight re-applies night light within 0.5 s over what Windows now shows, and leaves the calibration to Windows' loader. Keeping it ourselves, as DisplayCAL's loader does, is a possible later improvement.
+- **Clash with another program:** a second process rewriting the ramp every 0.7 s. Before the fix: replaced 7 times in 10 s with 14 log lines. After: 2 times, then one warning, with no more fighting.
+- **Idle dimming on the real panel:** dimmed to 20% through WMI, held, back to 100%, nothing remembered.
+- **Laptop keys:** a WMI change from another program reached the app at once.
+- **PyInstaller build and installer:**
+  - It built, and `tzdata` and pywin32 were bundled; the installer compiled with Inno Setup.
+  - `Winlight.exe` and `winlight-cli.exe` worked: list, set, get, exit codes 0/1/2, `--report` and `--diagnostics`.
+  - Its log had no errors, and its diagnostics zip no personal details.
+- **Real-API checks:** 113 of 113 again after the changes.
+- **Dependencies:** `pip check` is clean; all code parses as Python 3.12, and no newer standard-library APIs are used. The `wmi` package warns about invalid escape sequences on Python 3.15, which a future Python will reject; CI uses 3.13.
+- **CI robustness:** the chaos test allows for a stalled thread on a loaded runner. The real-window test skips on CI, with a reason, only if Windows refuses the registration (no desktop session).
+
 ## Not verified (needs hardware or CI)
 
 - **External DDC/CI monitors:** real writes, the VCP 0xD6 power state, time limits on a hanging monitor, safe mode skipping a real monitor after a crash, flicker.
 - **Two or more displays:** linked sliders, hotplug, the laptop-key follower (needs an external display), per-display pausing on the other display.
 - **TVs:** software dimming on a TV. **HDR:** setting the SDR level, night light skipping HDR, idle dimming through SDR.
-- **A real sleep, hibernate, lock and screen-off cycle.** The messages and their handling were tested by sending them to the app's real window; the visible timing wasn't.
-- **A real idle cycle**, and video keeping the screen on.
+- **A real sleep, hibernate and lock cycle.** Sleep, wake, lock, unlock, display change, clock change and sign-out were sent to the running app's real window (source and installed builds), and the screen was really turned off and on; a real sleep or hibernation, and how it looks, weren't.
+- **A real idle cycle**, and video keeping the screen on. Dimming and coming back were run on the real panel with a scripted idle time.
 - **Windows Night Light turned on:** only "off" was read.
-- **CI and packaging:** the GitHub Actions run on Python 3.13, the PyInstaller build (including bundling `tzdata`), the installer and its PATH option. PyInstaller isn't installed here and this machine has Python 3.15.
+- **CI and packaging:** the GitHub Actions run on Python 3.13, and installing (or upgrading an earlier beta) with the installer, including its PATH option. The PyInstaller build was made and run here (Python 3.15), with `tzdata` and pywin32 bundled, and the Inno Setup installer compiled (`Winlight-0.1.0-beta.5-setup.exe`, 28 MB) but wasn't run, as this PC has an earlier beta installed.
+- **A time zone change while running:** handled from Windows' clock-change message and a check each minute (tested with a stand-in zone); not tried by changing this PC's zone.
 - **The GUI by eye:** layout at other scalings, keyboard navigation, the settings pages with real displays.
 
 ## Deferred
@@ -119,9 +205,9 @@ Windows 11 Pro 26200, one laptop panel (AUO 24ED, WMI, a calibrated gamma ramp),
 | Check | Status |
 |---|---|
 | Valuable features from both versions accounted for | ✅ All kept; none removed |
-| Beta 4's Night Light, CLI, privacy, fullscreen focus, laptop keys, sleep recovery, idle dimming intact | ✅ Ported, tested, and the first four run on real Windows; laptop keys, sleep and idle are unit-tested and their parts verified (see above) |
+| Beta 4's Night Light, CLI, privacy, fullscreen focus, laptop keys, sleep recovery, idle dimming intact | ✅ Ported and tested, and all run on real Windows: sleep through injected messages and a real screen-off, laptop keys through a real WMI change, idle dimming with a scripted idle time |
 | Scheduling, identity, compatibility, reliability, UI integrated | ✅ |
-| Strongest safety behavior kept | ✅ Time limits and quarantine, safe mode (now concurrent), journal, suspend gating, never-black panel, never-brighten idle, plus 3 safety bugs fixed |
+| Strongest safety behavior kept | ✅ Time limits and quarantine, safe mode (now concurrent), journal, suspend gating, never-black panel, never-brighten idle; plus the safety bugs fixed while integrating and in the hardening pass |
 | Configuration and workflows compatible | ✅ Beta 4 settings, levels, names and markers load (tested); downgrading loses the schedule only |
 | Tests not weakened | ✅ See [Tests](#tests) |
 | Docs and screenshots match | ✅ README, windows-notes, windows-testing, testing-installer, screenshots |

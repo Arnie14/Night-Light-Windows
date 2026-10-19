@@ -71,7 +71,7 @@ class CommandHandler:
             amount = int(value)
         except ValueError:
             raise _Error(f"Brightness must be a number from 0 to 100, or +N/-N for a change: not {value!r}.") from None
-        changed = []
+        changed, not_now = [], []
         for number, monitor in self._select(selector, include_hidden=selector != ALL):
             if not monitor.supported:
                 if selector != ALL:
@@ -82,6 +82,7 @@ class CommandHandler:
                 # would be dropped, so say so rather than pretend.
                 if selector != ALL:
                     raise _Error(f"{self._name(monitor)} can't be changed right now: {why}.")
+                not_now.append(f"{self._name(monitor)} ({why})")
                 continue
             current = self._monitors.value(monitor.key)
             if relative and current is None:
@@ -91,6 +92,8 @@ class CommandHandler:
             self._monitors.fade_brightness(monitor.key, target)
             changed.append(self._describe(number, monitor) | {"brightness": target})
         if not changed:
+            if not_now:  # e.g. while the PC sleeps or the displays are off
+                raise _Error(f"No display can be changed right now: {', '.join(not_now)}.")
             raise _Error("No display with brightness control matched.")
         return _ok("\n".join(_line(d) for d in changed), {"displays": changed})
 

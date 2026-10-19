@@ -365,3 +365,31 @@ def test_idle_dimming_settings_reach_the_dimmer(start):
     night_light._apply_settings(AppConfig(general=GeneralConfig(idle_dim=True, idle_minutes=3, idle_level=10)))
     dimmer = night_light.idle_dimmer
     assert dimmer._enabled and (dimmer._after_s, dimmer._level) == (180, 10)
+
+
+def test_a_time_zone_change_moves_both_schedules(start, monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    night_light, _ = start(GeneralConfig())
+    evaluated = []
+    monkeypatch.setattr(night_light.scheduler, "evaluate", lambda reason="": evaluated.append(reason))
+    tokyo = ZoneInfo("Asia/Tokyo")
+    monkeypatch.setattr(app_module, "system_zone", lambda: tokyo)
+    night_light._watcher.clockChanged.emit()  # Windows: WM_TIMECHANGE
+    assert night_light.controller.zone is tokyo and night_light.scheduler.zone is tokyo
+    assert evaluated == ["time zone"]
+    night_light._check_zone()  # the periodic check: nothing new
+    night_light._watcher.clockChanged.emit()  # a plain clock change
+    assert evaluated == ["time zone", "clock"]
+
+
+def test_a_failing_command_line_request_is_still_answered(start, monkeypatch):
+    night_light, _ = start(GeneralConfig())
+
+    def broken(request):
+        raise RuntimeError("a bug")
+
+    monkeypatch.setattr(night_light.commands, "handle", broken)
+    replies = []
+    night_light.handle_request({"command": "list"}, replies.append)
+    assert replies == [{"ok": False, "output": "Winlight couldn't do that; see its log for why."}]

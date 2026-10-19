@@ -152,6 +152,7 @@ class FakeMonitors(QObject):
     displayChanged = Signal(str)
     brightnessSet = Signal(str, int, str)
     restoreDeferred = Signal(str, str)
+    changedElsewhere = Signal(str, int)
 
     def __init__(self):
         super().__init__()
@@ -438,3 +439,16 @@ def test_within_a_point_the_users_level_comes_back_after_a_restart(together):
     assert wait_for(lambda: backend._brightness[0] == 55)
     wait_for(lambda: False, 200)
     assert backend._brightness[0] == 55  # the user chose 55 after the 07:00 point: it stands
+
+
+def test_a_level_set_outside_the_app_stands_until_the_next_point(scheduler):
+    # The laptop's keys are the user's choice too.
+    sched, monitors, clock = scheduler()
+    monitors.detect(DELL)
+    monitors.changedElsewhere.emit("DEL", 30)
+    clock.now = at(15, 19, 59)
+    sched.evaluate("tick")
+    assert monitors.sent == [("DEL", 100, SCHEDULE)]
+    clock.now = at(15, 20, 1)
+    sched.evaluate("timer")
+    assert monitors.sent[-1] == ("DEL", 50, SCHEDULE)

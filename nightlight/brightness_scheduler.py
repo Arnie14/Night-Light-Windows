@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from collections.abc import Callable
 from datetime import datetime, tzinfo
 from pathlib import Path
@@ -37,6 +36,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from nightlight.config import BrightnessScheduleConfig
 from nightlight.core.brightness_schedule import ScheduledLevel, scheduled_level
 from nightlight.monitors import SCHEDULE, USER, MonitorManager, Status
+from nightlight.files import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +82,7 @@ class BrightnessScheduler(QObject):
         monitors.displayChanged.connect(self._on_display_changed)
         monitors.brightnessSet.connect(self._on_set)
         monitors.restoreDeferred.connect(self._on_deferred)
+        monitors.changedElsewhere.connect(lambda key, _value: self._overridden.add(key))  # like the user's own change
 
     @property
     def config(self) -> BrightnessScheduleConfig:
@@ -205,9 +206,6 @@ class BrightnessScheduler(QObject):
         if self._path is None:
             return
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"version": 1, "applied": self._applied_id}), encoding="utf-8")
-            os.replace(tmp, self._path)
+            write_atomic(self._path, json.dumps({"version": 1, "applied": self._applied_id}))
         except OSError:
             log.warning("Could not save %s", self._path, exc_info=True)

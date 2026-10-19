@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
@@ -54,6 +53,7 @@ from PySide6.QtCore import QObject, QTimer
 
 from nightlight.hardware.brightness import MonitorInfo, legacy_key
 from nightlight.monitors import RESTORE, MonitorManager
+from nightlight.files import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +86,7 @@ class BrightnessMemory(QObject):
         monitors.observed.connect(self._on_observed)
         monitors.brightnessSet.connect(self._on_set)
         monitors.restoreDeferred.connect(self._on_deferred)
+        monitors.changedElsewhere.connect(self._on_changed_elsewhere)
 
     @property
     def enabled(self) -> bool:
@@ -171,6 +172,16 @@ class BrightnessMemory(QObject):
         if source == RESTORE and self._enabled and key in self.levels and not self._hidden(key):
             self._due.add(key)
 
+    def _on_changed_elsewhere(self, key: str, value: int) -> None:
+        """The level was changed outside the app (the laptop's keys): putting
+        the older remembered one back at the next start or wake would undo
+        that, so it is forgotten. (Windows keeps a laptop panel's level itself.)"""
+        self._due.discard(key)
+        if self.levels.pop(key, None) is not None:
+            self.set_at.pop(key, None)
+            log.info("%s was changed outside Winlight; its remembered brightness won't be put back over that", key)
+            self._save_timer.start()
+
     def _on_set(self, key: str, value: int, source: str) -> None:
         self._due.discard(key)  # a level was just chosen; don't override it
         if self._enabled and self.levels.get(key) != value:
@@ -208,8 +219,5 @@ def load(path: Path) -> tuple[dict[str, int], dict[str, datetime]]:
 
 
 def save(levels: dict[str, int], set_at: dict[str, datetime], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = {"version": 2, "levels": levels, "set_at": {key: moment.isoformat() for key, moment in set_at.items() if key in levels}}
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, path)
+    write_atomic(path, json.dumps(data, indent=2, sort_keys=True))

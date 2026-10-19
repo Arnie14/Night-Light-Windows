@@ -104,8 +104,11 @@ def _wait(job: _Job, timeout: float, lock: threading.Lock, stuck: _StuckRegistry
             # The call may have finished just as the time ran out.
             if not job.done.is_set():
                 job.abandoned = True
+                # Listed under the same lock: _finish takes it off the list
+                # under it too, so a call returning right now can't leave
+                # itself listed as stuck forever.
+                stuck.add(job)
         if job.abandoned:
-            stuck.add(job)
             raise CallTimeout(job.what, timeout)
     if job.error is not None:
         raise job.error

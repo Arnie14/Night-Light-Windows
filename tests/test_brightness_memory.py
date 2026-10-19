@@ -23,6 +23,7 @@ class FakeManager(QObject):
     observed = Signal(str, object)
     brightnessSet = Signal(str, int, str)
     restoreDeferred = Signal(str, str)
+    changedElsewhere = Signal(str, int)
 
     def __init__(self):
         super().__init__()
@@ -262,3 +263,22 @@ def test_restores_wait_while_dimmed_for_idle(tmp_path):
     memory.set_held(False)
     assert memory.target(DELL) == 30  # what coming back sets it to (IdleDimmer does that)
 
+
+def test_a_level_set_with_the_laptops_keys_is_not_undone_at_the_next_start(tmp_path):
+    # Set 60% in the app, then 45% with the keys: the next start used to put 60% back.
+    manager, memory, path = make(tmp_path, {"BOE0812": 60})
+    manager.detect([PANEL], {"BOE0812": 60})
+    manager.changedElsewhere.emit("BOE0812", 45)  # Windows reported the keys' change
+    memory.shutdown()
+    assert memory.levels == {} and brightness_memory.load(path)[0] == {}
+    manager2, _, _ = make(tmp_path)
+    manager2.detect([PANEL], {"BOE0812": 45})
+    assert manager2.sent == []  # 45 stays
+
+
+def test_a_change_elsewhere_cancels_a_pending_restore(tmp_path):
+    manager, memory, _ = make(tmp_path, {"BOE0812": 60})
+    manager.detect([PANEL], {"BOE0812": None})  # due, not read yet
+    manager.changedElsewhere.emit("BOE0812", 45)
+    manager.detect([PANEL], {"BOE0812": 45})
+    assert manager.sent == []

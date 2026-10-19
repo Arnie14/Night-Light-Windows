@@ -404,3 +404,35 @@ def test_a_display_that_really_ignores_a_change_is_still_noticed_after_settling(
         assert state.observed == 90
         assert wait_until(lambda: state.observed == 50, 3000)  # the verification read: the truth
     assert "accepted 90% but reports 50%" in caplog.text
+
+
+class PanelBackend(SlowBackend):
+    """A laptop panel through WMI, which Windows itself eases to each new level."""
+
+    def list_monitors(self):
+        from dataclasses import replace
+
+        return [replace(m, channel="wmi", internal=True) for m in super().list_monitors()]
+
+
+def test_a_wmi_panel_is_not_faded_on_top_of_windows_own_easing(manager):
+    # Seen on a real laptop: Windows eases the backlight on every WMI write, so
+    # six fade steps made it bounce (Windows reported 85, 80, 85, 75, 70, 75…).
+    backend = PanelBackend(delay=0)
+    backend.values = {"A": 20}
+    monitors = manager(backend)
+    ready(monitors)
+    monitors.fade_brightness("A", 80)
+    assert wait_until(lambda: monitors.state("A").commanded == 80)
+    assert backend.sets == [80]
+
+
+def test_a_level_windows_reported_is_announced_as_changed_elsewhere(manager):
+    monitors = manager(SlowBackend(delay=0))
+    ready(monitors)
+    seen = []
+    monitors.changedElsewhere.connect(lambda key, value: seen.append((key, value)))
+    chosen = []
+    monitors.brightnessSet.connect(lambda *args: chosen.append(args))
+    monitors.note_level("A", 45)
+    assert seen == [("A", 45)] and chosen == []  # not a choice made in the app

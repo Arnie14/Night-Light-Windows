@@ -82,3 +82,33 @@ def test_run_with_timeout():
     assert run_with_timeout(lambda: 7, 1, "x") == 7
     with pytest.raises(CallTimeout):
         run_with_timeout(lambda: time.sleep(1), 0.05, "x")
+
+
+
+def test_a_call_returning_while_it_is_being_given_up_on_is_not_left_stuck(monkeypatch):
+    # The race: the caller marks the call abandoned, and before it has listed
+    # it as stuck, the call returns and takes itself off the (still empty)
+    # list. Listing it afterwards left it "stuck" forever: the service then
+    # never detected displays again, and quitting treated it as hung. The
+    # listing is slowed down here so the call returns inside that gap.
+    from nightlight.hardware import calls
+
+    original_add = calls._StuckRegistry.add
+
+    def slow_add(self, job):
+        time.sleep(0.2)
+        original_add(self, job)
+
+    monkeypatch.setattr(calls._StuckRegistry, "add", slow_add)
+    returned = threading.Event()
+    runner = CallRunner("race")
+    with pytest.raises(CallTimeout):
+        runner.call(lambda: time.sleep(0.1), 0.02, "a call that returns just too late", on_late=returned.set)
+    assert returned.wait(2)
+    time.sleep(0.1)
+    assert runner.stuck == []
+    with pytest.raises(CallTimeout):
+        run_with_timeout(lambda: time.sleep(0.1), 0.02, "a side call that returns just too late")
+    time.sleep(0.3)
+    assert not [c for c in calls.stuck_side_calls() if c.startswith("a side call that returns just too late")]  # others' may linger
+    runner.close()
