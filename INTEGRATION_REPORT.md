@@ -71,7 +71,7 @@ The backend investigation also found that WMI calls from the monitor thread are 
 - **Environment fix:** beta 4's `test_start_not_minimized_opens_settings` failed because it called the real fullscreen check while VS Code was fullscreen. The app fixture now stubs it; tests that need a busy fullscreen state still set one.
 - **New tests for ported behavior** that had none: fades and cutting a fade short, retry, refresh signals, idle source, `note_level`, settling readings, idle hold ordering, legacy keys in the flyout and settings, concurrent safe-mode markers and beta 4's marker, the real-window event test, diagnostics with the compatibility report, and the CLI's "can't be changed now".
 
-## Verified on real Windows (this machine)
+## Verified on real Windows
 
 Windows 11 Pro 26200, one laptop panel (AUO 24ED, WMI, a calibrated gamma ramp), no external monitor, HDR off.
 
