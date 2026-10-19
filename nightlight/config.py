@@ -85,6 +85,9 @@ class GeneralConfig:
     idle_dim: bool = False
     idle_minutes: int = 5
     idle_level: int = 20
+    # Put each display's color calibration back when Windows drops it (e.g.
+    # after the screen turns off and on), as calibration loaders do.
+    keep_calibration: bool = False
 
     def normalized(self) -> GeneralConfig:
         # The same ranges as the settings window's fields.

@@ -153,13 +153,20 @@ class Card(QFrame):
 class _Divider(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setFixedHeight(1)
+        self.setFixedHeight(2)
 
     def paintEvent(self, _event) -> None:
         palette = self.palette()
         window = palette.color(QPalette.ColorRole.Window)
         painter = QPainter(self)
-        painter.fillRect(self.rect().adjusted(16, 0, -16, 0), blend(window, palette.color(QPalette.ColorRole.WindowText), 0.09))
+        # One device pixel, unblended, in the middle of the widget: at display
+        # scaling like 125% a 1-pixel rectangle lands between pixels, so some
+        # lines came out twice as thick, and a line at the edge could fall
+        # outside the widget and vanish.
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(QPen(blend(window, palette.color(QPalette.ColorRole.WindowText), 0.12), 0))
+        middle = self.height() / 2
+        painter.drawLine(QPointF(16, middle), QPointF(self.width() - 17, middle))
 
 
 class SettingRow(QWidget):

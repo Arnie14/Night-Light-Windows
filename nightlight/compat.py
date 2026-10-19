@@ -19,6 +19,9 @@ from nightlight import APP_NAME, __version__
 from nightlight.hardware.brightness import CHANNEL_LABELS, MonitorInfo
 from nightlight.privacy import scrub
 
+# The ways in on Windows, for the report's last line (the others are the
+# Linux development backends').
+WINDOWS_CHANNELS = ("ddc", "ddc-high-level", "wmi", "sdr", "software")
 # What to try for each way a display can fall short.
 ADVICE = {
     "unsupported": "Turn DDC/CI on in the display's own menu, and connect it directly (no adapter, hub or dock); "
@@ -159,6 +162,6 @@ def render(items: list[CompatibilityEntry], system: dict[str, str] | None = None
             if e.detail:
                 lines.append(f"   {'Why:':<14}{e.detail}")
             lines.append(f"   {'Try:':<14}{advice_for(e.status)}")
-    lines += ["", f"Brightness is reached through: {', '.join(v for k, v in CHANNEL_LABELS.items() if k)}."]
+    lines += ["", f"Brightness is reached through: {', '.join(CHANNEL_LABELS[k] for k in WINDOWS_CHANNELS)}."]
     # Shared in bug reports: no user, computer or home names, serials shortened (privacy.py).
     return scrub("\n".join(lines) + "\n")

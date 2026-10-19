@@ -60,3 +60,9 @@ def test_the_simulated_displays_cover_every_kind():
 def test_system_summary_includes_windows_capabilities():
     summary = compat.system_summary()
     assert "Winlight" in summary and "Python" in summary
+
+
+def test_the_report_names_only_windows_ways_in():
+    text = compat.render(compat.entries([DELL]))
+    last = text.strip().splitlines()[-1]
+    assert "DDC/CI" in last and "WMI" in last and "KDE" not in last and "Simulated" not in last and "i2c" not in last

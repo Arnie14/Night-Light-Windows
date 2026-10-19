@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import json
+import os
 import subprocess
 import sys
 import uuid
@@ -181,7 +182,11 @@ sys.exit(cli.run(args, SingleInstance(sys.argv[1])))
 
 
 def run_cli(name, *args, wait_while=None):
-    process = subprocess.Popen([sys.executable, "-c", CLI, name, *args], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # UTF-8 mode off, as on the Python the releases are built with (3.13): output
+    # to a pipe would otherwise use the legacy code page.
+    env = {**os.environ, "PYTHONUTF8": "0"}
+    process = subprocess.Popen([sys.executable, "-c", CLI, name, *args], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, encoding="utf-8", errors="replace", env=env)
     for _ in range(1500):  # run the event loop, so the "running app" can answer
         if process.poll() is not None:
             break
@@ -211,3 +216,28 @@ def test_the_command_line_talks_to_the_running_app(handler):
 def test_the_command_line_without_the_app_running():
     code, _, err = run_cli(f"night-light-test-{uuid.uuid4().hex}", "--list")
     assert code == 2 and "isn't running" in err
+
+
+def test_the_command_line_prints_names_in_any_script(handler):
+    # Found testing the installed CLI: a display named "显示器" crashed the
+    # output with UnicodeEncodeError when it went to a file or a pipe.
+    commands, monitors, _ = handler
+    commands._config = lambda: AppConfig(displays=(DisplayPrefs("DEL41A2", "Écran 显示器"),))
+    name = f"night-light-test-{uuid.uuid4().hex}"
+    running = SingleInstance(name)
+    assert running.notify_running() is False
+    running.requestReceived.connect(lambda request, reply: reply(commands.handle(request)))
+    try:
+        code, out, err = run_cli(name, "--list")
+        assert code == 0 and "Écran 显示器" in out, err
+        code, out, err = run_cli(name, "--set", "40", "--display", "显示器")
+        assert code == 0 and monitors.faded[-1] == ("DEL41A2", 40), err
+    finally:
+        running.close()
+        QTest.qWait(50)
+
+
+def test_usage_mistakes_exit_with_1_not_2():
+    # 2 means Winlight isn't running; scripts may check for it.
+    result = subprocess.run([sys.executable, "main.py", "--set"], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1 and "expected one argument" in result.stderr

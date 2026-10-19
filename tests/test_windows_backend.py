@@ -914,3 +914,101 @@ def test_one_reset_now_and_then_is_not_a_fight(monkeypatch):
         gdi.ramps[D1] = identity_ramp()
         assert gamma.verify() is True and gdi.ramps[D1] == ours
     assert not gamma._displays[D1].contested
+
+
+# --- Keeping display calibrations (Settings > Displays) ------------------------
+
+CALIBRATION = [[min(65535, round(65535 * (i / 255) ** g)) for i in range(256)] for g in (1.08, 1.0, 0.94)]
+OTHER_CALIBRATION = [[min(65535, round(65535 * (i / 255) ** g)) for i in range(256)] for g in (0.95, 1.05, 1.0)]
+
+
+def kept(monkeypatch, tmp_path, ramp=None, keep=True, hdr=False):
+    gdi = FakeGdi({D1: [list(c) for c in (ramp or CALIBRATION)]}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A", hdr=hdr)])
+    gamma = windows.WindowsGammaBackend(journal=windows.GammaJournal(tmp_path / "gamma.json"))
+    gamma.set_keep_calibration(keep)
+    return gdi, gamma
+
+
+def test_a_calibration_windows_drops_is_put_back_under_night_light(monkeypatch, tmp_path):
+    # Seen on a real laptop: the screen turning off and on resets the ramp to a flat one.
+    gdi, gamma = kept(monkeypatch, tmp_path)
+    gamma.apply(4500)
+    tinted = gdi.ramps[D1]
+    assert tinted == gamma_ramp(whitepoint(4500), base=CALIBRATION)
+    gdi.ramps[D1] = identity_ramp()  # Windows dropped it
+    assert gamma.verify() is True
+    assert gdi.ramps[D1] == tinted  # tinted over the calibration again, not over a flat ramp
+
+
+def test_with_night_light_off_the_calibration_alone_is_put_back(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path)
+    gamma.reset()  # night light off
+    assert gdi.ramps[D1] == CALIBRATION
+    gdi.ramps[D1] = identity_ramp()
+    gamma.verify()
+    assert gdi.ramps[D1] == CALIBRATION
+    gamma.release()  # quitting leaves the calibration on screen
+    assert gdi.ramps[D1] == CALIBRATION
+
+
+def test_without_the_option_a_dropped_calibration_is_left_to_windows(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path, keep=False)
+    gamma.reset()
+    gdi.ramps[D1] = identity_ramp()
+    gamma.verify()
+    assert gdi.ramps[D1] == identity_ramp()
+    gamma._listed_at = None  # a while later (the ramp is re-read when the list is)
+    gamma.apply(4500)
+    assert gdi.ramps[D1] == gamma_ramp(whitepoint(4500))  # over what Windows shows
+
+
+def test_a_calibration_lost_while_the_app_was_closed_comes_back(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path, keep=False)
+    gamma.reset()  # seen once: remembered, even with the option off
+    gamma.release()
+    gdi.ramps[D1] = identity_ramp()  # dropped overnight
+    later = windows.WindowsGammaBackend(journal=windows.GammaJournal(tmp_path / "gamma.json"))
+    later.reset()
+    assert gdi.ramps[D1] == identity_ramp()  # the option is off: nothing happens
+    later.set_keep_calibration(True)  # turning it on puts it back
+    assert gdi.ramps[D1] == CALIBRATION
+
+
+def test_a_new_calibration_is_taken_up(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path)
+    gamma.reset()
+    gdi.ramps[D1] = [list(c) for c in OTHER_CALIBRATION]  # recalibrated, or Windows loaded another profile
+    gamma.verify()
+    gdi.ramps[D1] = identity_ramp()
+    gamma.verify()
+    assert gdi.ramps[D1] == OTHER_CALIBRATION  # the new one is what's kept
+
+
+def test_a_display_without_a_calibration_is_not_touched(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path, ramp=identity_ramp())
+    sets = gdi.sets
+    gamma.reset()
+    gamma.verify()
+    assert gdi.sets == sets and gdi.ramps[D1] == identity_ramp()
+
+
+def test_hdr_displays_are_left_alone(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path, hdr=True)
+    sets = gdi.sets
+    gamma.reset()
+    gdi.ramps[D1] = identity_ramp()
+    gamma.verify()
+    assert gdi.sets == sets
+
+
+def test_odd_calibrations_in_the_journal_are_ignored(tmp_path):
+    import json
+
+    path = tmp_path / "gamma.json"
+    path.write_text(json.dumps({"version": 1, "displays": {}, "calibrations": {
+        "A": "nope", "B": [[1, 2]], "C": [[0] * 256] * 3, "D": CALIBRATION}}))
+    journal = windows.GammaJournal(path)
+    assert journal.calibration("A") is None and journal.calibration("B") is None
+    assert journal.calibration("C") is None  # all black: not a calibration
+    assert journal.calibration("D") == CALIBRATION

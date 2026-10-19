@@ -79,6 +79,8 @@ class NightLightApp:
             brightness.safe_mode = self._safe_mode
         if set_dimming := getattr(brightness, "set_software_dimming", None):
             set_dimming(general.software_dimming)
+        if keep := getattr(gamma, "set_keep_calibration", None):
+            keep(general.keep_calibration)  # before night light first sets the ramps
         self.monitors = MonitorManager(brightness)
         # Memory before the scheduler: both act on new detections, and the
         # schedule's level, set second, is the one that stands.
@@ -281,6 +283,8 @@ class NightLightApp:
         self.controller.set_config(new.night_light)
         autostart.sync(self._autostart, new.general.start_with_windows)
         self.brightness_memory.set_enabled(new.general.remember_brightness)
+        if keep := getattr(self._gamma, "set_keep_calibration", None):
+            keep(new.general.keep_calibration)
         if new.general.software_dimming != old.general.software_dimming:
             self.monitors.set_software_dimming(new.general.software_dimming)
         self._apply_preferences(new)

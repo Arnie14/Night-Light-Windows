@@ -796,6 +796,9 @@ class GammaJournal:
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path
+        # Each display's calibration as last seen (its own ramp, not a flat
+        # one), by identity: put back when Windows drops it, if asked to.
+        self._calibrations: dict[str, win32.GammaRamp] = {}
         self._entries: dict[str, dict] = self._load()
         self._written_at = 0.0
         self._unsaved = False
@@ -805,13 +808,27 @@ class GammaJournal:
             return {}
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            entries = raw.get("displays", {}) if isinstance(raw, dict) else {}
-            return {k: v for k, v in entries.items() if isinstance(v, dict)}
+            if not isinstance(raw, dict):
+                return {}
+            calibrations = raw.get("calibrations", {})
+            if isinstance(calibrations, dict):
+                self._calibrations = {k: v for k, v in calibrations.items() if _valid_ramp(v) and plausible_base(v)}
+            entries = raw.get("displays", {})
+            return {k: v for k, v in entries.items() if isinstance(v, dict)} if isinstance(entries, dict) else {}
         except FileNotFoundError:
             return {}
         except (OSError, ValueError):
             log.warning("Could not read %s; crash recovery of display calibrations starts afresh", self.path, exc_info=True)
             return {}
+
+    def calibration(self, key: str) -> win32.GammaRamp | None:
+        return self._calibrations.get(key)
+
+    def remember_calibration(self, key: str, ramp: win32.GammaRamp) -> None:
+        known = self._calibrations.get(key)
+        if known is None or not ramps_match(known, ramp):
+            self._calibrations[key] = ramp
+            self.save()
 
     def entry(self, key: str) -> dict | None:
         entry = self._entries.get(key)
@@ -842,7 +859,7 @@ class GammaJournal:
         if self.path is None:
             return
         try:
-            write_atomic(self.path, json.dumps({"version": 1, "displays": self._entries}))
+            write_atomic(self.path, json.dumps({"version": 1, "displays": self._entries, "calibrations": self._calibrations}))
         except OSError:
             log.warning("Could not save %s", self.path, exc_info=True)
 
@@ -860,6 +877,13 @@ class GammaJournal:
             if ramps_match(ramp, gamma_ramp(whitepoint(kelvin), win32.RAMP_SIZE, base)):
                 return base
         return None
+
+
+def _valid_ramp(value: object) -> bool:
+    """A ramp read back from the journal file: three channels of 16-bit values."""
+    return (isinstance(value, list) and len(value) == 3 and all(
+        isinstance(channel, list) and len(channel) == win32.RAMP_SIZE and all(isinstance(v, int) and 0 <= v <= 65535 for v in channel)
+        for channel in value))
 
 
 @dataclass
@@ -910,6 +934,7 @@ class WindowsGammaBackend:
         self._reapplied = False  # set when refreshing the list put back a reset ramp
         self._warned: set[tuple[str, str]] = set()
         self._kelvin = NEUTRAL_KELVIN
+        self._keep_calibration = False
         self._lock = threading.RLock()
 
     def set_journal(self, path: Path) -> None:
@@ -917,6 +942,20 @@ class WindowsGammaBackend:
         with self._lock:
             self._journal = GammaJournal(path)
             self._listed_at = None  # look at the displays again with it
+
+    def set_keep_calibration(self, enabled: bool) -> None:
+        """Put each display's calibration back when Windows drops it (resets its
+        ramp to a flat one, e.g. when the screen turns off and on), as
+        DisplayCAL's profile loader does. A new calibration is still taken up."""
+        with self._lock:
+            if enabled == self._keep_calibration:
+                return
+            self._keep_calibration = enabled
+            log.info("Keeping display calibrations: %s", "on" if enabled else "off")
+            for display in self._current_displays():
+                self._restore_dropped_calibration(display)
+                if self._active(display):
+                    self._isolated(display, self._apply)
 
     @property
     def dimmed(self) -> bool:
@@ -1000,7 +1039,7 @@ class WindowsGammaBackend:
                 display.warmest = 0
                 display.dim_floor = 0
             for display in self._current_displays():
-                if display.effective_dim < 100 or display.kelvin_override is not None:
+                if display.effective_dim < 100 or display.kelvin_override is not None or self._keeps(display):
                     self._isolated(display, self._apply)
 
     def apply(self, kelvin: int) -> None:
@@ -1015,7 +1054,7 @@ class WindowsGammaBackend:
         with self._lock:
             self._kelvin = NEUTRAL_KELVIN
             for display in self._current_displays():
-                if display.effective_dim < 100 or display.kelvin_override is not None:
+                if display.effective_dim < 100 or display.kelvin_override is not None or self._keeps(display):
                     self._isolated(display, self._apply)
                 elif self._owned(display):
                     base = display.base or identity_ramp(win32.RAMP_SIZE)
@@ -1161,6 +1200,7 @@ class WindowsGammaBackend:
             sources = {name: (False, "") for name in self._api.attached_display_names()}
         displays = {}
         for name, (hdr, key) in sources.items():
+            new = name not in self._displays
             display = self._displays.get(name) or _GammaDisplay(name)
             if display.hdr and not hdr:
                 log.info("HDR was turned off for %s; night light and dimming apply to it again", name)
@@ -1175,13 +1215,39 @@ class WindowsGammaBackend:
                 log.debug("The gamma ramp of %s was reset; applying it again", name)
                 self._isolated(display, self._apply)
                 self._reapplied = True
+            elif new and self._restore_dropped_calibration(display):
+                self._isolated(display, self._apply)
             displays[name] = display
         self._displays = displays
         return list(displays.values())
 
     def _active(self, display: _GammaDisplay) -> bool:
-        """Whether this display should show something of ours (tint, dimming, a pause)."""
-        return self._kelvin < NEUTRAL_KELVIN or display.effective_dim < 100 or display.kelvin_override is not None
+        """Whether this display should show something of ours (tint, dimming,
+        a pause, or a calibration being kept)."""
+        return self._kelvin < NEUTRAL_KELVIN or display.effective_dim < 100 or display.kelvin_override is not None or self._keeps(display)
+
+    def _restore_dropped_calibration(self, display: _GammaDisplay) -> bool:
+        """A display found with a flat ramp although its calibration is known
+        (dropped before the app started, or while it was unplugged): take the
+        calibration as its base again, if calibrations are being kept."""
+        if not self._keep_calibration or display.hdr or display.base is not None or display.last_set is not None:
+            return False
+        calibration = self._journal.calibration(display.key or display.name)
+        if calibration is None:
+            return False
+        try:
+            current = self._api.get_gamma_ramp(display.name)
+        except OSError:
+            return False
+        if current is None or not ramps_match(current, identity_ramp(win32.RAMP_SIZE)):
+            return False
+        display.base = calibration
+        log.info("%s had lost its color calibration; putting it back", display.name)
+        return True
+
+    def _keeps(self, display: _GammaDisplay) -> bool:
+        """Whether this display's calibration is being kept on screen."""
+        return self._keep_calibration and display.base is not None and not display.hdr
 
     def _sync_base(self, display: _GammaDisplay) -> None:
         """Re-read the display's base ramp if something other than us set its ramp."""
@@ -1216,9 +1282,17 @@ class WindowsGammaBackend:
         else:
             self._journal.forget(key)  # whatever we left there is gone: the entry is stale
             if ramps_match(current, identity_ramp(win32.RAMP_SIZE)):
-                display.base = None
+                calibration = self._journal.calibration(key) if self._keep_calibration and not display.hdr else None
+                if calibration is not None:
+                    # Windows dropped it (the screen turned off and on, waking):
+                    # it stays the base, and is put back.
+                    display.base = calibration
+                    log.info("Windows dropped the color calibration of %s; putting it back", display.name)
+                else:
+                    display.base = None
             else:
                 display.base = current
+                self._journal.remember_calibration(key, current)
                 log.info("Keeping the existing gamma ramp of %s (its calibration) as the base for night light", display.name)
 
     def _foreign_change(self, display: _GammaDisplay) -> None:

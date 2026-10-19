@@ -372,3 +372,11 @@ def test_out_of_range_idle_settings_are_shown_in_range():
     window, controller = make_window(general=GeneralConfig(idle_dim=True, idle_minutes=500, idle_level=-5))
     assert (window.idle_minutes.value(), window.idle_level.value()) == (240, 0)
     controller.shutdown()
+
+
+def test_keeping_color_calibrations_is_an_option_on_the_displays_page(window):
+    assert not window.keep_calibration.isChecked()  # off by default
+    pages = [window._stack.widget(i).widget() for i in range(window.page_count())]
+    assert pages[2].isAncestorOf(window.keep_calibration)
+    window.keep_calibration.setChecked(True)
+    assert window.current_config().general.keep_calibration and apply_button(window).isEnabled()

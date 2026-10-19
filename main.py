@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from nightlight import APP_NAME, cli, config
 from nightlight.app import NightLightApp
+from nightlight.gc_guard import MainThreadGarbageCollector
 from nightlight.hardware import BACKENDS, create_backends
 from nightlight.privacy import ScrubbingFormatter
 from nightlight.single_instance import SingleInstance
@@ -21,8 +22,22 @@ from nightlight.ui import icons
 log = logging.getLogger("nightlight")
 
 
+class _Parser(argparse.ArgumentParser):
+    """Usage mistakes exit with 1, like any failed command: 2 means Winlight
+    isn't running (cli.py), which scripts may check for."""
+
+    def error(self, message: str):
+        self.print_usage(sys.stderr)
+        self.exit(1, f"{self.prog}: error: {message}\n")
+
+
+def is_cli_exe() -> bool:
+    """Running as winlight-cli.exe, the console twin of Winlight.exe."""
+    return bool(getattr(sys, "frozen", False)) and Path(sys.executable).stem.lower() == "winlight-cli"
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         description="Winlight: brightness and night light for Windows",
         epilog=cli.EXAMPLES,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -53,6 +68,11 @@ def main() -> int:
     cli.add_arguments(parser)
     args = parser.parse_args()
 
+    if is_cli_exe() and not (cli.requested(args) or args.diagnostics or args.probe or args.report or args.quit):
+        # The console twin given nothing to do: show how to use it, rather than
+        # start the tray app tied to this console window.
+        parser.print_help()
+        return 0
     if cli.requested(args) or args.diagnostics:
         # The command line: quick, no windows, and no log lines mixed into its output.
         from PySide6.QtCore import QCoreApplication
@@ -72,6 +92,9 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(icons.night_icon())
+    # Before any monitor thread starts: garbage holding Qt objects must never
+    # be collected on one of them (nightlight/gc_guard.py).
+    MainThreadGarbageCollector(app)
 
     if args.probe:
         from nightlight import probe

@@ -393,3 +393,22 @@ def test_a_failing_command_line_request_is_still_answered(start, monkeypatch):
     replies = []
     night_light.handle_request({"command": "list"}, replies.append)
     assert replies == [{"ok": False, "output": "Winlight couldn't do that; see its log for why."}]
+
+
+def test_keeping_calibrations_reaches_the_gamma_backend(start):
+    from nightlight.hardware.gamma import FakeGammaBackend
+    from nightlight.hardware.brightness import FakeBrightnessBackend
+
+    class Gamma(FakeGammaBackend):
+        def __init__(self):
+            super().__init__()
+            self.kept = []
+
+        def set_keep_calibration(self, enabled):
+            self.kept.append(enabled)
+
+    gamma = Gamma()
+    night_light, _ = start(GeneralConfig(keep_calibration=True), backends=(FakeBrightnessBackend(latency=0), gamma))
+    assert gamma.kept == [True]  # at start, before night light sets any ramp
+    night_light._apply_settings(AppConfig(general=GeneralConfig(keep_calibration=False)))
+    assert gamma.kept == [True, False]

@@ -200,6 +200,7 @@ Brightness options, in Settings > Brightness:
 - [ ] Lock and unlock (Win+L) with night light on: night light is back **at once** after unlocking, with no visible flash of normal colors (before: 1–2 s). The log shows "Windows: unlocked". Note if a flash remains, and how long.
 - [ ] Let Windows turn the screens off (Settings > System > Power > Screen timeout), then wake them: the log shows "Windows: display off" and "Windows: display on", nothing is sent to the displays while off, and they are detected again after.
 - [ ] Turn a monitor off and on with its power button: note anything that stops working.
+- [ ] With **Keep each display's color calibration** on and a calibration (ICC profile) loaded: let the screens turn off and wake them, and sleep and wake. The log says "Windows dropped the color calibration of …; putting it back" and the colors are calibrated again at once. *(Verified on a laptop panel.)*
 
 ## 8. Running alongside other tools
 

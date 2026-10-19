@@ -41,7 +41,8 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 | Remember brightness | ✅ Ready | Tested on a laptop panel: restored after start and waking, as Twinkle Tray does. Displays are told apart by their EDID serial number, so identical monitors keep separate levels; levels saved by earlier betas carry over. |
 | Compatible displays list and compatibility report | ✅ Ready | Settings > Displays lists each display, its connection and how its brightness is controlled (DDC/CI, WMI, SDR level, software dimming or none, with why); the report can be copied or saved, or printed with `--report`. Sends nothing to the displays. |
 | Pause night light for apps and fullscreen | ✅ Ready | Tested on a laptop: a listed app and a fullscreen window in front pause it, also when already in front at start. As f.lux's "disable for": only on the display showing the app, fading out and back in. |
-| Command line (`winlight-cli`) | ✅ Ready | Tested against the running app: list, get and set brightness per display or all, relative changes, night light on/off/toggle/auto, refresh, diagnostics, JSON output, exit codes. |
+| Command line (`winlight-cli`) | ✅ Ready | Tested installed, from PATH: list, get and set brightness per display or all, relative changes, night light on/off/toggle/auto, refresh, diagnostics, JSON output, exit codes, output to files and pipes, names in any script, many calls at once. |
+| Keep each display's color calibration | ✅ Ready | Optional, in Settings > Displays. Tested on a laptop: when Windows drops a calibration (the screen turning off and on, waking, or before Winlight started), it is put back, with night light on top; a new calibration is taken up. |
 | Rename and hide displays | ✅ Ready | Keyed by the display's id, so names follow it between ports; names saved by beta 3 and 4 still apply. |
 | One-click diagnostics, crash safe mode | ✅ Ready (safe mode: 🧪) | "Report a Problem…" saves a zip and copies a summary (tested). A display whose DDC/CI crashed or hung the app is skipped until retried: tested with a real crash of a child process, but not yet with a real DDC/CI monitor. |
 | Private logs and reports | ✅ Ready | Tested on real logs, probe and diagnostics: user name, computer name, home folder and emails are scrubbed, display serials shortened, and no location, time zone, custom names or listed app names are written. |
@@ -151,7 +152,9 @@ winlight-cli --refresh                   # detect displays again
 winlight-cli --list --json               # for scripts
 ```
 
-Display numbers are the order in the panel and in `--list`. Changes fade rather than jump. Exit codes: 0 done, 1 failed (the message says why), 2 Winlight isn't running.
+Display numbers are the order in the panel and in `--list`. Changes fade rather than jump. Exit codes: 0 done, 1 failed or a mistake in the command (the message says why), 2 Winlight isn't running. Run without options, `winlight-cli` prints its help.
+
+`winlight-cli.exe` is a console program of its own, next to the windowed `Winlight.exe`, so the terminal waits for it and gets its output and exit code; it needs no shim or wrapper script.
 
 ## 🐞 Reporting a problem
 

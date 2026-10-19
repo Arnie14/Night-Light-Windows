@@ -7,9 +7,10 @@ Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability,
 - **Base architecture: the reliability branch.** One serialized monitor queue with time limits, stable display identity, each display's desired, commanded and observed state, an idempotent brightness scheduler, daylight-saving-safe times, the gamma crash journal, and the redesigned settings window.
 - **Every beta 3 and 4 feature kept, ported onto that base.** Night light pausing for apps and fullscreen, the command line, diagnostics and privacy scrubbing, crash safe mode, the fullscreen focus guard, laptop brightness keys, the wake report, idle dimming, renaming and hiding displays, and the Windows Night Light notice.
 - **No feature removed.** Nothing conflicted badly enough to need a decision from you; the few deliberate behavior changes are listed below.
-- **Tests:** 529, all passing on Windows 11 (beta 4 had 299, the reliability branch 332). Every test from both sides is kept or ported under the same or an equivalent assertion (see [Tests](#tests)).
+- **Tests:** 543, all passing on Windows 11 (beta 4 had 299, the reliability branch 332). Every test from both sides is kept or ported under the same or an equivalent assertion (see [Tests](#tests)).
 - **Real Windows checks on this machine:** 113 of 113 passed. They drove the real APIs: ctypes display configuration, DDC/CI error paths, WMI, gamma ramps, safe mode, the journal, and winsystem's queries. The app itself was also run end to end through the command line.
 - **Bugs found and fixed while integrating:** 9, several of them present in beta 4 as well (see [Bugs found while integrating](#bugs-found-while-integrating)).
+- **Final round:** an option to keep display calibrations; the command line, installer and GUI checked again; 6 more bugs fixed, including a crash that garbage collection on a monitor thread could cause (see [Final round before release](#final-round-before-release)).
 - **Hardening pass:** 13 more bugs fixed, in concurrency, sleep, clashes with other software, files, logging and the CLI (see [Hardening pass](#hardening-pass)).
 
 ## What changed, by area
@@ -59,7 +60,7 @@ The backend investigation also found that WMI calls from the monitor thread are 
 
 ## Tests
 
-- **529 tests, all passing** (`pytest`, Python 3.15, Windows 11 26200), run repeatedly. `ruff --select F` is clean.
+- **543 tests, all passing** (`pytest`, Python 3.15, Windows 11 26200), run repeatedly. `ruff --select F` is clean.
 - **Nothing was dropped to make the suite pass.** Every test name from both sides was checked. The ones without the same name were ported under an equivalent assertion:
   - beta 4's memory-schedule tests are now scheduler tests: current point once, user change until the next point, turning on applies at once, sleeping monitor, idle hold. Two new integration tests on the real `MonitorManager` cover "a new point wins over an old remembered level" and "the user's level stands within a point".
   - beta 4's step-schedule tests are the points tests, with the same cases (off/empty, latest point, overnight, sun offsets, fallback 06:00/18:00, polar).
@@ -177,8 +178,74 @@ Thread names tell the UI, the queue and a stuck call apart, every backend call i
   - `Winlight.exe` and `winlight-cli.exe` worked: list, set, get, exit codes 0/1/2, `--report` and `--diagnostics`.
   - Its log had no errors, and its diagnostics zip no personal details.
 - **Real-API checks:** 113 of 113 again after the changes.
-- **Dependencies:** `pip check` is clean; all code parses as Python 3.12, and no newer standard-library APIs are used. The `wmi` package warns about invalid escape sequences on Python 3.15, which a future Python will reject; CI uses 3.13.
+- **Dependencies:** `pip check` is clean; all code parses as Python 3.12, and no newer standard-library APIs are used. The `wmi` package warns about invalid escape sequences on Python 3.15, which a future Python will reject; CI uses 3.13. The Inno Setup installer was built, installed, upgraded, uninstalled and reinstalled here.
 - **CI robustness:** the chaos test allows for a stalled thread on a loaded runner. The real-window test skips on CI, with a reason, only if Windows refuses the registration (no desktop session).
+
+## Final round before release
+
+### Keeping color calibrations (new option)
+
+Settings > Displays > **Keep each display's color calibration** (off by default). On this laptop, turning the screen off and on makes Windows reset the ramp to a flat one, dropping the ICC calibration until Windows' loader runs again (usually the next sign-in). With the option on, Winlight puts it back, as DisplayCAL's profile loader does.
+
+The backend stays small by reusing what was already there:
+
+- Each display's own non-flat ramp is remembered by display identity in the existing `gamma.json`, even with the option off, so turning it on later can still restore it.
+- With the option on, a reset to flat doesn't replace the remembered calibration as the base. The display counts as "ours", so the existing 1.5 s check notices the reset and re-applies it, with night light, dimming or a pause on top as usual.
+- Only resets to flat are undone. A new non-flat ramp (a re-calibration, or Windows' loader) is taken up and remembered.
+- Clash back-off, HDR skipping and crash recovery apply as for night light.
+
+Tested on the real panel:
+
+- the screen really turned off and on with night light on (tint back over the calibration)
+- the same with night light off (the calibration alone back)
+- a calibration lost while Winlight was closed (restored at start)
+- quitting (the calibration stays)
+
+There are also 8 backend tests, plus settings and app tests.
+
+### Command line
+
+- **Why Twinkle Tray needs a shim and Winlight doesn't.** Twinkle Tray's command line is its Electron GUI executable. A GUI program returns to the shell at once and can't print to it, so its Chocolatey package adds a shim, a small console exe on PATH, with a switch to make it wait for output. `winlight-cli.exe` is a console executable of its own (checked: PE subsystem "console", and "GUI" for `Winlight.exe`), and the installer's PATH option gives it a short name.
+- **Fixed: non-Latin display names crashed the CLI** when output was redirected or piped (`UnicodeEncodeError` with names like "显示器"), and the change had already been made when it crashed. This happens on Python before 3.15, which CI builds with. Such output is now UTF-8.
+- **Fixed: usage mistakes exited with 2**, the code that means "Winlight isn't running". They now exit with 1.
+- **Fixed: `winlight-cli` with no options started the whole tray app**, tied to the console window. It now prints its help.
+- **Tested installed, from PATH in a fresh `cmd`:**
+  - list (text and JSON to a file), get, and set by number, id and name
+  - relative changes (`-10`, `+20`), clamping, and the laptop panel's 1% floor
+  - errors (exit 1), night light on/toggle/auto, refresh, piping, `--report`
+  - exit code 2 once the app quit
+  - 12 calls at once, all answered
+  - about 0.4 s per call
+
+### Installer
+
+- Built with Inno Setup.
+- Installed silently with the PATH option, then upgraded over a running copy: the installer quit it first, replaced the files and didn't duplicate the PATH entry.
+- Uninstalled: program, Start menu entry, PATH entry and uninstall record removed, settings kept.
+- Reinstalled. Beta 5 is now installed on this PC, and the older beta was already gone before this round.
+
+### Other apps' names
+
+The app's own windows and tooltips no longer name other software; the repository's code comments and docs still credit them. Two places still mentioned other software:
+
+- **The compatibility report's last line**, shown in Settings, listed "KDE Plasma" and "Simulated" from the Linux development backends. It now lists only the Windows ways in.
+- **The tooltips you saw** came from the previously installed beta. The current tooltips and per-display reasons were checked by parsing every string in the code.
+
+Log messages still mention f.lux where it helps a bug report.
+
+### GUI review
+
+Every settings page was rendered in full, in light and dark, along with the panel, and checked:
+
+- **Width:** pages with and without a scrollbar now have the same width, lined up with the notices above them (they differed by the scrollbar's width).
+- **Dividers:** the lines between rows were uneven at 125% display scaling. Some came out twice as thick, and a first fix made some vanish. They're now a single device pixel each, verified pixel by pixel across a page in both themes.
+- **Text:** "20 %" now reads "20%", like the rest.
+
+### A crash found by repeating the test suite
+
+The full suite crashed the Python process (an access violation) in about half of the runs. Tracing every garbage collection to a file showed the cause: the last collection before each crash ran on the `monitor-service` thread. Python collects reference cycles in whichever thread happens to allocate. When the garbage holds Qt objects, they are destroyed from the wrong thread, and Qt crashes.
+
+The app has the same background threads, so this could crash it at random. pyqtgraph hit the same problem and solved it the same way: automatic collection is off, and a main-thread timer collects instead (`nightlight/gc_guard.py`). The young generation is collected when Python would, and everything once a minute. A test shows a busy worker thread no longer collects (200 times without the guard, 0 with it). The suite also collects after each test, on the main thread. Five full runs in a row passed (543 tests each) where about half had crashed before.
 
 ## Not verified (needs hardware or CI)
 
@@ -188,7 +255,7 @@ Thread names tell the UI, the queue and a stuck call apart, every backend call i
 - **A real sleep, hibernate and lock cycle.** Sleep, wake, lock, unlock, display change, clock change and sign-out were sent to the running app's real window (source and installed builds), and the screen was really turned off and on; a real sleep or hibernation, and how it looks, weren't.
 - **A real idle cycle**, and video keeping the screen on. Dimming and coming back were run on the real panel with a scripted idle time.
 - **Windows Night Light turned on:** only "off" was read.
-- **CI and packaging:** the GitHub Actions run on Python 3.13, and installing (or upgrading an earlier beta) with the installer, including its PATH option. The PyInstaller build was made and run here (Python 3.15), with `tzdata` and pywin32 bundled, and the Inno Setup installer compiled (`Winlight-0.1.0-beta.5-setup.exe`, 28 MB) but wasn't run, as this PC has an earlier beta installed.
+- **CI:** the GitHub Actions run on Python 3.13, and a build made there. Here (Python 3.15) the PyInstaller build and the Inno Setup installer were built and run: install with the PATH option, upgrade over a running copy, uninstall and reinstall.
 - **A time zone change while running:** handled from Windows' clock-change message and a check each minute (tested with a stand-in zone); not tried by changing this PC's zone.
 - **The GUI by eye:** layout at other scalings, keyboard navigation, the settings pages with real displays.
 

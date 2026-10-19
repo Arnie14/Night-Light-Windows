@@ -59,7 +59,25 @@ def build_request(args: argparse.Namespace) -> dict:
     return {"command": "refresh"}
 
 
+def unicode_output() -> None:
+    """Display names can be in any script ("显示器"). A console takes any text,
+    but output redirected to a file or a pipe is encoded with the legacy code
+    page (cp1252), where that fails: write UTF-8 there, and never crash over
+    a character (Python 3.15 does the former by itself)."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None or not hasattr(stream, "reconfigure"):
+            continue
+        try:
+            if stream.isatty():
+                stream.reconfigure(errors="replace")
+            else:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def run(args: argparse.Namespace, instance: SingleInstance | None = None) -> int:
+    unicode_output()
     reply = (instance or SingleInstance()).request(build_request(args))
     if reply is None:
         print(f"{APP_NAME} isn't running. Start it first, then try again.", file=sys.stderr)

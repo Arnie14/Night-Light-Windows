@@ -20,6 +20,7 @@ from pathlib import Path
 from PySide6.QtCore import QStandardPaths, QTime, QTimeZone, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QPalette
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QComboBox,
     QDialogButtonBox,
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
+    QStyle,
     QTimeEdit,
     QVBoxLayout,
     QWidget,
@@ -65,6 +67,10 @@ SWITCHING_TIMES = {
 # The location choice for typing in latitude and longitude.
 CUSTOM_LOCATION = ""
 CUSTOM_LOCATION_LABEL = "Custom location"
+# Pages keep this much space on the right besides the scrollbar's width,
+# taken up when a page needs no scrollbar: card edges stay put between pages
+# and line up with the notices above them.
+PAGE_RIGHT = 32
 # Controls on the right of the cards share widths, so they end on one line.
 WIDE_FIELD = 300
 NARROW_FIELD = 120
@@ -133,14 +139,14 @@ class SettingsWindow(QWidget):
         self.windows_night_light = WindowsNightLightNotice()
         notice_holder = QWidget()
         notice_layout = QVBoxLayout(notice_holder)
-        notice_layout.setContentsMargins(28, 0, 32, 12)
+        notice_layout.setContentsMargins(28, 0, PAGE_RIGHT + _scrollbar_width(), 12)
         notice_layout.addWidget(self.windows_night_light)
         self._notice_holder = notice_holder
         notice_holder.setVisible(False)
         content.addWidget(notice_holder)
         banner_holder = QWidget()
         banner_holder_layout = QVBoxLayout(banner_holder)
-        banner_holder_layout.setContentsMargins(28, 0, 32, 12)
+        banner_holder_layout.setContentsMargins(28, 0, PAGE_RIGHT + _scrollbar_width(), 12)
         banner_holder_layout.addWidget(self.banner)
         self._banner_holder = banner_holder
         content.addWidget(banner_holder)
@@ -182,6 +188,7 @@ class SettingsWindow(QWidget):
             self.exempt_fullscreen.toggled,
             self.exempt_apps.changed,
             self.displays.changed,
+            self.keep_calibration.toggled,
         ):
             signal.connect(self._on_changed)
         self.location.currentIndexChanged.connect(self._on_location_picked)
@@ -290,7 +297,7 @@ class SettingsWindow(QWidget):
         self.software_dimming = ToggleSwitch("Dim displays without brightness control")
         self.idle_dim = ToggleSwitch("Dim displays when I'm away")
         self.idle_minutes = QSpinBox(minimum=1, maximum=MAX_IDLE_MINUTES, suffix=" min")
-        self.idle_level = QSpinBox(minimum=0, maximum=100, singleStep=5, suffix=" %")
+        self.idle_level = QSpinBox(minimum=0, maximum=100, singleStep=5, suffix="%")
         for field in (self.idle_minutes, self.idle_level):
             field.setFixedWidth(NARROW_FIELD)
 
@@ -304,6 +311,7 @@ class SettingsWindow(QWidget):
 
         # Displays
         self.displays = DisplayList()
+        self.keep_calibration = ToggleSwitch("Keep each display's color calibration")
         self.refresh_displays = QPushButton("Detect again")
         self.copy_report = QPushButton("Copy report")
         self.save_report = QPushButton("Save report…")
@@ -388,6 +396,12 @@ class SettingsWindow(QWidget):
         names.add(SettingRow("Rename or hide displays", "A name replaces the display's own in the panel. "
                              "Hidden displays are left out of the panel and never changed", below=self.displays))
         layout.addWidget(names)
+        layout.addWidget(SectionLabel("Color calibration"))
+        calibration = Card()
+        calibration.add(SettingRow("Keep each display's color calibration",
+                                   "Put a calibration back when Windows drops it, for example after the screen turns off",
+                                   self.keep_calibration))
+        layout.addWidget(calibration)
         return page
 
     def _general_page(self) -> QWidget:
@@ -447,6 +461,7 @@ class SettingsWindow(QWidget):
             idle_dim=self.idle_dim.isChecked(),
             idle_minutes=self.idle_minutes.value(),
             idle_level=self.idle_level.value(),
+            keep_calibration=self.keep_calibration.isChecked(),
         )
         return AppConfig(night_light=night_light, general=general, brightness_schedule=self.schedule.config(),
                          displays=self.displays.prefs())
@@ -483,6 +498,7 @@ class SettingsWindow(QWidget):
         self.idle_dim.setChecked(general.idle_dim)
         self.idle_minutes.setValue(general.idle_minutes)
         self.idle_level.setValue(general.idle_level)
+        self.keep_calibration.setChecked(general.keep_calibration)
         self.exempt_fullscreen.setChecked(night_light.exempt_fullscreen)
         self.exempt_apps.set_apps(night_light.exempt_apps)
         self.schedule.set_config(config.brightness_schedule)
@@ -663,7 +679,7 @@ class SettingsWindow(QWidget):
 def _page(title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(28, 0, 32, 24)
+    layout.setContentsMargins(28, 0, PAGE_RIGHT, 24)
     layout.setSpacing(6)
     layout.addWidget(PageTitle(title, subtitle))
     return page, layout
@@ -681,7 +697,21 @@ def _scrolling(page: QWidget) -> QScrollArea:
         widget.setBackgroundRole(QPalette.ColorRole.Window)
         widget.setAutoFillBackground(False)
     area.viewport().setAutoFillBackground(False)
+
+    def make_room(_low: int, high: int) -> None:
+        # Without a scrollbar, the page takes its width as extra margin.
+        margins = page.layout().contentsMargins()
+        right = PAGE_RIGHT + (0 if high > 0 else _scrollbar_width())
+        if margins.right() != right:
+            page.layout().setContentsMargins(margins.left(), margins.top(), right, margins.bottom())
+
+    area.verticalScrollBar().rangeChanged.connect(make_room)
+    make_room(0, 0)
     return area
+
+
+def _scrollbar_width() -> int:
+    return QApplication.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
 
 
 def _open_log_folder() -> None:
