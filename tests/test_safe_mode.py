@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-only
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 from nightlight.hardware import win32, windows
 from nightlight.hardware.win32 import DisplayTarget, PhysicalMonitor
-from nightlight.safe_mode import SKIPPED_REASON, SafeMode
+from nightlight.safe_mode import SKIPPED_REASON, SKIPPED_SHORT, SafeMode
 
 ROOT = Path(__file__).resolve().parent.parent
 D1, D2 = r"\\.\DISPLAY1", r"\\.\DISPLAY2"
@@ -52,6 +53,50 @@ def test_the_backend_does_not_probe_a_skipped_display(tmp_path, monkeypatch):
     backend.safe_mode = safe
     ok, bad = backend.list_monitors()
     assert ok.supported and probed == [1]
-    assert not bad.supported and bad.reason == SKIPPED_REASON and 2 in destroyed
+    assert not bad.supported and (bad.reason, bad.detail, bad.status) == (SKIPPED_SHORT, SKIPPED_REASON, "skipped") and 2 in destroyed
     backend.retry_skipped()
     assert all(m.supported for m in backend.list_monitors())
+
+
+def test_displays_probed_side_by_side_are_all_skipped_after_a_crash(tmp_path):
+    # Detection probes displays in parallel: which one crashed is unknown, so all are skipped.
+    code = (
+        "import os, threading; from pathlib import Path; from nightlight.safe_mode import SafeMode\n"
+        f"safe = SafeMode(Path({str(tmp_path)!r}))\n"
+        "inside = threading.Barrier(3)\n"
+        "def probe(name):\n"
+        "    with safe.risky(name, 'detecting ' + name):\n"
+        "        inside.wait(); inside.wait()\n"
+        "threads = [threading.Thread(target=probe, args=(n,)) for n in ('DEL41A2:7XKJ9F3', 'GSM5B7F:ABCDE')]\n"
+        "[t.start() for t in threads]\n"
+        "inside.wait()\n"
+        "os._exit(3)\n"
+    )
+    assert subprocess.run([sys.executable, "-c", code], cwd=ROOT, timeout=30).returncode == 3
+    safe = SafeMode(tmp_path)
+    assert safe.skipped == {"DEL41A2:7XKJ9F3", "GSM5B7F:ABCDE"}
+    safe.clear(["GSM5B7F:ABCDE"])  # retrying one keeps the other skipped
+    assert SafeMode(tmp_path).skipped == {"DEL41A2:7XKJ9F3"}
+
+
+def test_one_call_finishing_keeps_the_others_marked(tmp_path):
+    safe = SafeMode(tmp_path)
+    marker = tmp_path / "ddc-in-progress.json"
+    with safe.risky("A", "detecting A"):
+        with safe.risky("B", "detecting B"):
+            pass
+        assert json.loads(marker.read_text()) == {"in_progress": {"A": "detecting A"}}
+    assert not marker.exists()
+
+
+def test_a_marker_left_by_beta_4_is_understood(tmp_path):
+    (tmp_path / "ddc-in-progress.json").write_text(json.dumps({"display": D2, "what": "detecting DELL"}))
+    safe = SafeMode(tmp_path)
+    assert safe.is_skipped("DEL41A2:7XKJ9F3", D2)  # beta 4 named displays by GDI name: still matched
+    assert not (tmp_path / "ddc-in-progress.json").exists()
+
+
+def test_odd_files_are_ignored(tmp_path):
+    (tmp_path / "ddc-in-progress.json").write_text("{nope")
+    (tmp_path / "ddc-skip.json").write_text(json.dumps({"not": "a list"}))
+    assert SafeMode(tmp_path).skipped == set()

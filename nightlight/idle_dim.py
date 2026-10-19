@@ -42,7 +42,7 @@ from collections.abc import Callable
 from PySide6.QtCore import QObject, QTimer
 
 from nightlight.brightness_memory import BrightnessMemory
-from nightlight.monitors import MonitorManager
+from nightlight.monitors import IDLE, RESTORE, MonitorManager
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ class IdleDimmer(QObject):
         hidden: Callable[[], frozenset[str]] = frozenset,
         gamma=None,  # a gamma backend with set_idle_dim, for software dimming
         parent: QObject | None = None,
+        scheduler=None,  # the brightness schedule, held back while dimmed like restores
     ) -> None:
         super().__init__(parent)
         self._monitors = monitors
@@ -74,7 +75,8 @@ class IdleDimmer(QObject):
         self._after_s = 300.0
         self._level = 20
         self._gamma = gamma if hasattr(gamma, "set_idle_dim") else None
-        self._before: dict[int, int] | None = None  # index -> level before dimming, while dimmed
+        self._scheduler = scheduler
+        self._before: dict[str, int] | None = None  # display key -> level before dimming, while dimmed
         self._software: list[str] = []  # displays dimmed in software, while dimmed
         self._fade: list[dict[str, int]] = []  # software levels still to apply, one per step
         self._fade_timer = QTimer(self, interval=FADE_STEP_MS)
@@ -86,8 +88,8 @@ class IdleDimmer(QObject):
     def dimmed(self) -> bool:
         return self._before is not None
 
-    def plan(self) -> tuple[dict[int, int], list[str]]:
-        """Which displays to dim, and how: (index -> hardware/SDR level for the
+    def plan(self) -> tuple[dict[str, int], list[str]]:
+        """Which displays to dim, and how: (display key -> hardware/SDR level for the
         laptop panel and SDR-controlled HDR displays, never brighter than now),
         [GDI names to dim in software]."""
         hidden = self._hidden()
@@ -95,11 +97,11 @@ class IdleDimmer(QObject):
         for monitor in self._monitors.monitors:
             if monitor.key in hidden:
                 continue
-            current = self._monitors.brightness.get(monitor.index)
+            current = self._monitors.value(monitor.key)
             if monitor.supported and (monitor.internal and monitor.control == "hardware" or monitor.control == "sdr"):
                 target = max(monitor.minimum, self._level)
                 if current is not None and target < current:
-                    levels[monitor.index] = target
+                    levels[monitor.key] = target
             elif not monitor.hdr and not monitor.internal and monitor.display and self._gamma is not None:
                 if monitor.display not in software:  # cloned displays share one ramp
                     software.append(monitor.display)
@@ -131,9 +133,12 @@ class IdleDimmer(QObject):
         self._memory.set_held(False)
         log.info("Input again; bringing displays back from idle dimming")
         for monitor in self._monitors.monitors:
-            if monitor.index in before:
+            if monitor.key in before:
                 level = self._memory.target(monitor)
-                self._monitors.restore_brightness(monitor.index, before[monitor.index] if level is None else level, fade=True)
+                self._monitors.restore_brightness(monitor.key, before[monitor.key] if level is None else level, fade=True, source=RESTORE)
+        if self._scheduler is not None:
+            # After the restores: a point that began while away replaces them in the queue.
+            self._scheduler.set_held(False)
         self._fade_software(self._level, 100, self._software)
         self._software = []
         if self._enabled:
@@ -157,12 +162,14 @@ class IdleDimmer(QObject):
             "No input for %.0f min; dimming to %d%%: %d display(s) in software, %d through Windows",
             idle / 60, self._level, len(software), len(levels),
         )
-        self._before = {index: self._monitors.brightness[index] for index in levels}
-        for index, level in levels.items():
-            self._monitors.restore_brightness(index, level, fade=True)
+        self._before = {key: self._monitors.value(key) for key in levels}
+        for key, level in levels.items():
+            self._monitors.restore_brightness(key, level, fade=True, source=IDLE)
         self._software = software
         self._fade_software(100, self._level, software)
         self._memory.set_held(True)
+        if self._scheduler is not None:
+            self._scheduler.set_held(True)
         self._timer.start(WATCH_MS)
 
     def _fade_software(self, start: int, end: int, displays: list[str]) -> None:

@@ -1,127 +1,29 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Editors for the list-like settings: brightness schedule steps, apps to
-pause night light for, and display names and visibility."""
+"""Editors for the list-like settings: apps to pause night light for, and
+display names and visibility. (The brightness schedule has its own,
+schedule_editor.py.)"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QTime, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QListWidget,
     QMenu,
     QPushButton,
-    QSpinBox,
-    QTimeEdit,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from nightlight.config import SUNRISE, SUNSET, BrightnessStep, DisplayPrefs
+from nightlight.config import AppConfig, DisplayPrefs
 from nightlight.hardware.brightness import MonitorInfo
 from nightlight.ui.widgets import SecondaryLabel
-
-AT_TIME = "time"
-STEP_KINDS = {AT_TIME: "At", SUNRISE: "Sunrise", SUNSET: "Sunset"}
-
-
-class StepRow(QWidget):
-    """One step of the brightness schedule: when, and which level."""
-
-    changed = Signal()
-    removeRequested = Signal(object)  # self
-
-    def __init__(self, step: BrightnessStep) -> None:
-        super().__init__()
-        self.kind = QComboBox()
-        for key, label in STEP_KINDS.items():
-            self.kind.addItem(label, key)
-        self.time = QTimeEdit(displayFormat="HH:mm")
-        self.offset = QSpinBox(minimum=-180, maximum=180, singleStep=15, suffix=" min")
-        self.offset.setToolTip("Minutes before (negative) or after the sun event")
-        self.offset.setPrefix("+")
-        self.level = QSpinBox(minimum=0, maximum=100, singleStep=5, suffix=" %")
-        remove = QToolButton(text="✕", toolTip="Remove this step", autoRaise=True)
-        remove.clicked.connect(lambda: self.removeRequested.emit(self))
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        for widget in (self.kind, self.time, self.offset):
-            layout.addWidget(widget)
-        layout.addWidget(QLabel("→"))
-        layout.addWidget(self.level)
-        layout.addStretch(1)
-        layout.addWidget(remove)
-
-        sun = step.at in (SUNRISE, SUNSET)
-        self.kind.setCurrentIndex(self.kind.findData(step.at if sun else AT_TIME))
-        self.time.setTime(QTime.fromString(step.at, "HH:mm") if not sun else QTime(7, 0))
-        self.offset.setValue(step.offset_minutes)
-        self.level.setValue(step.level)
-        self._update()
-        for signal in (self.kind.currentIndexChanged, self.time.timeChanged, self.offset.valueChanged, self.level.valueChanged):
-            signal.connect(self._update)
-            signal.connect(self.changed)
-
-    def step(self) -> BrightnessStep:
-        kind = self.kind.currentData()
-        if kind == AT_TIME:
-            return BrightnessStep(self.time.time().toString("HH:mm"), self.level.value())
-        return BrightnessStep(kind, self.level.value(), self.offset.value())
-
-    def _update(self) -> None:
-        sun = self.kind.currentData() != AT_TIME
-        self.time.setVisible(not sun)
-        self.offset.setVisible(sun)
-        self.offset.setPrefix("+" if self.offset.value() >= 0 else "")
-
-
-class StepList(QWidget):
-    changed = Signal()
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._rows: list[StepRow] = []
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(6)
-        self._add = QPushButton("Add a step")
-        self._add.clicked.connect(lambda: self._append(BrightnessStep("12:00", 60)))
-        self._layout.addWidget(self._add)
-
-    def steps(self) -> tuple[BrightnessStep, ...]:
-        return tuple(row.step() for row in self._rows)
-
-    def set_steps(self, steps: tuple[BrightnessStep, ...]) -> None:
-        for row in self._rows:
-            row.deleteLater()
-        self._rows = []
-        for step in steps:
-            self._append(step, notify=False)
-        self.changed.emit()
-
-    def _append(self, step: BrightnessStep, notify: bool = True) -> None:
-        row = StepRow(step)
-        row.changed.connect(self.changed)
-        row.removeRequested.connect(self._remove)
-        self._layout.insertWidget(len(self._rows), row)
-        self._rows.append(row)
-        if notify:
-            self.changed.emit()
-
-    def _remove(self, row: StepRow) -> None:
-        self._rows.remove(row)
-        row.deleteLater()
-        self.changed.emit()
-
 
 class AppList(QWidget):
     """Apps to pause night light for, by executable name."""
@@ -217,10 +119,17 @@ class DisplayList(QWidget):
             if item.widget() is not self._empty:
                 item.widget().deleteLater()
         self._rows = {}
-        saved = {p.key: p for p in prefs}
+        # Looked up as the app does, so names saved under a key from an older
+        # version (without the serial) show on the display they belong to.
+        lookup = AppConfig(displays=prefs)
+        saved = {m.key: lookup.display(m.key) for m in monitors}
         known = {m.key: m.name for m in monitors}
+        stored = {p.key for p in prefs}
+        moved = {m.key.split(":", 1)[0] for m in monitors if m.key not in stored}  # older keys now shown under the new
         for p in prefs:
-            known.setdefault(p.key, f"{p.key} (not connected)")
+            if p.key not in known and p.key not in moved:
+                saved[p.key] = p
+                known[p.key] = f"{p.key} (not connected)"
         self._empty.setVisible(not known)
         if not known:
             self._grid.addWidget(self._empty, 0, 0)

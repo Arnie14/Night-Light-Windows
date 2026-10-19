@@ -83,6 +83,54 @@ def gear_glyph(color: QColor) -> QIcon:
     return _icon(draw)
 
 
+def moon_glyph(color: QColor) -> QIcon:
+    """An outlined crescent, for the Night Light page."""
+
+    def draw(painter: QPainter) -> None:
+        moon = QPainterPath()
+        moon.addEllipse(QRectF(10, 10, 44, 44))
+        bite = QPainterPath()
+        bite.addEllipse(QRectF(24, 2, 40, 40))
+        pen = QPen(color, 5)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.drawPath(moon.subtracted(bite))
+
+    return _icon(draw)
+
+
+def sun_glyph(color: QColor) -> QIcon:
+    """An outlined sun, for the Brightness page."""
+
+    def draw(painter: QPainter) -> None:
+        pen = QPen(color, 5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        center = QPointF(_SIZE / 2, _SIZE / 2)
+        painter.drawEllipse(center, 11, 11)
+        for i in range(8):
+            angle = i * math.pi / 4
+            direction = QPointF(math.cos(angle), math.sin(angle))
+            painter.drawLine(center + direction * 19, center + direction * 26)
+
+    return _icon(draw)
+
+
+def display_glyph(color: QColor) -> QIcon:
+    """A monitor on a stand, for the Displays page."""
+
+    def draw(painter: QPainter) -> None:
+        pen = QPen(color, 5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.drawRoundedRect(QRectF(7, 11, 50, 33), 4, 4)
+        painter.drawLine(QPointF(32, 44), QPointF(32, 53))
+        painter.drawLine(QPointF(21, 54), QPointF(43, 54))
+
+    return _icon(draw)
+
+
 def _icon(draw: Callable[[QPainter], None]) -> QIcon:
     """Draw at each size the tray may ask for (16-32 px depending on DPI)
     rather than letting Windows shrink one large image into a blur."""

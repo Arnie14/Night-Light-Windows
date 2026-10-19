@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import dataclasses
 import json
+import time
 
 import pytest
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
@@ -8,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 from nightlight import app as app_module
 from nightlight.config import AppConfig, GeneralConfig
 from nightlight.hardware import create_backends
+from nightlight.wake_report import RESCAN_AFTER_WAKE_S
 
 
 class RecordingAutostart:
@@ -25,14 +27,19 @@ class RecordingAutostart:
 def start(tmp_path, monkeypatch):
     """Start the app with the fake backends, a tray, and the given general settings."""
     monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True))
+    # Not this machine's real state: a fullscreen window here would hold back the settings at start.
+    monkeypatch.setattr(app_module.winsystem, "user_busy", lambda: False)
     entry = RecordingAutostart()
     monkeypatch.setattr(app_module.autostart, "create", lambda: entry)
     started = []
 
-    def run(general: GeneralConfig):
+    def run(general: GeneralConfig, backends=None, night_light=None):
         path = tmp_path / "settings.json"
-        path.write_text(json.dumps({"general": dataclasses.asdict(general)}))
-        brightness, gamma = create_backends("fake")
+        settings = {"general": dataclasses.asdict(general)}
+        if night_light is not None:
+            settings["night_light"] = night_light
+        path.write_text(json.dumps(settings))
+        brightness, gamma = backends or create_backends("fake")
         night_light = app_module.NightLightApp(QApplication.instance(), brightness, gamma, path)
         started.append(night_light)
         return night_light, entry
@@ -75,6 +82,170 @@ def test_brightness_file_sits_next_to_the_settings(start, tmp_path):
     assert night_light.brightness_memory._path == tmp_path / "brightness.json"
 
 
+def test_sleep_and_waking_reach_every_part(start, monkeypatch):
+    night_light, _ = start(GeneralConfig())
+    calls = []
+    monitors = night_light.monitors
+
+    def recorded(obj, name, entry):
+        original = getattr(obj, name)
+
+        def wrapper(*args, **kwargs):
+            calls.append(entry(*args, **kwargs))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(obj, name, wrapper)
+
+    recorded(monitors, "suspend", lambda: "suspend")
+    recorded(monitors, "resume", lambda delays=(): ("resume", tuple(delays)))
+    recorded(night_light.wake_report, "woke", lambda: "wake report")
+    recorded(night_light.brightness_memory, "restore_all_soon", lambda: "restore all")
+    recorded(night_light.scheduler, "evaluate", lambda reason="": ("schedule", reason))
+    watcher = night_light._watcher
+    watcher.suspending.emit()
+    assert monitors.paused  # nothing goes to the displays while asleep
+    watcher.resumed.emit()
+    assert not monitors.paused
+    assert [round(due - time.monotonic()) for due, _ in monitors._scheduled] == list(RESCAN_AFTER_WAKE_S)
+    watcher.displaysOff.emit()
+    watcher.displaysOn.emit()
+    watcher.clockChanged.emit()
+    assert calls == [
+        "suspend",
+        "wake report", ("resume", ()), "restore all", ("schedule", "wake"),  # detection on the wake report's schedule
+        "suspend",
+        ("resume", app_module.RESCAN_AFTER_DISPLAYS_ON_S), "restore all",
+        ("schedule", "clock"),
+    ]
+
+
+def test_displays_turning_back_on_without_having_slept_detects_again(start, monkeypatch):
+    # E.g. Windows reports "on" while the app never saw "off": not paused, so just look again.
+    night_light, _ = start(GeneralConfig())
+    later = []
+    monkeypatch.setattr(night_light.monitors, "refresh_later", lambda delays: later.append(tuple(delays)))
+    night_light._watcher.displaysOn.emit()
+    assert later == [app_module.RESCAN_AFTER_DISPLAYS_ON_S] and not night_light.monitors.paused
+
+
+def test_a_second_sleep_soon_after_a_wake_still_resumes(start):
+    # The wake report counts a wake within a minute of the last as the same
+    # one; the displays must still be resumed after the second sleep.
+    night_light, _ = start(GeneralConfig())
+    watcher = night_light._watcher
+    watcher.suspending.emit()
+    watcher.resumed.emit()
+    watcher.suspending.emit()
+    watcher.resumed.emit()
+    assert not night_light.monitors.paused
+
+
+def test_signing_out_shuts_down_once(start, monkeypatch):
+    night_light, _ = start(GeneralConfig())
+    shutdowns = []
+    original = night_light.controller.shutdown
+    monkeypatch.setattr(night_light.controller, "shutdown", lambda: (shutdowns.append(1), original()))
+    night_light.system_events.endingSession.emit()  # Windows is signing out
+    night_light._shutdown()  # and then the app quits as usual
+    assert shutdowns == [1]
+
+
+def test_the_compatibility_report_describes_the_displays(start):
+    night_light, _ = start(GeneralConfig())
+    from PySide6.QtTest import QTest
+
+    for _ in range(300):
+        if night_light.monitors.monitors:
+            break
+        QTest.qWait(10)
+    report = night_light.compatibility_report()
+    assert "DELL U2720Q" in report and "Software dimming" in report and "Old projector" in report
+
+
+class StuckBackend:
+    """One display whose writes never return."""
+
+    def __init__(self):
+        import threading
+
+        self.release = threading.Event()
+
+    def list_monitors(self):
+        from nightlight.hardware.brightness import MonitorInfo
+
+        return [MonitorInfo(0, "Stuck", True, key="STUCK", channel="ddc")]
+
+    def get_brightness(self, index):
+        return 50
+
+    def set_brightness(self, index, value):
+        self.release.wait(10)
+
+
+def test_quitting_during_a_stuck_write_is_bounded_and_restores_colors(start, monkeypatch):
+    import time
+
+    from PySide6.QtTest import QTest
+
+    from nightlight import monitors as monitors_module
+    from nightlight.hardware.gamma import FakeGammaBackend
+
+    monkeypatch.setattr(monitors_module, "SHUTDOWN_WAIT_S", 0.3)
+    backend, gamma = StuckBackend(), FakeGammaBackend()
+    night_light, _ = start(GeneralConfig(), backends=(backend, gamma))
+    for _ in range(300):
+        state = night_light.monitors.state("STUCK")
+        if state is not None and state.controllable:
+            break
+        QTest.qWait(10)
+    gamma.apply(4000)
+    gamma.set_dimming("x", 50)
+    night_light.monitors.set_brightness("STUCK", 30)
+    QTest.qWait(50)  # the write is now stuck in the display
+    started = time.monotonic()
+    night_light._shutdown()
+    assert time.monotonic() - started < 2  # quitting doesn't wait for the stuck call
+    assert gamma.kelvin == 6500 and not gamma.dimmed  # colors and dimming undone first
+    assert night_light.monitors.hung  # main.py then exits without waiting for it
+    backend.release.set()
+
+
+def test_night_light_and_brightness_schedule_firing_together(monkeypatch):
+    # Both schedules change at 20:00: each does its part, neither blocks the other.
+    from datetime import datetime, timezone
+
+    from PySide6.QtTest import QTest
+
+    from nightlight import controller as controller_module
+    from nightlight.brightness_scheduler import BrightnessScheduler
+    from nightlight.config import BrightnessScheduleConfig, Mode, NightLightConfig, SchedulePoint
+    from nightlight.controller import NightLightController
+    from nightlight.hardware.brightness import FakeBrightnessBackend
+    from nightlight.hardware.gamma import FakeGammaBackend
+    from nightlight.monitors import MonitorManager
+
+    monkeypatch.setattr(controller_module, "QUICK_ADJUST_MS", 100)
+    now = datetime(2026, 6, 15, 20, 0, 1, tzinfo=timezone.utc)
+    gamma, backend = FakeGammaBackend(), FakeBrightnessBackend(latency=0)
+    monitors = MonitorManager(backend)
+    scheduler = BrightnessScheduler(monitors, BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00"))),
+                                    None, clock=lambda: now)
+    night = NightLightController(gamma, NightLightConfig(enabled=True, mode=Mode.TIMES, night_start="20:00", day_start="07:00",
+                                                         transition_minutes=0, night_temperature=4500), clock=lambda: now)
+    try:
+        monitors.refresh()
+        for _ in range(300):
+            if all(backend._brightness.get(i) == 50 for i in (0, 1, 2)) and gamma.kelvin == 4500:
+                break
+            QTest.qWait(10)
+        assert gamma.kelvin == 4500
+        assert {backend._brightness[i] for i in (0, 1, 2)} == {50}
+    finally:
+        scheduler.shutdown()
+        night.shutdown()
+        monitors.shutdown()
+
+
 def test_turning_software_dimming_off_reaches_the_monitors(start, monkeypatch):
     night_light, _ = start(GeneralConfig(software_dimming=True))
     calls = []
@@ -102,8 +273,11 @@ def test_display_preferences_reach_the_panel_and_brightness(start):
 
     night_light, _ = start(GeneralConfig())
     night_light._apply_settings(AppConfig(displays=(DisplayPrefs("SAM7136", "", True),)))
-    assert night_light.flyout._prefs["SAM7136"].hidden
-    assert night_light.brightness_memory._hidden == {"SAM7136"}
+    assert night_light.flyout._display_prefs("SAM7136").hidden
+    assert night_light.brightness_memory._hidden("SAM7136") and not night_light.brightness_memory._hidden("DEL41A2")
+    assert night_light.scheduler._hidden("SAM7136")
+    # Saved by beta 4 under the hardware id alone: still hidden under a key with a serial.
+    assert night_light.brightness_memory._hidden("SAM7136:0x01ABCDEF")
 
 
 def test_an_exempt_app_pauses_night_light_on_its_display(start, monkeypatch):
@@ -116,6 +290,17 @@ def test_an_exempt_app_pauses_night_light_on_its_display(start, monkeypatch):
     assert night_light.controller.paused == {r"\\.\DISPLAY2": "game.exe"}
     night_light._apply_settings(AppConfig())
     assert night_light.controller.paused == {}
+
+
+def test_an_app_already_in_front_at_start_pauses_night_light(start, monkeypatch):
+    # Found running the app: the first check happened before the controller
+    # was listening, and later checks only report changes, so a fullscreen
+    # game already in front at start stayed tinted.
+    from nightlight.hardware.winsystem import ForegroundApp
+
+    monkeypatch.setattr(app_module.winsystem, "foreground_app", lambda: ForegroundApp("game.exe", r"\\.\DISPLAY2", True))
+    night_light, _ = start(GeneralConfig(), night_light={"enabled": True, "exempt_fullscreen": True})
+    assert night_light.controller.paused == {r"\\.\DISPLAY2": "game.exe, fullscreen"}
 
 
 def test_diagnostics_from_the_command_line(start, monkeypatch, tmp_path):

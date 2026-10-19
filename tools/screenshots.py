@@ -22,7 +22,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor, QPalette  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from nightlight.config import AppConfig, BrightnessScheduleConfig, BrightnessStep, GeneralConfig, Mode, NightLightConfig  # noqa: E402
+from nightlight.config import Anchor, AppConfig, BrightnessScheduleConfig, GeneralConfig, Mode, NightLightConfig, SchedulePoint  # noqa: E402
 from nightlight.controller import NightLightController  # noqa: E402
 from nightlight.hardware.brightness import FakeBrightnessBackend  # noqa: E402
 from nightlight.hardware.gamma import FakeGammaBackend  # noqa: E402
@@ -78,25 +78,27 @@ def main(out: Path) -> None:
     config = AppConfig(
         night_light=NIGHT_LIGHT,
         general=GeneralConfig(start_with_windows=True),
-        brightness_schedule=BrightnessScheduleConfig(True, (BrightnessStep("sunrise", 80, 30), BrightnessStep("21:00", 40))),
+        brightness_schedule=BrightnessScheduleConfig(
+            True, "custom", (SchedulePoint(80, anchor=Anchor.SUNRISE, offset_minutes=30), SchedulePoint(40, "21:00"))
+        ),
     )
     try:
         for dark in (False, True):
             use_scheme(app, dark)
             theme = "dark" if dark else "light"
-            flyout = Flyout(monitors, controller, as_window=True)  # a window: grab() then includes its frame
-            flyout.show()
+            # Rendered with grab() without being shown, so nothing pops up on screen.
+            flyout = Flyout(monitors, controller, as_window=True)
+            flyout.adjustSize()
             settle(app)
             flyout.grab().save(str(out / f"flyout-{theme}.png"))
-            flyout.close()
+            flyout.deleteLater()
             settings = SettingsWindow(controller, config, monitors=monitors)
-            settings.show()
             settle(app)
             settings.grab().save(str(out / f"settings-{theme}.png"))
-            settings.tabs.setCurrentIndex(1)  # Brightness
+            settings.show_page(1)  # Brightness
             settle(app)
             settings.grab().save(str(out / f"settings-brightness-{theme}.png"))
-            settings.close()
+            settings.deleteLater()
             print(f"Saved {theme} screenshots to {out}")
     finally:
         controller.shutdown()

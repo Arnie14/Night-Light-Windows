@@ -54,6 +54,7 @@ class Sources:
     log_dir: Path | None
     skipped: Callable[[], set[str]] = lambda: set()
     last_wake: Callable[[], list[str]] = lambda: []
+    compatibility: Callable[[], str] | None = None  # the compatibility report (compat.py)
 
 
 def summary(sources: Sources) -> str:
@@ -73,8 +74,11 @@ def summary(sources: Sources) -> str:
     for number, info in enumerate(monitors.monitors, 1):
         custom = prefs.display(info.key)
         name = info.name  # the display's own (model) name; a custom one may be personal
+        live = monitors.state(info.key)
         if info.supported:
-            state = f"{monitors.brightness.get(info.index)}% via {info.control}"
+            state = f"{monitors.value(info.key)}% via {info.channel_label if info.channel else info.control}"
+            if live is not None and not live.controllable:
+                state += f" ({live.status.value}: {live.message})" if live.message else f" ({live.status.value})"
         else:
             state = f"not supported: {info.reason or 'no DDC/CI'}"
         flags = ", ".join(f for f in ("built-in" if info.internal else "", "renamed" if custom.name else "", "hidden" if custom.hidden else "") if f)
@@ -148,6 +152,11 @@ def write_bundle(sources: Sources, folder: Path | None = None) -> tuple[Path, st
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as bundle:
         bundle.writestr("summary.txt", text)
         bundle.writestr("settings.json", scrub(json.dumps(redacted_settings(sources.config()), indent=2)))
+        if sources.compatibility is not None:
+            try:
+                bundle.writestr("compatibility.txt", scrub(sources.compatibility()))
+            except Exception:  # a report must never fail for this
+                log.warning("Could not add the compatibility report", exc_info=True)
         if sources.log_dir is not None and sources.log_dir.is_dir():
             for file in sorted(sources.log_dir.iterdir()):
                 if file.is_file() and (file.name.startswith("night-light.log") or file.name == "probe.txt"):

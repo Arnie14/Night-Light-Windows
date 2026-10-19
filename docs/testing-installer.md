@@ -30,7 +30,7 @@ In the panel, click ⚙ (Settings):
 - [ ] Drag the night light temperature: the screen previews it while you drag.
 - [ ] **Lock** the PC (Win+L) and unlock it: night light is back at once, without a visible flash of normal colors.
 - [ ] **Sleep** the PC and wake it: same.
-- [ ] Settings → Night Light → tick **While an app is fullscreen**, Apply. Play a video fullscreen or start a game: that display fades to normal colors, the others stay warm. Leave fullscreen: it fades back.
+- [ ] Settings → Night Light → under **Pause night light**, turn on **While an app is fullscreen**, Apply. Play a video fullscreen or start a game: that display fades to normal colors, the others stay warm. Leave fullscreen: it fades back.
 - [ ] Add an app under **For these apps** (e.g. your photo editor), Apply, and switch to it: the same happens while it's in front.
 - [ ] With a game or video fullscreen, start Winlight again from the Start menu: nothing pops up over it, and the game keeps focus.
 - [ ] Switch back to your usual schedule (custom times or sunset/sunrise).
@@ -39,11 +39,11 @@ In the panel, click ⚙ (Settings):
 
 - [ ] Settings → Brightness → **Remember each display's brightness** is on. Set distinctive levels (e.g. 23% and 61%), quit Winlight (tray → Quit) and start it from the Start menu: the levels come back.
 - [ ] Turn a monitor off with its power button and on again, or unplug and replug it: its level comes back within a few seconds.
-- [ ] Tick **Change all displays together**, Apply: one slider moves them all.
-- [ ] Turn on the **Brightness schedule** with a step a minute or two from now, Apply: at that time every display fades to the step's level. Move a slider afterwards: your level stays until the next step.
-- [ ] Settings → **Displays**: rename one, untick "Show in panel" for another, Apply. The panel uses the new name and leaves out the hidden one.
-- [ ] Laptop with an external monitor: tick **External displays follow the laptop's brightness keys**, Apply, and press the brightness keys: the external monitor follows within about 2 seconds.
-- [ ] Tick **Dim displays when I'm away for 1 min to 20%**, Apply, and leave the PC alone: after a minute the displays fade down; move the mouse and they come back. Play a video and leave it: nothing dims.
+- [ ] Turn on **Change all displays together**, Apply: one slider moves them all.
+- [ ] Settings → Brightness: turn on **Change brightness by time of day**, choose each preset in turn and check the times listed make sense, then **Add a time** a minute or two from now with a distinct level, Apply: at that time every display fades to it. Move a slider afterwards: your level stays until the next time. If you used a schedule in beta 3 or 4, check it was carried over as a Custom one.
+- [ ] Settings → **Displays**: each display is listed with how its brightness is controlled; **Copy report** puts the compatibility report on the clipboard. Under **Names and visibility**, rename one, untick "Show in panel" for another, Apply. The panel uses the new name and leaves out the hidden one.
+- [ ] Laptop with an external monitor: turn on **Follow the laptop's brightness keys**, Apply, and press the brightness keys: the external monitor follows within about 2 seconds.
+- [ ] Under **When I'm away**, turn on **Dim displays when I'm away**, set **After** 1 min and **Dim to** 20 %, Apply, and leave the PC alone: after a minute the displays fade down; move the mouse and they come back. Play a video and leave it: nothing dims.
 - [ ] Sleep the PC for a few minutes with a monitor connected, wake it, and wait 2 minutes before **Report a Problem…**: the summary's "Last wake from sleep" section shows when each display answered again.
 
 ## 5. Command line (optional)

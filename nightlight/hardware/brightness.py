@@ -17,11 +17,44 @@ log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class DisplayDetails:
+    """What is known about a display beyond its name, for the list of
+    compatible displays and the compatibility report. All read without
+    talking to the display (EDID from the registry, Windows' display
+    configuration)."""
+
+    manufacturer: str = ""  # PnP id, e.g. "DEL"
+    model: str = ""
+    serial: str = ""
+    connector: str = ""  # "HDMI", "DisplayPort", "Internal", ...
+    hdr: bool = False
+    year: int = 0
+    diagonal_inches: float = 0.0
+    source: str = ""  # Windows' GDI name, e.g. "\\.\DISPLAY1"
+
+
+# How brightness reaches a display (MonitorInfo.channel), as shown to users.
+CHANNEL_LABELS = {
+    "ddc": "DDC/CI",
+    "ddc-high-level": "DDC/CI (high-level API)",
+    "wmi": "WMI (laptop panel)",
+    "sdr": "Windows SDR brightness (HDR)",
+    "software": "Software dimming (gamma ramp)",
+    "kde": "KDE Plasma",
+    "linux-ddc": "DDC/CI (i2c-dev)",
+    "fake": "Simulated",
+    "": "None",
+}
+
+
+@dataclass(frozen=True)
 class MonitorInfo:
     index: int
     name: str
     supported: bool  # False when the monitor doesn't respond to DDC/CI
-    reason: str = ""  # why it isn't supported, when the backend knows better than "no DDC/CI"
+    # Why it isn't supported, in a few words for under its slider; `detail`
+    # says more (what to try), for the tooltip and the compatibility report.
+    reason: str = ""
     # Identifies the monitor across reconnects, for remembering its settings.
     # Not the Windows device instance id: that changes with the port or cable
     # (Monitorian's README), so the EDID's manufacturer and product code are
@@ -38,6 +71,24 @@ class MonitorInfo:
     # fully dark at 0 (KDE keeps them above zero too), and software dimming's
     # floor, below which Windows rejects the ramp.
     minimum: int = 0
+    detail: str = ""
+    # The exact way in, finer than `control`: a key of CHANNEL_LABELS.
+    channel: str = ""
+    # Why an unsupported display can't be controlled right now: "unsupported"
+    # (no way to control it), "not responding" (a call to it hung) or
+    # "retrying" (it answered before; likely still waking up).
+    status: str = "ok"
+    details: DisplayDetails | None = None
+
+    @property
+    def channel_label(self) -> str:
+        return CHANNEL_LABELS.get(self.channel if self.supported else "", self.channel)
+
+
+def legacy_key(key: str) -> str:
+    """The key older versions used for this display: its hardware id without
+    the serial ("DEL41A2:7XKJ9F3" -> "DEL41A2"), for migrating remembered settings."""
+    return key.split(":", 1)[0]
 
 
 def with_unique_keys(monitors: list[MonitorInfo]) -> list[MonitorInfo]:
@@ -118,7 +169,8 @@ class DdcBackend:
             except Exception:
                 log.info("%s does not support DDC/CI brightness", name, exc_info=True)
                 supported = False
-            infos.append(MonitorInfo(i, name, supported))
+            reason = "" if supported else "DDC/CI didn't answer"
+            infos.append(MonitorInfo(i, name, supported, reason, channel="linux-ddc" if supported else "", status="ok" if supported else "unsupported"))
         return infos
 
     def get_brightness(self, index: int) -> int | None:
@@ -145,10 +197,15 @@ class FakeBrightnessBackend:
         self._latency = latency
         # One of each kind of control, and one display without any.
         self._monitors = [
-            MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2", display=r"\\.\DISPLAY1"),
-            MonitorInfo(1, "LG 27GP950 (HDR)", True, key="GSM5BBF", control="sdr", display=r"\\.\DISPLAY2", hdr=True),
-            MonitorInfo(2, "Living room TV", True, key="SAM7136", control="software", minimum=20, display=r"\\.\DISPLAY3"),
-            MonitorInfo(3, "Old projector", False, key="EPS0000", reason="Didn't answer over DDC/CI. Turn DDC/CI on in the display's own menu", display=r"\\.\DISPLAY4"),
+            MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2:7XKJ9F3", channel="ddc", display=r"\\.\DISPLAY1",
+                        details=DisplayDetails("DEL", "DELL U2720Q", "7XKJ9F3", "DisplayPort", False, 2021, 27.0, r"\\.\DISPLAY1")),
+            MonitorInfo(1, "LG 27GP950 (HDR)", True, key="GSM5BBF:204NTAB1", control="sdr", channel="sdr", display=r"\\.\DISPLAY2", hdr=True,
+                        details=DisplayDetails("GSM", "LG 27GP950", "204NTAB1", "HDMI", True, 2022, 27.0, r"\\.\DISPLAY2")),
+            MonitorInfo(2, "Living room TV", True, key="SAM7136", control="software", minimum=20, channel="software", display=r"\\.\DISPLAY3",
+                        details=DisplayDetails("SAM", "SAMSUNG", "", "HDMI", False, 2019, 54.6, r"\\.\DISPLAY3")),
+            MonitorInfo(3, "Old projector", False, key="EPS0000", reason="DDC/CI didn't answer", status="unsupported", display=r"\\.\DISPLAY4",
+                        detail="Didn't answer over DDC/CI. Turn DDC/CI on in the display's own menu",
+                        details=DisplayDetails("EPS", "EPSON PJ", "", "VGA", False, 2012, 0.0, r"\\.\DISPLAY4")),
         ]
         self._brightness = {0: 70, 1: 40, 2: 100}
         self.software_dimming = True
@@ -160,7 +217,12 @@ class FakeBrightnessBackend:
         time.sleep(self._latency * len(self._monitors))
         if self.software_dimming:
             return list(self._monitors)
-        return [replace(m, supported=False, control="hardware", reason="No brightness control") if m.control == "software" else m for m in self._monitors]
+        return [
+            replace(m, supported=False, control="hardware", channel="", reason="No brightness control", status="unsupported",
+                    detail="Turn on Settings > Brightness > Dim displays without brightness control")
+            if m.control == "software" else m
+            for m in self._monitors
+        ]
 
     def get_brightness(self, index: int) -> int | None:
         time.sleep(self._latency)

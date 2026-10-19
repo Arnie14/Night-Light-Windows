@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -115,6 +116,47 @@ def test_override_expires():
     state = compute_state(NightLightConfig(enabled=False), at(14), override)
     assert state.temperature == 6500
     assert state.override is None
+
+
+NEW_YORK = ZoneInfo("America/New_York")  # clocks change on 8 March and 1 November 2026
+
+
+def test_tomorrows_times_use_tomorrows_offset_after_spring_forward():
+    # Saturday 22:00 EST. Sunday morning's 06:00 is EDT (10:00 UTC); applying
+    # Saturday's offset would put it at 11:00 UTC, an hour late.
+    now = datetime(2026, 3, 8, 3, 0, tzinfo=UTC).astimezone(NEW_YORK)
+    morning = next_transition(TIMES, now, to_night=False, zone=NEW_YORK)
+    assert morning.start.astimezone(UTC) == datetime(2026, 3, 8, 10, 0, tzinfo=UTC)
+    assert morning.start.astimezone(NEW_YORK).hour == 6
+
+
+def test_tomorrows_times_use_tomorrows_offset_after_falling_back():
+    now = datetime(2026, 11, 1, 3, 0, tzinfo=UTC).astimezone(NEW_YORK)  # Saturday 23:00 EDT
+    morning = next_transition(TIMES, now, to_night=False, zone=NEW_YORK)
+    assert morning.start.astimezone(UTC) == datetime(2026, 11, 1, 11, 0, tzinfo=UTC)  # 06:00 EST
+
+
+def test_a_transition_through_the_repeated_hour_takes_its_real_length():
+    config = NightLightConfig(enabled=True, mode=Mode.TIMES, night_start="01:00", day_start="09:00", transition_minutes=60)
+    start = datetime(2026, 11, 1, 5, 0, tzinfo=UTC)  # 01:00 EDT
+    halfway = compute_state(config, start + timedelta(minutes=30), zone=NEW_YORK)
+    assert halfway.transitioning and halfway.temperature == 5500
+    assert not compute_state(config, start + timedelta(minutes=60), zone=NEW_YORK).transitioning
+
+
+def test_a_start_time_in_the_skipped_hour_happens_right_after_it():
+    config = NightLightConfig(enabled=True, mode=Mode.TIMES, night_start="02:30", day_start="09:00", transition_minutes=0)
+    evening = next_transition(config, datetime(2026, 3, 8, 6, 0, tzinfo=UTC), to_night=True, zone=NEW_YORK)
+    assert evening.start.astimezone(UTC) == datetime(2026, 3, 8, 7, 30, tzinfo=UTC)  # 03:30 EDT
+
+
+def test_solar_times_across_the_change_stay_near_sunset():
+    config = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=40.71, longitude=-74.0)
+    for day in (7, 8, 9):  # either side of spring forward
+        now = datetime(2026, 3, day, 16, 0, tzinfo=UTC)
+        evening = next_transition(config, now, to_night=True, zone=NEW_YORK)
+        local = evening.start.astimezone(NEW_YORK)
+        assert 17 <= local.hour <= 19, local  # around 18:00 local either side
 
 
 def test_next_transition_for_override_menus():

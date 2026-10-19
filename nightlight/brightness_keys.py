@@ -41,7 +41,7 @@ class BrightnessKeys(QObject):
         self._known: int | None = None  # the panel's level as last seen
         self._poll = QTimer(self, interval=POLL_MS)
         self._poll.timeout.connect(self._read_panel)
-        monitors.brightnessChanged.connect(self._on_brightness)
+        monitors.observed.connect(self._on_observed)
         monitors.monitorsChanged.connect(lambda _: setattr(self, "_known", None))
 
     def set_enabled(self, enabled: bool) -> None:
@@ -54,7 +54,7 @@ class BrightnessKeys(QObject):
     def on_windows_event(self, level: int) -> None:
         """Windows reported the panel's level (SystemEvents.panelBrightness)."""
         panel = self._panel()
-        if panel is not None and level != self._monitors.brightness.get(panel.index):
+        if panel is not None and level != self._monitors.value(panel.key):
             self._changed(panel, level, "Windows")
 
     def _panel(self) -> MonitorInfo | None:
@@ -62,25 +62,24 @@ class BrightnessKeys(QObject):
 
     def _read_panel(self) -> None:
         if panel := self._panel():
-            self._monitors.read(panel.index)
+            self._monitors.read(panel.key)
         else:
             self._poll.stop()
 
-    def _on_brightness(self, index: int, value: int | None) -> None:
+    def _on_observed(self, key: str, value: int | None) -> None:
         panel = self._panel()
-        if panel is None or index != panel.index or value is None:
+        if panel is None or key != panel.key or value is None:
             return
-        if self._known is not None and value != self._known and not self._monitors.recently_written(index, OWN_CHANGE_S):
+        if self._known is not None and value != self._known and not self._monitors.recently_written(key, OWN_CHANGE_S):
             self._follow(panel, value, "a check of the panel")
         self._known = value
 
     def _changed(self, panel: MonitorInfo, level: int, source: str) -> None:
-        if self._monitors.recently_written(panel.index, OWN_CHANGE_S):
+        if self._monitors.recently_written(panel.key, OWN_CHANGE_S):
             return  # the app's own change, echoed back
         self._known = level
         # Shows the new level on the panel's slider, without counting as the user's choice.
-        self._monitors.brightness[panel.index] = level
-        self._monitors.brightnessChanged.emit(panel.index, level)
+        self._monitors.note_level(panel.key, level)
         self._follow(panel, level, source)
 
     def _follow(self, panel: MonitorInfo, level: int, source: str) -> None:
@@ -92,4 +91,4 @@ class BrightnessKeys(QObject):
             return
         log.info("The built-in display changed to %d%% (noticed by %s); external displays follow", level, source)
         for monitor in others:
-            self._monitors.set_brightness(monitor.index, max(monitor.minimum, min(100, level)))
+            self._monitors.set_brightness(monitor.key, max(monitor.minimum, min(100, level)))

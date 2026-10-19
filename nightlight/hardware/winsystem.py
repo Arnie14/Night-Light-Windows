@@ -3,8 +3,10 @@
 
 - which app is in the foreground, on which display, and whether it is
   fullscreen (for pausing night light there, as f.lux does);
-- session and power events (unlocking, waking, a display turning on), so
-  night light is put back the moment Windows resets the gamma ramps;
+- session and power events (suspending and waking, displays turning off
+  and on, locking and unlocking, display and clock changes, signing out),
+  so night light is put back the moment Windows resets the gamma ramps, and
+  nothing is sent to displays while they sleep;
 - whether Windows' own Night Light is on, which would stack with ours.
 
 The decisions are pure functions, testable anywhere; the ctypes calls only
@@ -16,6 +18,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import PureWindowsPath
@@ -195,14 +198,18 @@ def running_apps() -> list[str]:
 
 # --- Session and power events -------------------------------------------------
 
+WM_ENDSESSION = 0x0016
+WM_TIMECHANGE = 0x001E
 WM_DISPLAYCHANGE = 0x007E
 WM_POWERBROADCAST = 0x0218
 WM_WTSSESSION_CHANGE = 0x02B1
+PBT_APMSUSPEND = 0x0004
 PBT_APMRESUMESUSPEND = 0x0007
 PBT_APMRESUMEAUTOMATIC = 0x0012
 PBT_POWERSETTINGCHANGE = 0x8013
 WTS_CONSOLE_CONNECT = 0x1
 WTS_SESSION_LOGON = 0x5
+WTS_SESSION_LOCK = 0x7
 WTS_SESSION_UNLOCK = 0x8
 # GUID_CONSOLE_DISPLAY_STATE: the console display turned off (0), on (1) or dimmed (2).
 GUID_CONSOLE_DISPLAY_STATE = uuid.UUID("6fe69556-704a-47a0-8f24-c28d936fda47")
@@ -211,69 +218,179 @@ GUID_CONSOLE_DISPLAY_STATE = uuid.UUID("6fe69556-704a-47a0-8f24-c28d936fda47")
 GUID_VIDEO_BRIGHTNESS = uuid.UUID("aded5e82-b909-4619-9949-f5d71dac0bcb")
 
 UNLOCKED, RESUMED, DISPLAY_ON, DISPLAY_CHANGED = "unlocked", "resumed", "display on", "display changed"
+SUSPENDING, DISPLAY_OFF, LOCKED, CLOCK_CHANGED, ENDING_SESSION = "suspending", "display off", "locked", "clock changed", "ending session"
 PANEL_BRIGHTNESS = "panel brightness"
+
+# Windows sends resume twice (automatic, then suspend-resume when the user is
+# back); one wake is one event.
+RESUME_MERGE_S = 10.0
 
 
 def classify(message: int, wparam: int, setting: uuid.UUID | None = None, data: int | None = None) -> str | None:
     """What a window message means for us, if anything."""
-    if message == WM_WTSSESSION_CHANGE and wparam in (WTS_SESSION_UNLOCK, WTS_CONSOLE_CONNECT, WTS_SESSION_LOGON):
-        return UNLOCKED
+    if message == WM_WTSSESSION_CHANGE:
+        if wparam in (WTS_SESSION_UNLOCK, WTS_CONSOLE_CONNECT, WTS_SESSION_LOGON):
+            return UNLOCKED
+        if wparam == WTS_SESSION_LOCK:
+            return LOCKED
+        return None
     if message == WM_POWERBROADCAST:
+        if wparam == PBT_APMSUSPEND:
+            return SUSPENDING
         if wparam in (PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND):
             return RESUMED
-        if wparam == PBT_POWERSETTINGCHANGE and setting == GUID_CONSOLE_DISPLAY_STATE and data == 1:
-            return DISPLAY_ON
+        if wparam == PBT_POWERSETTINGCHANGE and setting == GUID_CONSOLE_DISPLAY_STATE:
+            # 2 is "dimmed": still on, nothing to do.
+            return {0: DISPLAY_OFF, 1: DISPLAY_ON}.get(data)
         if wparam == PBT_POWERSETTINGCHANGE and setting == GUID_VIDEO_BRIGHTNESS and data is not None:
             return PANEL_BRIGHTNESS
+        return None
     if message == WM_DISPLAYCHANGE:
         return DISPLAY_CHANGED
+    if message == WM_TIMECHANGE:
+        return CLOCK_CHANGED
+    if message == WM_ENDSESSION:
+        return ENDING_SESSION if wparam else None  # 0: signing out was cancelled
     return None
 
 
 class SystemEvents(QObject):
-    """Unlocking, waking and displays turning on, straight from Windows.
+    """Windows' session and power notifications, as Qt signals.
 
-    Windows resets gamma ramps on the lock screen and after sleep; hearing it
-    from Windows lets night light come back at once instead of at the next
-    check. Messages arrive through Qt's native event filter, on a hidden
-    window registered for session and display-state notifications (as
-    Monitorian's PowerManagement does).
+    Sleep and hibernation cause most trouble in apps like this: monitors
+    vanish and come back, handles go stale, monitors don't answer for a while
+    after waking (Monitorian #50), and DDC/CI sent to a sleeping monitor can
+    wake it or hang its firmware. Windows resets gamma ramps on the lock
+    screen and after sleep; hearing it from Windows lets night light come
+    back at once instead of at the next check.
+
+    Messages arrive through Qt's native event filter, on a hidden window
+    registered for session, display-state and panel-brightness notifications
+    (as Monitorian's PowerManagement does). Repeats are merged: the two resume
+    messages of one wake, Windows' report of the current display state on
+    registering, and a posted message reaching the filter twice.
     """
 
-    unlocked = Signal()
+    suspending = Signal()
     resumed = Signal()
+    displayOff = Signal()
     displayOn = Signal()
+    locked = Signal()
+    unlocked = Signal()
     displayChanged = Signal()
+    clockChanged = Signal()
+    endingSession = Signal()
     panelBrightness = Signal(int)  # the built-in panel's level changed (keys, Windows' slider)
 
-    def __init__(self, app, parent: QObject | None = None) -> None:
+    def __init__(self, app=None, parent: QObject | None = None, clock=time.monotonic) -> None:
         super().__init__(parent)
+        self._clock = clock
+        self._resumed_at: float | None = None
+        self._display_state: str | None = None
+        self._last_message: tuple | None = None
         self._filter = None
-        if sys.platform != "win32":
+        self._power: list = []
+        self._hwnd = 0
+        self.listening = False
+        from PySide6.QtGui import QGuiApplication
+
+        app = app or QGuiApplication.instance()
+        # Only Qt's "windows" platform has real window handles (not "offscreen").
+        if sys.platform != "win32" or app is None or QGuiApplication.platformName() != "windows":
             return
-        from PySide6.QtWidgets import QWidget
-
-        self._window = QWidget()  # never shown; only its native handle is needed
-        hwnd = int(self._window.winId())
         try:
-            if not _wtsapi32.WTSRegisterSessionNotification(hwnd, 0):  # NOTIFY_FOR_THIS_SESSION
-                log.info("Could not register for session notifications")
-            self._power = [
-                _user32.RegisterPowerSettingNotification(hwnd, ctypes.byref(_GUID.from_uuid(guid)), 0)  # DEVICE_NOTIFY_WINDOW_HANDLE
-                for guid in (GUID_CONSOLE_DISPLAY_STATE, GUID_VIDEO_BRIGHTNESS)
-            ]
-        except OSError:
-            log.info("Could not register for power notifications", exc_info=True)
-        self._filter = _Filter(self._on_event)
-        app.installNativeEventFilter(self._filter)
+            self._listen(app)
+        except Exception:
+            log.warning("Could not listen for sleep, display and session notifications; waking is noticed from the clock instead", exc_info=True)
 
-    def _on_event(self, what: str, data: int | None = None) -> None:
+    def handle(self, what: str | None, data: int | None = None) -> None:
+        """Turn a classified message into a signal, merging repeats."""
+        if what is None:
+            return
         if what == PANEL_BRIGHTNESS:
             log.debug("Windows: built-in display brightness %s%%", data)
             self.panelBrightness.emit(int(data))
             return
+        now = self._clock()
+        if what == RESUMED:
+            if self._resumed_at is not None and now - self._resumed_at < RESUME_MERGE_S:
+                return
+            self._resumed_at = now
+        elif what == SUSPENDING:
+            self._resumed_at = None
+        elif what in (DISPLAY_ON, DISPLAY_OFF):
+            if self._display_state is None:
+                self._display_state = what  # Windows reports the current state on registering
+                return
+            if what == self._display_state:
+                return
+            self._display_state = what
         log.info("Windows: %s", what)
-        {UNLOCKED: self.unlocked, RESUMED: self.resumed, DISPLAY_ON: self.displayOn, DISPLAY_CHANGED: self.displayChanged}[what].emit()
+        {
+            SUSPENDING: self.suspending,
+            RESUMED: self.resumed,
+            DISPLAY_OFF: self.displayOff,
+            DISPLAY_ON: self.displayOn,
+            LOCKED: self.locked,
+            UNLOCKED: self.unlocked,
+            DISPLAY_CHANGED: self.displayChanged,
+            CLOCK_CHANGED: self.clockChanged,
+            ENDING_SESSION: self.endingSession,
+        }[what].emit()
+
+    def close(self) -> None:
+        if not self.listening:
+            return
+        from PySide6.QtGui import QGuiApplication
+
+        app = QGuiApplication.instance()
+        if app is not None and self._filter is not None:
+            app.removeNativeEventFilter(self._filter)
+        try:
+            for handle in self._power:
+                if handle:
+                    _user32.UnregisterPowerSettingNotification(handle)
+            _wtsapi32.WTSUnRegisterSessionNotification(self._hwnd)
+        except OSError:
+            pass
+        self.listening = False
+
+    def _listen(self, app) -> None:
+        from PySide6.QtGui import QWindow
+
+        self._window = QWindow()  # never shown; its handle receives the broadcasts
+        self._hwnd = int(self._window.winId())
+        if not _wtsapi32.WTSRegisterSessionNotification(self._hwnd, 0):  # NOTIFY_FOR_THIS_SESSION
+            log.info("Could not register for session notifications (%d); lock and unlock aren't watched", ctypes.get_last_error())
+        self._guids = [_GUID.from_uuid(guid) for guid in (GUID_CONSOLE_DISPLAY_STATE, GUID_VIDEO_BRIGHTNESS)]  # kept alive
+        self._power = [_user32.RegisterPowerSettingNotification(self._hwnd, ctypes.byref(guid), 0) for guid in self._guids]  # DEVICE_NOTIFY_WINDOW_HANDLE
+        if not all(self._power):
+            log.info("Could not register for some power notifications; display on/off or panel brightness may go unnoticed")
+        self._filter = _Filter(self._on_message)
+        app.installNativeEventFilter(self._filter)
+        self.listening = True
+
+    def _on_message(self, msg) -> None:
+        # Broadcasts reach every top-level window of the app: take only ours.
+        if msg.hWnd != self._hwnd:
+            return
+        identity = (msg.message, msg.wParam, msg.lParam, msg.time)
+        if identity == self._last_message:
+            return  # a posted message seen a second time
+        self._last_message = identity
+        setting = data = None
+        if msg.message == WM_POWERBROADCAST and msg.wParam == PBT_POWERSETTINGCHANGE and msg.lParam:
+            setting, data = read_setting(msg.lParam)
+        self.handle(classify(msg.message, msg.wParam, setting, data), data)
+
+
+def read_setting(lparam: int) -> tuple[uuid.UUID | None, int | None]:
+    """The GUID and first data word of a POWERBROADCAST_SETTING."""
+    if not lparam:
+        return None, None
+    broadcast = _POWERBROADCAST_SETTING.from_address(lparam)
+    raw = ctypes.string_at(lparam + _POWERBROADCAST_SETTING.Data.offset, min(broadcast.DataLength, 4))
+    return broadcast.PowerSetting.to_uuid(), (int.from_bytes(raw, "little") if raw else None)
 
 
 class _Filter(QAbstractNativeEventFilter):
@@ -283,17 +400,12 @@ class _Filter(QAbstractNativeEventFilter):
 
     def nativeEventFilter(self, event_type, message):
         if event_type == b"windows_generic_MSG":
-            from ctypes import wintypes
+            try:
+                from ctypes import wintypes
 
-            msg = wintypes.MSG.from_address(int(message))
-            setting = data = None
-            if msg.message == WM_POWERBROADCAST and msg.wParam == PBT_POWERSETTINGCHANGE and msg.lParam:
-                broadcast = _POWERBROADCAST_SETTING.from_address(msg.lParam)
-                setting = broadcast.PowerSetting.to_uuid()
-                raw = ctypes.string_at(msg.lParam + _POWERBROADCAST_SETTING.Data.offset, min(broadcast.DataLength, 4))
-                data = int.from_bytes(raw, "little") if raw else None
-            if what := classify(msg.message, msg.wParam, setting, data):
-                self._callback(what, data)
+                self._callback(wintypes.MSG.from_address(int(message)))
+            except Exception:
+                log.exception("Handling a Windows message failed")
         return False, 0
 
 
@@ -398,3 +510,7 @@ if sys.platform == "win32":
     _dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
     _wtsapi32.WTSRegisterSessionNotification.argtypes = [wintypes.HWND, wintypes.DWORD]
     _wtsapi32.WTSRegisterSessionNotification.restype = wintypes.BOOL
+    _wtsapi32.WTSUnRegisterSessionNotification.argtypes = [wintypes.HWND]
+    _wtsapi32.WTSUnRegisterSessionNotification.restype = wintypes.BOOL
+    _user32.UnregisterPowerSettingNotification.argtypes = [wintypes.HANDLE]
+    _user32.UnregisterPowerSettingNotification.restype = wintypes.BOOL

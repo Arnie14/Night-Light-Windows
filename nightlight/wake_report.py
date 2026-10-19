@@ -21,7 +21,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject
 
-from nightlight.monitors import MonitorManager
+from nightlight.monitors import MonitorManager, Status
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class WakeReport(QObject):
             return False
         self._woke_at = now
         monitors = self._monitors
-        self._expected = {m.key for m in monitors.monitors if m.supported and monitors.brightness.get(m.index) is not None}
+        self._expected = {m.key for m in monitors.monitors if m.supported and monitors.value(m.key) is not None}
         self._first_answer = {}
         self._stable = 0
         self.lines = []
@@ -76,7 +76,7 @@ class WakeReport(QObject):
         for monitor in monitors.monitors:
             if not monitor.supported:
                 continue
-            value = monitors.brightness.get(monitor.index)
+            value = _answer(monitors, monitor.key)
             if value is None:
                 silent.append(monitor.name)
             else:
@@ -88,7 +88,7 @@ class WakeReport(QObject):
         self.lines.append(line)
         log.info("After waking %s", line)
 
-        answered = {m.key for m in monitors.monitors if m.supported and monitors.brightness.get(m.index) is not None}
+        answered = {m.key for m in monitors.monitors if m.supported and _answer(monitors, m.key) is not None}
         self._stable = self._stable + 1 if self._expected <= answered else 0
         if self._stable >= STABLE_PASSES:
             self._finish(after, early=True)
@@ -106,3 +106,10 @@ class WakeReport(QObject):
         self.lines.append(summary)
         log.info("Wake summary: %s", summary)
         self._woke_at = None
+
+
+def _answer(monitors: MonitorManager, key: str) -> int | None:
+    """The level a display answered with in the latest pass, or None if it
+    didn't: an old value from before sleep doesn't count."""
+    state = monitors.state(key)
+    return state.observed if state is not None and state.status is Status.OK else None

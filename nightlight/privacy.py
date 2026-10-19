@@ -10,8 +10,9 @@ issues, so they must not carry who or where the user is. Two rules:
 2. Everything that does get written passes through `scrub`, which replaces
    the user name, the computer name, home folder paths (which contain the
    user name) and anything that looks like an email address, in messages
-   and tracebacks alike. Display models, Windows versions and error codes
-   stay: they're what a report needs.
+   and tracebacks alike, and shortens display serial numbers (in display
+   identities) to their last four characters. Display models, Windows
+   versions and error codes stay: they're what a report needs.
 """
 
 from __future__ import annotations
@@ -28,6 +29,15 @@ COMPUTER = "<computer>"
 HOME = "<home>"
 EMAIL = "<email>"
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+# A display's identity is its EDID manufacturer and product code plus its
+# serial number ("DEL41A2:7XKJ9F3", see win32.DisplayTarget.key). The serial
+# identifies one particular device, so reports keep only its last four
+# characters: enough to tell two identical monitors apart.
+_DISPLAY_SERIAL = re.compile(r"\b([A-Z]{3}[0-9A-F]{4}):([A-Za-z0-9._-]{5,})")
+
+
+def mask_display_serials(text: str) -> str:
+    return _DISPLAY_SERIAL.sub(lambda m: f"{m.group(1)}:…{m.group(2)[-4:]}", text)
 # Words too common to replace safely if they happen to be the user or computer name.
 _TOO_SHORT = 3
 
@@ -51,7 +61,7 @@ class Scrubber:
         text = _EMAIL.sub(EMAIL, text)
         for pattern, placeholder in self._replacements:
             text = pattern.sub(placeholder, text)
-        return text
+        return mask_display_serials(text)
 
 
 def _user() -> str:

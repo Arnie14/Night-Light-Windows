@@ -73,7 +73,9 @@ class KdeBrightnessBackend:
             address = DBusAddress(f"{_BRIGHTNESS.object_path}/{name}", bus_name=_BRIGHTNESS.bus_name, interface=_DISPLAY_IFACE)
             maximum = bus.get(address, "MaxBrightness")
             self._displays.append((address, maximum))
-            infos.append(MonitorInfo(i, bus.get(address, "Label"), supported=maximum > 0))
+            supported = maximum > 0
+            infos.append(MonitorInfo(i, bus.get(address, "Label"), supported, reason="" if supported else "No brightness control",
+                                     channel="kde" if supported else "", status="ok" if supported else "unsupported"))
         return infos
 
     def get_brightness(self, index: int) -> int | None:

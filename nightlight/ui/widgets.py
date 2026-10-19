@@ -21,7 +21,7 @@ from nightlight.hardware.brightness import MonitorInfo
 # so the monitor follows the drag (as in Monitorian and Twinkle Tray) without
 # flooding a slow DDC/CI link. The final position is always sent.
 BRIGHTNESS_THROTTLE_MS = 100
-NOT_SUPPORTED = "Brightness control not supported (DDC/CI unavailable or disabled in the monitor's menu)"
+NOT_SUPPORTED = "No brightness control"
 # Said under the name when brightness isn't the display's own backlight.
 CONTROL_CAPTIONS = {
     "sdr": ("HDR · SDR content brightness", "HDR is on, so this sets Windows' brightness for SDR content, like Settings > Display > HDR."),
@@ -144,11 +144,16 @@ class WindowsNightLightNotice(QFrame):
 
 
 class MonitorBrightness(QWidget):
-    """Monitor name and level on one line, a full-width slider below."""
+    """Monitor name and level on one line, a full-width slider below.
 
-    brightnessRequested = Signal(int, int)  # index, value
+    The slider only moves when the display can really be changed right now
+    (its state is OK). Otherwise it is disabled, with a few words under it
+    saying why and the longer advice in its tooltip, rather than a slider
+    that moves and does nothing."""
 
-    def __init__(self, info: MonitorInfo, name: str = "") -> None:
+    brightnessRequested = Signal(str, int)  # display key, value
+
+    def __init__(self, info: MonitorInfo, state=None, name: str = "") -> None:
         super().__init__()
         self.info = info
         layout = QVBoxLayout(self)
@@ -156,7 +161,7 @@ class MonitorBrightness(QWidget):
         layout.setSpacing(4)
 
         top = QHBoxLayout()
-        title = QLabel(name or info.name)
+        title = QLabel(name or info.name)  # a custom name (Settings > Displays), else its own
         set_font(title, weight=QFont.Weight.DemiBold)
         top.addWidget(title, 1)
         layout.addLayout(top)
@@ -166,12 +171,6 @@ class MonitorBrightness(QWidget):
             label.setToolTip(tooltip)
             layout.addWidget(label)
 
-        if not info.supported:
-            label = SecondaryLabel(info.reason or NOT_SUPPORTED, scale=0.92)
-            label.setWordWrap(True)
-            layout.addWidget(label)
-            return
-
         self.value_label = SecondaryLabel("…")
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.value_label.setMinimumWidth(self.value_label.fontMetrics().horizontalAdvance("100%"))
@@ -179,29 +178,54 @@ class MonitorBrightness(QWidget):
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(info.minimum, 100)  # e.g. above 0 for laptop panels, see MonitorInfo
         self.slider.setPageStep(10)
-        self.slider.setEnabled(False)  # until the current value has been read
+        self.slider.setEnabled(False)  # until the display's state says it can be changed
         layout.addWidget(self.slider)
+        self.explanation = SecondaryLabel("", scale=0.9)
+        self.explanation.setWordWrap(True)
+        layout.addWidget(self.explanation)
 
         self._unsent = False
         self._throttle = QTimer(self, singleShot=True, interval=BRIGHTNESS_THROTTLE_MS)
         self._throttle.timeout.connect(self._on_throttle)
         self.slider.valueChanged.connect(self._on_slider_changed)
+        if state is not None:
+            self.update_state(state)
+        elif not info.supported:
+            self._explain(info.reason or NOT_SUPPORTED, info.detail)
+            self.value_label.setText("–")
+        else:
+            self._explain("", "")
+
+    @property
+    def key(self) -> str:
+        return self.info.key
 
     def clamp(self, value: int) -> int:
         """`value` within what this monitor's slider allows."""
         return max(self.slider.minimum(), min(self.slider.maximum(), value))
 
-    def set_brightness(self, value: int | None) -> None:
-        if not self.info.supported or self.slider.isSliderDown():
-            return  # a fresh reading mustn't yank the slider while it's held
-        if value is None:
-            self.value_label.setText("?")
-            return
-        self.slider.blockSignals(True)
-        self.slider.setValue(value)
-        self.slider.blockSignals(False)
-        self.slider.setEnabled(True)
-        self.value_label.setText(f"{value}%")
+    @property
+    def controllable(self) -> bool:
+        return self.slider.isEnabled()
+
+    def update_state(self, state) -> None:
+        """Follow a monitors.DisplayState: value, enabled, explanation."""
+        controllable = state.controllable
+        if not self.slider.isSliderDown():  # a fresh reading mustn't yank the slider while it's held
+            value = state.value
+            if value is not None:
+                self.slider.blockSignals(True)
+                self.slider.setValue(value)
+                self.slider.blockSignals(False)
+            self.value_label.setText(f"{value}%" if value is not None and state.info.supported else "–" if not state.info.supported else "…")
+        self.slider.setEnabled(controllable)
+        self._explain(state.message or ("" if controllable else NOT_SUPPORTED), state.detail)
+
+    def _explain(self, text: str, detail: str) -> None:
+        self.explanation.setText(text)
+        self.explanation.setVisible(bool(text))
+        self.explanation.setToolTip(detail)
+        self.slider.setToolTip(detail if not self.slider.isEnabled() else "")
 
     def _on_slider_changed(self, value: int) -> None:
         self.value_label.setText(f"{value}%")
@@ -218,7 +242,8 @@ class MonitorBrightness(QWidget):
             self._throttle.start()
 
     def _send(self) -> None:
-        self.brightnessRequested.emit(self.info.index, self.slider.value())
+        if self.slider.isEnabled():
+            self.brightnessRequested.emit(self.info.key, self.slider.value())
 
 
 class TemperatureSlider(QWidget):

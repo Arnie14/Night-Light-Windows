@@ -6,16 +6,37 @@ configuration is listed once, by its EDID name. A built-in laptop panel is
 driven through WMI and other displays through DDC/CI; a display reachable by
 neither is listed as unsupported, with the reason when it is known. See
 docs/windows-notes.md for the quirks behind the details here.
+
+Reliability rules, learnt from Monitorian's and Twinkle Tray's bug reports:
+
+- Every Windows call goes through an adapter (DisplayApi; win32.py in the
+  app, a fake in tests).
+- One display's failure never affects another: each is detected in its own
+  try block, and DDC/CI probes run side by side under one deadline, so a
+  monitor that hangs is listed as "not responding" while the rest work.
+- A display with a call still stuck in it is never asked again until that
+  call returns (at most one stuck thread per display), and its handle is
+  only destroyed once the call is done with it.
+- DDC/CI is used sparingly: one read of VCP 0x10 per monitor per detection,
+  never the capabilities string, never for laptop panels.
+- A monitor that answered earlier but not now is "not answering yet", not
+  "has no DDC/CI": after waking from sleep, monitors take a while (Monitorian
+  issue #50), and telling the user to turn DDC/CI on would be wrong.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Protocol
 
 from nightlight.core.colortemp import (
     NEUTRAL_KELVIN,
@@ -28,41 +49,163 @@ from nightlight.core.colortemp import (
     whitepoint,
 )
 from nightlight.hardware import win32
-from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo, nearest_level, to_percent, to_raw, valid_range, with_unique_keys
-from nightlight.safe_mode import SKIPPED_REASON, SafeMode
+from nightlight.hardware.brightness import (
+    DisplayDetails,
+    MonitorGoneError,
+    MonitorInfo,
+    nearest_level,
+    to_percent,
+    to_raw,
+    valid_range,
+    with_unique_keys,
+)
+from nightlight.hardware.calls import CallTimeout, start_side_call
+from nightlight.safe_mode import SKIPPED_REASON, SKIPPED_SHORT, SafeMode
 
 log = logging.getLogger(__name__)
 
-INDIRECT_REASON = "Connected through a USB (DisplayLink), wireless or virtual display adapter, which can't pass DDC/CI brightness commands"
-# Why an external display didn't answer, in the order to try things: the
-# setting is off by default on many monitors, and adapters, hubs, MST and
-# docks often don't pass DDC/CI (Monitorian's and Twinkle Tray's FAQs).
+if sys.platform == "win32":
+    try:
+        # The wmi package makes a COM object when first imported, on the
+        # importing thread. Import it here, on the main thread, whose COM
+        # lasts until exit; first imported on a worker thread, that object
+        # would outlive the thread's COM and fail when released at exit.
+        import wmi  # noqa: F401
+    except ImportError:
+        pass
+
+# How long detection waits for the DDC/CI probes, which run side by side. A
+# healthy monitor answers within a second, even with retries.
+PROBE_TIMEOUT_S = 4.0
+
+# Short reasons, shown under a disabled slider, and the longer advice that
+# goes with them (tooltip and compatibility report).
+REASON_NO_DDC = "DDC/CI didn't answer"
 NO_DDC_REASON = (
     "Didn't answer over DDC/CI. Turn DDC/CI on in the display's own menu; if it is on, "
     "try another cable or port without adapters, hubs or docks"
 )
 TV_HINT = " (most TVs don't support it)"
+REASON_INDIRECT = "USB or wireless display: no DDC/CI"
+INDIRECT_REASON = "Connected through a USB (DisplayLink), wireless or virtual display adapter, which can't pass DDC/CI brightness commands"
+REASON_PANEL = "Windows offers no brightness control"
+REASON_NOT_RESPONDING = "Not responding"
+NOT_RESPONDING_DETAIL = (
+    "A DDC/CI call to this display didn't return, so Winlight stopped talking to it and tries again once that call "
+    "finishes. If this keeps happening, turn DDC/CI off in the display's menu, or connect it without an adapter or dock."
+)
+REASON_RETRYING = "Not answering yet, retrying"
+RETRYING_DETAIL = (
+    "It answered over DDC/CI earlier. Displays often don't answer for a while after waking from sleep or being "
+    "reconnected; Winlight checks again shortly."
+)
+REASON_CHECK_FAILED = "Couldn't be checked"
+
+
+class DisplayApi(Protocol):
+    """The Windows calls the backends make; win32.py is the real one."""
+
+    def display_targets(self) -> list[win32.DisplayTarget]: ...
+    def attached_display_names(self) -> list[str]: ...
+    def physical_monitors(self) -> list[win32.PhysicalMonitor]: ...
+    def destroy_physical_monitor(self, handle: int) -> None: ...
+    def get_vcp(self, handle: int, code: int) -> tuple[int, int]: ...
+    def set_vcp(self, handle: int, code: int, value: int) -> None: ...
+    def get_monitor_brightness(self, handle: int) -> tuple[int, int, int]: ...
+    def set_monitor_brightness(self, handle: int, value: int) -> None: ...
+    def get_sdr_white_level(self, target: win32.DisplayTarget) -> float | None: ...
+    def set_sdr_white_level(self, target: win32.DisplayTarget, nits: float) -> bool: ...
+    def get_gamma_ramp(self, gdi_name: str) -> win32.GammaRamp | None: ...
+    def set_gamma_ramp(self, gdi_name: str, ramp: win32.GammaRamp) -> bool: ...
 
 
 class _Control:
     """How one display's brightness is read and changed. Like Monitorian's
     monitor item classes (DDC/CI, WMI, HDR, unreachable), each way is its own
     class behind one interface, so the backend never branches on the kind.
-    DDC/CI errors pass through as win32.DdcError."""
+    DDC/CI errors pass through as win32.DdcError.
+
+    Calls in progress are counted, so closing a control while a call on
+    another thread is stuck in it waits for that call to return before
+    releasing what it holds (destroying a handle in use is unsafe)."""
 
     kind = "none"  # for the log
+    channel = ""  # MonitorInfo.channel
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._busy = 0
+        self._busy_since = 0.0
+        self._closing = False
+        self._closed = False
+        self.on_released: Callable[[], None] | None = None
 
     def read(self) -> int | None:
-        return None
+        with self._use():
+            return self._read()
 
     def write(self, value: int) -> None:
-        raise ValueError("this display has no brightness control")
+        with self._use():
+            self._write(value)
 
     def powered_on(self) -> bool | None:
         """Whether the display says it is awake; None if it can't tell."""
-        return None
+        with self._use():
+            return self._powered_on()
+
+    @property
+    def busy_for(self) -> float | None:
+        """How long the call in progress has been running; None when idle."""
+        with self._lock:
+            return time.monotonic() - self._busy_since if self._busy else None
 
     def close(self) -> None:
+        with self._lock:
+            if self._closed or self._closing:
+                return
+            if self._busy:
+                self._closing = True  # released when the call in progress returns
+                return
+            self._closed = True
+        self._finish_release()
+
+    @contextmanager
+    def _use(self) -> Iterator[None]:
+        with self._lock:
+            if self._closed or self._closing:
+                # Detection replaced this control; the caller holds a stale reference.
+                raise MonitorGoneError(f"{self.kind} control was closed")
+            if not self._busy:
+                self._busy_since = time.monotonic()
+            self._busy += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._busy -= 1
+                release = self._busy == 0 and self._closing
+                if release:
+                    self._closed = True
+            if release:
+                self._finish_release()
+
+    def _finish_release(self) -> None:
+        try:
+            self._release()
+        finally:
+            if self.on_released is not None:
+                self.on_released()
+
+    def _read(self) -> int | None:
+        return None
+
+    def _write(self, value: int) -> None:
+        raise ValueError("this display has no brightness control")
+
+    def _powered_on(self) -> bool | None:
+        return None
+
+    def _release(self) -> None:
         pass
 
 
@@ -70,68 +213,74 @@ class _VcpControl(_Control):
     """DDC/CI, reading and writing VCP 0x10 directly (Twinkle Tray's "fast" way)."""
 
     kind = "vcp"
+    channel = "ddc"
 
-    def __init__(self, handle: int, maximum: int) -> None:
+    def __init__(self, api: DisplayApi, handle: int, maximum: int) -> None:
+        super().__init__()
+        self.api = api
         self.handle = handle
         self.maximum = maximum
 
-    def read(self) -> int | None:
-        current, maximum = win32.get_vcp(self.handle, win32.VCP_LUMINANCE)
+    def _read(self) -> int | None:
+        current, maximum = self.api.get_vcp(self.handle, win32.VCP_LUMINANCE)
         if not valid_range(0, current, maximum):
             return None
         self.maximum = maximum
         return to_percent(current, 0, maximum)
 
-    def write(self, value: int) -> None:
-        win32.set_vcp(self.handle, win32.VCP_LUMINANCE, to_raw(value, 0, self.maximum))
+    def _write(self, value: int) -> None:
+        self.api.set_vcp(self.handle, win32.VCP_LUMINANCE, to_raw(value, 0, self.maximum))
 
-    def powered_on(self) -> bool | None:
+    def _powered_on(self) -> bool | None:
         try:
-            mode, _maximum = win32.get_vcp(self.handle, win32.VCP_POWER_MODE)
+            mode, _maximum = self.api.get_vcp(self.handle, win32.VCP_POWER_MODE)
         except win32.DdcError as exc:
             if exc.monitor_gone:
                 raise
             return None  # many monitors don't report it
         return mode == win32.POWER_ON
 
-    def close(self) -> None:
-        win32.destroy_physical_monitor(self.handle)
+    def _release(self) -> None:
+        self.api.destroy_physical_monitor(self.handle)
 
 
 class _HighLevelControl(_VcpControl):
     """DDC/CI through GetMonitorBrightness, for monitors that reject plain VCP 0x10."""
 
     kind = "high-level"
+    channel = "ddc-high-level"
 
-    def __init__(self, handle: int, minimum: int, maximum: int) -> None:
-        super().__init__(handle, maximum)
+    def __init__(self, api: DisplayApi, handle: int, minimum: int, maximum: int) -> None:
+        super().__init__(api, handle, maximum)
         self.minimum = minimum
 
-    def read(self) -> int | None:
-        minimum, current, maximum = win32.get_monitor_brightness(self.handle)
+    def _read(self) -> int | None:
+        minimum, current, maximum = self.api.get_monitor_brightness(self.handle)
         if not valid_range(minimum, current, maximum):
             return None
         self.minimum, self.maximum = minimum, maximum
         return to_percent(current, minimum, maximum)
 
-    def write(self, value: int) -> None:
-        win32.set_monitor_brightness(self.handle, to_raw(value, self.minimum, self.maximum))
+    def _write(self, value: int) -> None:
+        self.api.set_monitor_brightness(self.handle, to_raw(value, self.minimum, self.maximum))
 
 
 class _WmiControl(_Control):
     """A laptop's built-in panel through WMI."""
 
     kind = "wmi"
+    channel = "wmi"
 
     def __init__(self, wmi: Callable[[], _Wmi], instance: str, levels: list[int]) -> None:
+        super().__init__()
         self._wmi = wmi
         self.instance = instance
         self.levels = levels
 
-    def read(self) -> int | None:
+    def _read(self) -> int | None:
         return self._wmi().get(self.instance)
 
-    def write(self, value: int) -> None:
+    def _write(self, value: int) -> None:
         self._wmi().set(self.instance, nearest_level(self.levels, value))
 
 
@@ -139,17 +288,20 @@ class _SdrControl(_Control):
     """Windows' SDR content brightness, for a display with HDR on."""
 
     kind = "sdr"
+    channel = "sdr"
 
-    def __init__(self, target: win32.DisplayTarget) -> None:
+    def __init__(self, api: DisplayApi, target: win32.DisplayTarget) -> None:
+        super().__init__()
+        self.api = api
         self.target = target
 
-    def read(self) -> int | None:
-        nits = win32.get_sdr_white_level(self.target)
+    def _read(self) -> int | None:
+        nits = self.api.get_sdr_white_level(self.target)
         return None if nits is None else _sdr_percent(nits)
 
-    def write(self, value: int) -> None:
+    def _write(self, value: int) -> None:
         nits = win32.SDR_MIN_NITS + value * (win32.SDR_MAX_NITS - win32.SDR_MIN_NITS) / 100
-        if not win32.set_sdr_white_level(self.target, nits):
+        if not self.api.set_sdr_white_level(self.target, nits):
             raise OSError("Windows refused the SDR brightness (is HDR still on?)")
 
 
@@ -157,15 +309,17 @@ class _SoftwareControl(_Control):
     """Dimming the display's gamma ramp, together with night light."""
 
     kind = "software"
+    channel = "software"
 
     def __init__(self, gamma: WindowsGammaBackend, gdi_name: str) -> None:
+        super().__init__()
         self.gamma = gamma
         self.gdi_name = gdi_name
 
-    def read(self) -> int | None:
+    def _read(self) -> int | None:
         return self.gamma.dimming(self.gdi_name)
 
-    def write(self, value: int) -> None:
+    def _write(self, value: int) -> None:
         self.gamma.set_dimming(self.gdi_name, value)
 
 
@@ -174,13 +328,18 @@ class _Monitor:
     info: MonitorInfo
     control: _Control = field(default_factory=_Control)
     detected: int | None = None  # brightness read while detecting, handed out once
+    ident: str = ""  # the display's identity before with_unique_keys numbered repeats
+
+
+_HUNG = object()  # a probe that didn't return in time
 
 
 class _Wmi:
     """WMI's WmiMonitorBrightness, which laptops provide for the built-in panel.
 
-    COM must be initialised on the thread that uses it, and the brightness
-    backend runs on the monitor worker thread, so this is created there.
+    COM must be initialised on the thread that uses it, and calls can move to
+    a fresh thread after a stuck one (see calls.CallRunner), so the backend
+    keeps one connection per thread.
     """
 
     def __init__(self) -> None:
@@ -188,7 +347,20 @@ class _Wmi:
         import wmi
 
         pythoncom.CoInitialize()
+        self._pythoncom = pythoncom
         self._conn = wmi.WMI(namespace="wmi")
+
+    def release(self) -> None:
+        """Drop the COM objects on the thread that made them (at exit they
+        would be released from another thread, which COM complains about)."""
+        self._conn = None
+        import gc
+
+        gc.collect()  # the wmi package's wrappers sit in reference cycles
+        try:
+            self._pythoncom.CoUninitialize()
+        except Exception:
+            pass
 
     def panels(self) -> list[tuple[str, int, list[int]]]:
         """(instance name, current brightness, supported levels) per panel."""
@@ -223,15 +395,25 @@ class WindowsBrightnessBackend:
     Tray keep them, and are released when monitors are detected again.
     """
 
-    def __init__(self, gamma: WindowsGammaBackend | None = None) -> None:
+    def __init__(self, gamma: WindowsGammaBackend | None = None, api: DisplayApi | None = None) -> None:
+        self._api: DisplayApi = api or win32
         self._monitors: list[_Monitor] = []
-        self._wmi: _Wmi | None = None
+        self._wmi: _Wmi | None = None  # set by tests; otherwise one connection per thread
+        self._wmi_local = threading.local()
         self._wmi_problem = ""
         self._gamma = gamma
         self.software_dimming = gamma is not None
-        self.safe_mode: SafeMode | None = None  # skips displays whose DDC/CI crashed or hung us
+        # Displays with a call still stuck in them, by key: never probed until it returns.
+        self._stuck: dict[str, str] = {}
+        self._stuck_lock = threading.Lock()
+        # Displays that answered DDC/CI earlier in this session, by key.
+        self._answered_ddc: set[str] = set()
+        # Skips displays whose DDC/CI crashed or hung the app in an earlier run
+        # (a crash can't be caught by time limits, only learnt from).
+        self.safe_mode: SafeMode | None = None
 
     def retry_skipped(self) -> None:
+        """The user asked to try again (⟳): displays skipped after a crash are probed again."""
         if self.safe_mode is not None:
             self.safe_mode.clear()
 
@@ -243,11 +425,17 @@ class WindowsBrightnessBackend:
                 if isinstance(monitor.control, _SoftwareControl):
                     monitor.control.write(100)
 
+    @property
+    def stuck(self) -> dict[str, str]:
+        with self._stuck_lock:
+            return dict(self._stuck)
+
     def list_monitors(self) -> list[MonitorInfo]:
         self.close()
-        targets = win32.display_targets()
+        api = self._api
+        targets = api.display_targets()
         by_display: dict[str, list[win32.PhysicalMonitor]] = {}
-        for physical in win32.physical_monitors():
+        for physical in api.physical_monitors():
             by_display.setdefault(physical.gdi_name, []).append(physical)
         panels = self._wmi_panels() if not targets or any(t.internal for t in targets) else []
 
@@ -261,60 +449,108 @@ class WindowsBrightnessBackend:
         monitors: list[_Monitor] = []
         for gdi_name, group in groups.items():
             physicals = by_display.pop(gdi_name, [])
-            # A display whose DDC/CI crashed or hung the app last time isn't probed.
-            skipped = self.safe_mode is not None and self.safe_mode.is_skipped(gdi_name)
-            if skipped:
+            try:
+                monitors += self._detect_source(group, physicals, panels)
+            except Exception:
+                # One display's failure must not take the others down.
+                log.exception("Detecting the display(s) on %s failed", gdi_name)
                 for physical in physicals:
-                    win32.destroy_physical_monitor(physical.handle)
-            responding = [] if skipped else [m for m in map(self._probe, physicals) if m is not None]
-            for target in group:
-                name = target.friendly_name or ("Built-in display" if target.internal else f"{target.connector} display")
-                if target.internal:
-                    monitor = self._panel(name, target, panels)
-                elif responding:
-                    monitor = responding.pop(0)
-                    monitor.info = replace(monitor.info, name=name)
-                elif target.output_technology in win32.INDIRECT_TECHNOLOGIES:
-                    monitor = _Monitor(MonitorInfo(0, name, False, INDIRECT_REASON))
-                elif skipped:
-                    monitor = _Monitor(MonitorInfo(0, name, False, SKIPPED_REASON))
-                else:
-                    hdmi = target.output_technology == win32.OUTPUT_HDMI
-                    monitor = _Monitor(MonitorInfo(0, name, False, NO_DDC_REASON + (TV_HINT if hdmi else "")))
-                if not monitor.info.supported and not skipped:
-                    monitor = self._fallback(monitor, target)
-                monitor.info = replace(monitor.info, key=target.hardware_id, internal=target.internal, display=target.gdi_name, hdr=target.hdr)
-                monitors.append(monitor)
-            monitors += responding  # more answering monitors than targets; shouldn't happen
+                    self._destroy_quietly(physical.handle)
+                for target in group:
+                    info = MonitorInfo(0, _name_of(target), False, REASON_CHECK_FAILED, detail="Detecting this display failed; the log has the details.",
+                                       status="unsupported")
+                    monitors.append(_Monitor(replace(info, key=target.key, internal=target.internal, details=_details_of(target),
+                                                     display=target.gdi_name, hdr=target.hdr)))
 
         # Displays the display configuration didn't describe (or it failed).
-        for physicals in by_display.values():
-            for physical in physicals:
-                monitor = self._probe(physical) or _Monitor(MonitorInfo(0, physical.description, False))
-                monitor.info = replace(monitor.info, display=physical.gdi_name)
-                monitors.append(monitor)
+        leftovers = [physical for physicals in by_display.values() for physical in physicals]
+        if self.safe_mode is not None:
+            for physical in [p for p in leftovers if self.safe_mode.is_skipped(p.gdi_name)]:
+                self._destroy_quietly(physical.handle)
+                leftovers.remove(physical)
+                info = MonitorInfo(0, physical.description, False, SKIPPED_SHORT, detail=SKIPPED_REASON, status="skipped", display=physical.gdi_name)
+                monitors.append(_Monitor(info))
+        for physical, probed in zip(leftovers, self._probe_all(leftovers)):
+            if isinstance(probed, _Monitor):
+                probed.info = replace(probed.info, display=physical.gdi_name)
+                monitors.append(probed)
+            else:
+                monitors.append(_Monitor(MonitorInfo(0, physical.description, False, REASON_NO_DDC, detail=NO_DDC_REASON, status="unsupported",
+                                                     display=physical.gdi_name)))
         for instance, current, levels in panels:
-            info = MonitorInfo(0, "Built-in display", True, key="internal", internal=True, minimum=1)
-            monitors.append(_Monitor(info, _WmiControl(self._get_wmi, instance, levels), current))
+            info = MonitorInfo(0, "Built-in display", True, key="internal", internal=True, minimum=1, channel="wmi")
+            monitors.append(_Monitor(info, self._wmi_control(instance, levels), current))
 
         for monitor, info in zip(monitors, with_unique_keys([replace(m.info, index=i) for i, m in enumerate(monitors)])):
             monitor.info = info
-            log.info("Monitor %d: %s [%s] (%s)", info.index, info.name, info.key, monitor.control.kind if info.supported else "not supported")
+            state = monitor.control.kind if info.supported else f"not supported: {info.reason}"
+            log.info("Monitor %d: %s [%s] (%s)", info.index, info.name, info.key, state)
         self._monitors = monitors
         return [m.info for m in monitors]
+
+    def _detect_source(self, group: list[win32.DisplayTarget], physicals: list[win32.PhysicalMonitor], panels) -> list[_Monitor]:
+        external = [t for t in group if not t.internal]
+        stuck = self.stuck
+        # A display whose DDC/CI crashed or hung the app last time isn't probed
+        # (safe mode); in a clone group, none of its monitors are, since which
+        # handle belongs to which display isn't known.
+        skipped = self.safe_mode is not None and any(self.safe_mode.is_skipped(t.key, t.gdi_name) for t in external)
+        if not external or skipped or all(t.key in stuck for t in external):
+            # A laptop panel is driven through WMI and never gets a DDC/CI
+            # handle; asking it anyway costs half a second of retried errors
+            # at every detection. A display with a stuck call isn't asked again.
+            for physical in physicals:
+                self._destroy_quietly(physical.handle)
+            physicals = []
+        probed = self._probe_all(physicals, [t.key for t in external if t.key not in stuck])
+        responding = [p for p in probed if isinstance(p, _Monitor)]
+        hung = sum(1 for p in probed if p is _HUNG)
+
+        monitors = []
+        for target in group:
+            name = _name_of(target)
+            if target.internal:
+                monitor = self._panel(name, target, panels)
+            elif skipped:
+                monitor = _Monitor(MonitorInfo(0, name, False, SKIPPED_SHORT, detail=SKIPPED_REASON, status="skipped"))
+            elif target.key in stuck:
+                monitor = _Monitor(MonitorInfo(0, name, False, REASON_NOT_RESPONDING, detail=NOT_RESPONDING_DETAIL, status="not responding"))
+            elif responding:
+                monitor = responding.pop(0)
+                monitor.info = replace(monitor.info, name=name)
+                self._answered_ddc.add(target.key)
+            elif hung:
+                hung -= 1
+                monitor = _Monitor(MonitorInfo(0, name, False, REASON_NOT_RESPONDING, detail=NOT_RESPONDING_DETAIL, status="not responding"))
+            elif target.key in self._answered_ddc:
+                monitor = _Monitor(MonitorInfo(0, name, False, REASON_RETRYING, detail=RETRYING_DETAIL, status="retrying"))
+            elif target.output_technology in win32.INDIRECT_TECHNOLOGIES:
+                monitor = _Monitor(MonitorInfo(0, name, False, REASON_INDIRECT, detail=INDIRECT_REASON, status="unsupported"))
+            else:
+                hdmi = target.output_technology == win32.OUTPUT_HDMI
+                reason = REASON_NO_DDC + (TV_HINT if hdmi else "")
+                monitor = _Monitor(MonitorInfo(0, name, False, reason, detail=NO_DDC_REASON + (TV_HINT if hdmi else ""), status="unsupported"))
+            if not monitor.info.supported and monitor.info.status == "unsupported":
+                monitor = self._fallback(monitor, target)
+            monitor.info = replace(monitor.info, key=target.key, internal=target.internal, details=_details_of(target),
+                                   display=target.gdi_name, hdr=target.hdr)
+            monitor.ident = target.key
+            monitors.append(monitor)
+        return monitors + responding  # more answering monitors than targets; shouldn't happen
 
     def _fallback(self, monitor: _Monitor, target: win32.DisplayTarget) -> _Monitor:
         """SDR brightness or software dimming for a display without hardware control."""
         info = monitor.info
         if target.hdr:
             try:
-                nits = win32.get_sdr_white_level(target)
+                nits = self._api.get_sdr_white_level(target)
             except OSError:
                 nits = None
             if nits is not None:
-                return _Monitor(replace(info, supported=True, reason="", control="sdr"), _SdrControl(target), _sdr_percent(nits))
+                info = replace(info, supported=True, reason="", detail="", control="sdr", channel="sdr", status="ok")
+                return _Monitor(info, _SdrControl(self._api, target), _sdr_percent(nits))
         elif self.software_dimming and self._gamma is not None and self._gamma.can_dim(target.gdi_name):
-            info = replace(info, supported=True, reason="", control="software", minimum=SOFTWARE_DIM_MIN)
+            info = replace(info, supported=True, reason="", detail="", control="software", channel="software", minimum=SOFTWARE_DIM_MIN, status="ok")
             return _Monitor(info, _SoftwareControl(self._gamma, target.gdi_name))
         return monitor
 
@@ -349,8 +585,27 @@ class WindowsBrightnessBackend:
 
     def close(self) -> None:
         for monitor in self._monitors:
+            if monitor.control.busy_for is not None:
+                # A call is stuck in this display: keep away from it until it returns.
+                key, name = monitor.ident or monitor.info.key, monitor.info.name
+                with self._stuck_lock:
+                    self._stuck[key] = f"a call to {name}"
+                monitor.control.on_released = lambda key=key, name=name: self._unstuck(key, name)
+                log.warning("%s still has a call in progress; not asking it again until that returns", name)
             monitor.control.close()
         self._monitors = []
+
+    def release_thread_resources(self) -> None:
+        """Release this thread's WMI connection; call on the thread that used it."""
+        conn = getattr(self._wmi_local, "conn", None)
+        self._wmi_local.conn = None
+        if conn is not None:
+            conn.release()
+
+    def _unstuck(self, key: str, name: str) -> None:
+        with self._stuck_lock:
+            if self._stuck.pop(key, None) is not None:
+                log.info("The stuck call to %s returned; it will be checked again at the next detection", name)
 
     @staticmethod
     @contextmanager
@@ -363,6 +618,52 @@ class WindowsBrightnessBackend:
                 raise MonitorGoneError(monitor.info.name) from exc
             raise
 
+    def _probe_all(self, physicals: list[win32.PhysicalMonitor], keys: list[str] | None = None) -> list:
+        """Probe monitors side by side, all within PROBE_TIMEOUT_S. Each result
+        is a _Monitor, None (no DDC/CI) or _HUNG (didn't answer in time; its
+        handle is released when the probe finally returns)."""
+        if not physicals:
+            return []
+        keys = keys or []
+        calls = []
+        for i, physical in enumerate(physicals):
+            key = keys[i] if i < len(keys) else ""
+            calls.append((physical, key, start_side_call(lambda p=physical, k=key: self._probe_marked(p, k),
+                                                          f"probing {physical.description} on {physical.gdi_name}",
+                                                          on_late=lambda p=physical, k=key: self._late_probe(p, k))))
+        deadline = time.monotonic() + PROBE_TIMEOUT_S
+        results = []
+        for physical, key, call in calls:
+            try:
+                results.append(call.result(deadline - time.monotonic()))
+            except CallTimeout:
+                log.warning("%s on %s didn't answer within %g s; leaving it alone until it does", physical.description, physical.gdi_name, PROBE_TIMEOUT_S)
+                if key:
+                    with self._stuck_lock:
+                        self._stuck[key] = f"probing {physical.description}"
+                results.append(_HUNG)
+            except Exception:
+                log.exception("Probing %s on %s failed", physical.description, physical.gdi_name)
+                self._destroy_quietly(physical.handle)
+                results.append(None)
+        return results
+
+    def _probe_marked(self, physical: win32.PhysicalMonitor, key: str) -> _Monitor | None:
+        """A probe inside safe mode's marker: if the app crashes during it, or
+        quits while it hangs, the display is skipped at the next start."""
+        if self.safe_mode is None:
+            return self._probe(physical)
+        name = physical.description or physical.gdi_name
+        with self.safe_mode.risky(key or physical.gdi_name, f"detecting {name} on {physical.gdi_name}"):
+            return self._probe(physical)
+
+    def _late_probe(self, physical: win32.PhysicalMonitor, key: str) -> None:
+        """A probe that was given up on returned: release its handle, and its display."""
+        self._destroy_quietly(physical.handle)
+        if key:
+            with self._stuck_lock:
+                self._stuck.pop(key, None)
+
     def _probe(self, physical: win32.PhysicalMonitor) -> _Monitor | None:
         """A monitor that answers DDC/CI brightness requests, or None (and the handle is released).
 
@@ -372,30 +673,33 @@ class WindowsBrightnessBackend:
         """
         name = physical.description or physical.gdi_name
         info = MonitorInfo(0, name, True)
-        if self.safe_mode is not None:
-            with self.safe_mode.risky(physical.gdi_name, f"detecting {name} on {physical.gdi_name}"):
-                return self._probe_ddc(physical, name, info)
-        return self._probe_ddc(physical, name, info)
-
-    def _probe_ddc(self, physical: win32.PhysicalMonitor, name: str, info: MonitorInfo) -> _Monitor | None:
+        api = self._api
         try:
-            current, maximum = win32.get_vcp(physical.handle, win32.VCP_LUMINANCE)
+            current, maximum = api.get_vcp(physical.handle, win32.VCP_LUMINANCE)
             if valid_range(0, current, maximum):
-                return _Monitor(info, _VcpControl(physical.handle, maximum), to_percent(current, 0, maximum))
+                return _Monitor(replace(info, channel="ddc"), _VcpControl(api, physical.handle, maximum), to_percent(current, 0, maximum))
             log.info("%s on %s reported brightness %d of %d; ignoring it", name, physical.gdi_name, current, maximum)
         except win32.DdcError as exc:
             log.info("%s on %s: no DDC/CI brightness (%s)", name, physical.gdi_name, exc)
-            if exc.monitor_gone:
-                win32.destroy_physical_monitor(physical.handle)
+            if exc.monitor_gone or exc.status == "transmission failed":
+                # Gone, or nothing gets through at all: the high-level API can't do better.
+                self._destroy_quietly(physical.handle)
                 return None
         try:
-            minimum, current, maximum = win32.get_monitor_brightness(physical.handle)
+            minimum, current, maximum = api.get_monitor_brightness(physical.handle)
             if valid_range(minimum, current, maximum):
-                return _Monitor(info, _HighLevelControl(physical.handle, minimum, maximum), to_percent(current, minimum, maximum))
+                control = _HighLevelControl(api, physical.handle, minimum, maximum)
+                return _Monitor(replace(info, channel="ddc-high-level"), control, to_percent(current, minimum, maximum))
         except win32.DdcError as exc:
             log.debug("%s on %s: GetMonitorBrightness failed too (%s)", name, physical.gdi_name, exc)
-        win32.destroy_physical_monitor(physical.handle)
+        self._destroy_quietly(physical.handle)
         return None
+
+    def _destroy_quietly(self, handle: int) -> None:
+        try:
+            self._api.destroy_physical_monitor(handle)
+        except Exception:
+            log.debug("Destroying physical monitor handle %s failed", handle, exc_info=True)
 
     def _panel(self, name: str, target: win32.DisplayTarget, panels: list[tuple[str, int, list[int]]]) -> _Monitor:
         """The WMI panel for a built-in display, removing it from `panels`."""
@@ -404,16 +708,22 @@ class WindowsBrightnessBackend:
         if match is None and len(panels) == 1:
             match = panels[0]  # a laptop has one panel; the ids may just be formatted differently
         if match is None:
-            reason = f"Windows offers no brightness control for this display ({self._wmi_problem or 'no WMI brightness'})"
-            return _Monitor(MonitorInfo(0, name, False, reason))
+            detail = f"Windows offers no brightness control for this display ({self._wmi_problem or 'no WMI brightness'})"
+            return _Monitor(MonitorInfo(0, name, False, REASON_PANEL, detail=detail, status="unsupported"))
         panels.remove(match)
         instance, current, levels = match
-        return _Monitor(MonitorInfo(0, name, True, minimum=1), _WmiControl(self._get_wmi, instance, levels), current)
+        return _Monitor(MonitorInfo(0, name, True, minimum=1, channel="wmi"), self._wmi_control(instance, levels), current)
+
+    def _wmi_control(self, instance: str, levels: list[int]) -> _WmiControl:
+        return _WmiControl(self._get_wmi, instance, levels)
 
     def _get_wmi(self) -> _Wmi:
-        if self._wmi is None:
-            self._wmi = _Wmi()
-        return self._wmi
+        if self._wmi is not None:
+            return self._wmi
+        conn = getattr(self._wmi_local, "conn", None)
+        if conn is None:
+            conn = self._wmi_local.conn = _Wmi()
+        return conn
 
     def _wmi_panels(self) -> list[tuple[str, int, list[int]]]:
         try:
@@ -425,11 +735,30 @@ class WindowsBrightnessBackend:
         except Exception:
             # Often temporary: WMI is busy at sign-in and right after resume.
             # Detection runs again after those, so just try again then.
-            self._wmi, self._wmi_problem = None, "the WMI query failed"
+            self._wmi_local.conn = None
+            self._wmi_problem = "the WMI query failed"
             log.info("Querying WMI brightness failed", exc_info=True)
             return []
         self._wmi_problem = "" if panels else "no WMI brightness"
         return panels
+
+
+def _name_of(target: win32.DisplayTarget) -> str:
+    return target.model or ("Built-in display" if target.internal else f"{target.connector} display")
+
+
+def _details_of(target: win32.DisplayTarget) -> DisplayDetails:
+    edid = target.edid
+    return DisplayDetails(
+        manufacturer=edid.manufacturer if edid else target.hardware_id[:3],
+        model=target.model,
+        serial=edid.serial if edid else "",
+        connector=target.connector,
+        hdr=target.hdr,
+        year=edid.year if edid else 0,
+        diagonal_inches=edid.diagonal_inches if edid else 0.0,
+        source=target.gdi_name,
+    )
 
 
 def _sdr_percent(nits: float) -> int:
@@ -438,10 +767,96 @@ def _sdr_percent(nits: float) -> int:
     return max(0, min(100, round((nits - win32.SDR_MIN_NITS) * 100 / span)))
 
 
+class GammaJournal:
+    """Remembers each display's own ramp (its calibration) while the app has
+    it tinted or dimmed, so a crash can be recovered from.
+
+    Gamma ramps outlive the app. After a crash, the next start finds a tinted
+    ramp and can't tell the calibration underneath; without this, it would
+    fall back to a neutral ramp and the calibration would stay lost until
+    Windows reloads it. Entries are kept per display identity (EDID), not
+    per GDI name, which can change between sessions. Stale entries (the
+    ramp was reset by Windows meanwhile) are recognised and dropped.
+    """
+
+    WRITE_INTERVAL_S = 2.0  # while a ramp keeps changing (fades), save at most this often
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path
+        self._entries: dict[str, dict] = self._load()
+        self._written_at = 0.0
+        self._unsaved = False
+
+    def _load(self) -> dict[str, dict]:
+        if self.path is None:
+            return {}
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            entries = raw.get("displays", {}) if isinstance(raw, dict) else {}
+            return {k: v for k, v in entries.items() if isinstance(v, dict)}
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError):
+            log.warning("Could not read %s; crash recovery of display calibrations starts afresh", self.path, exc_info=True)
+            return {}
+
+    def entry(self, key: str) -> dict | None:
+        entry = self._entries.get(key)
+        return entry if entry and entry.get("dirty") else None
+
+    def changed(self, key: str, base: win32.GammaRamp | None, ramp: win32.GammaRamp) -> None:
+        """The app set `ramp` on a display whose own ramp is `base` (None: identity)."""
+        clean = ramps_match(ramp, base or identity_ramp(win32.RAMP_SIZE))
+        previous = self._entries.get(key)
+        was_dirty = bool(previous and previous.get("dirty"))
+        self._entries[key] = {"dirty": not clean, "base": base, "last": None if clean else ramp}
+        if clean != (not was_dirty) or time.monotonic() - self._written_at >= self.WRITE_INTERVAL_S:
+            self.save()  # at every switch between tinted and clean, and periodically while tinted
+        else:
+            self._unsaved = True
+
+    def forget(self, key: str) -> None:
+        if self._entries.pop(key, None) is not None:
+            self.save()
+
+    def flush(self) -> None:
+        if self._unsaved:
+            self.save()
+
+    def save(self) -> None:
+        self._unsaved = False
+        self._written_at = time.monotonic()
+        if self.path is None:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"version": 1, "displays": self._entries}), encoding="utf-8")
+            os.replace(tmp, self.path)
+        except OSError:
+            log.warning("Could not save %s", self.path, exc_info=True)
+
+    def recognises(self, key: str, ramp: win32.GammaRamp) -> win32.GammaRamp | None:
+        """If `ramp` is what the app left on this display, the display's own
+        ramp underneath (or the identity); else None."""
+        entry = self.entry(key)
+        if entry is None:
+            return None
+        base = entry.get("base") or identity_ramp(win32.RAMP_SIZE)
+        if entry.get("last") and ramps_match(ramp, entry["last"]):
+            return base
+        # Saved a moment before the crash, mid-fade: any tint of the base.
+        for kelvin in range(1000, NEUTRAL_KELVIN + 1, 50):
+            if ramps_match(ramp, gamma_ramp(whitepoint(kelvin), win32.RAMP_SIZE, base)):
+                return base
+        return None
+
+
 @dataclass
 class _GammaDisplay:
     name: str  # GDI name, "\\.\DISPLAY1"
     hdr: bool = False
+    key: str = ""  # identity, for the journal
     base: win32.GammaRamp | None = None  # the ramp to tint, None for identity
     last_set: win32.GammaRamp | None = None
     warmest: int = 0  # warmest temperature Windows accepted here, once it refused one
@@ -450,6 +865,10 @@ class _GammaDisplay:
     dim_floor: int = 0  # darkest dimming Windows accepted here, once it refused one
     leftover: bool = False  # found tinted (a crash, f.lux): put neutral back even if we never set it
     kelvin_override: int | None = None  # this display's own temperature (night light paused for an app)
+
+    @property
+    def effective_dim(self) -> int:
+        return min(self.dim, self.idle_dim)
 
 
 class WindowsGammaBackend:
@@ -460,7 +879,8 @@ class WindowsGammaBackend:
 
     Night light and software dimming share the one ramp, so, like KWin's
     ColorDevice (brightness x temperature), each display keeps its state
-    (base ramp, dimming) and every change composes the whole ramp again:
+    (base ramp, dimming, idle dimming, its own temperature while night light
+    is paused for an app) and every change composes the whole ramp again:
     base, dimmed, then tinted. Night light is set from the UI thread and
     dimming from the monitor thread, so a lock guards the state.
     """
@@ -468,17 +888,26 @@ class WindowsGammaBackend:
     # How long the display list and their HDR state are trusted.
     DISPLAYS_TTL = 10.0
 
-    def __init__(self) -> None:
+    def __init__(self, api: DisplayApi | None = None, journal: GammaJournal | None = None) -> None:
+        self._api: DisplayApi = api or win32
+        self._journal = journal or GammaJournal()
         self._displays: dict[str, _GammaDisplay] = {}
         self._listed_at: float | None = None
+        self._reapplied = False  # set when refreshing the list put back a reset ramp
         self._warned: set[tuple[str, str]] = set()
         self._kelvin = NEUTRAL_KELVIN
         self._lock = threading.RLock()
 
+    def set_journal(self, path: Path) -> None:
+        """Where to keep the crash-recovery journal; call before the first change."""
+        with self._lock:
+            self._journal = GammaJournal(path)
+            self._listed_at = None  # look at the displays again with it
+
     @property
     def dimmed(self) -> bool:
         """Some display is dimmed, so its ramp must be kept even while night light is off."""
-        return any(min(d.dim, d.idle_dim) < 100 for d in self._displays.values())
+        return any(d.effective_dim < 100 for d in self._displays.values())
 
     def set_idle_dim(self, levels: dict[str, int]) -> None:
         """Dim these displays (GDI name -> percent) for idle, undim the rest.
@@ -489,7 +918,55 @@ class WindowsGammaBackend:
                 level = 100 if display.hdr else max(SOFTWARE_DIM_MIN, min(100, levels.get(display.name, 100)))
                 if level != display.idle_dim:
                     display.idle_dim = level
-                    self._apply(display)
+                    display.warmest = 0  # the room for tinting depends on the dimming
+                    self._isolated(display, self._apply)
+
+    def set_override(self, gdi_name: str, kelvin: int | None) -> None:
+        """Give one display its own temperature (None: follow night light), used
+        to pause night light on the display showing an exempt app."""
+        with self._lock:
+            display = next((d for d in self._current_displays() if d.name == gdi_name), None)
+            if display is None or display.kelvin_override == kelvin:
+                return
+            display.kelvin_override = kelvin
+            self._isolated(display, self._apply)
+
+    def verify(self) -> bool:
+        """Put our ramps back where something reset them: Windows does on the
+        lock screen, after sleep and on display changes, often before any event
+        arrives. Cheap (one GetDeviceGammaRamp per display), so it can run every
+        second or two, and right after those events. True if any was re-applied."""
+        with self._lock:
+            self._reapplied = False
+            displays = self._current_displays()
+            reapplied = self._reapplied  # found reset while the list was refreshed (and already re-applied)
+            for display in displays:
+                if display.hdr or display.last_set is None:
+                    continue
+                try:
+                    current = self._api.get_gamma_ramp(display.name)
+                except OSError:
+                    continue
+                if current is None or ramps_match(current, display.last_set):
+                    continue
+                log.debug("The gamma ramp of %s was reset; applying it again", display.name)
+                self._isolated(display, self._sync_base)
+                active = self._active(display)
+                if active:
+                    self._isolated(display, self._apply)
+                elif display.leftover:
+                    self._set(display, display.base or identity_ramp(win32.RAMP_SIZE))
+                reapplied = reapplied or active
+        return reapplied
+
+    def warmest_accepted(self) -> dict[str, int]:
+        """GDI name -> the warmest temperature Windows has accepted, where it refused warmer."""
+        with self._lock:
+            return {d.name: d.warmest for d in self._displays.values() if d.warmest}
+
+    def hdr_displays(self) -> set[str]:
+        with self._lock:
+            return {d.name for d in self._displays.values() if d.hdr}
 
     def displays_changed(self) -> None:
         """Displays were added, removed or reconfigured: look at them again.
@@ -500,14 +977,14 @@ class WindowsGammaBackend:
                 display.warmest = 0
                 display.dim_floor = 0
             for display in self._current_displays():
-                if min(display.dim, display.idle_dim) < 100:
-                    self._apply(display)
+                if display.effective_dim < 100 or display.kelvin_override is not None:
+                    self._isolated(display, self._apply)
 
     def apply(self, kelvin: int) -> None:
         with self._lock:
             self._kelvin = kelvin
             for display in self._current_displays():
-                self._apply(display)
+                self._isolated(display, self._apply)
 
     def reset(self) -> None:
         """Night light off: neutral colors, keeping any dimming. Displays the
@@ -515,8 +992,8 @@ class WindowsGammaBackend:
         with self._lock:
             self._kelvin = NEUTRAL_KELVIN
             for display in self._current_displays():
-                if min(display.dim, display.idle_dim) < 100 or display.kelvin_override is not None:
-                    self._apply(display)
+                if display.effective_dim < 100 or display.kelvin_override is not None:
+                    self._isolated(display, self._apply)
                 elif self._owned(display):
                     base = display.base or identity_ramp(win32.RAMP_SIZE)
                     if display.leftover or not ramps_match(display.last_set, base):
@@ -530,47 +1007,13 @@ class WindowsGammaBackend:
                 display.idle_dim = 100
                 if self._owned(display):
                     self._set(display, display.base or identity_ramp(win32.RAMP_SIZE))
+                display.dim = 100
+            self._journal.flush()
 
     @staticmethod
     def _owned(display: _GammaDisplay) -> bool:
         """Whether resetting this display's ramp is ours to do."""
         return not display.hdr and (display.last_set is not None or display.leftover)
-
-    def set_override(self, gdi_name: str, kelvin: int | None) -> None:
-        """Give one display its own temperature (None: follow night light), used
-        to pause night light on the display showing an exempt app."""
-        with self._lock:
-            display = next((d for d in self._current_displays() if d.name == gdi_name), None)
-            if display is None or display.kelvin_override == kelvin:
-                return
-            display.kelvin_override = kelvin
-            self._apply(display)
-
-    def verify(self) -> bool:
-        """Put our ramps back where something reset them: Windows does on the
-        lock screen, after sleep and on display changes, often before any event
-        arrives. Cheap (one GetDeviceGammaRamp per display), so it can run every
-        second or two, and right after those events. True if any was re-applied."""
-        reapplied = False
-        with self._lock:
-            for display in self._current_displays():
-                if display.hdr or display.last_set is None:
-                    continue
-                try:
-                    current = win32.get_gamma_ramp(display.name)
-                except OSError:
-                    continue
-                if current is None or ramps_match(current, display.last_set):
-                    continue
-                log.debug("The gamma ramp of %s was reset; applying it again", display.name)
-                self._sync_base(display)
-                active = self._kelvin < NEUTRAL_KELVIN or min(display.dim, display.idle_dim) < 100 or display.kelvin_override is not None
-                if active:
-                    self._apply(display)
-                elif display.leftover:
-                    self._set(display, display.base or identity_ramp(win32.RAMP_SIZE))
-                reapplied = reapplied or active
-        return reapplied
 
     def can_dim(self, gdi_name: str) -> bool:
         """Whether software dimming can work here: an SDR display whose ramp can be read."""
@@ -579,7 +1022,7 @@ class WindowsGammaBackend:
             if display is None or display.hdr:
                 return False
             try:
-                return win32.get_gamma_ramp(gdi_name) is not None
+                return self._api.get_gamma_ramp(gdi_name) is not None
             except OSError:
                 return False
 
@@ -594,10 +1037,27 @@ class WindowsGammaBackend:
         with self._lock:
             display = next((d for d in self._current_displays() if d.name == gdi_name), None)
             if display is None:
-                return 100
-            display.dim = max(SOFTWARE_DIM_MIN, min(100, percent)) if percent < 100 else 100
+                raise MonitorGoneError(gdi_name)
+            dim = max(SOFTWARE_DIM_MIN, min(100, percent)) if percent < 100 else 100
+            if dim != display.dim:
+                # Dimming leaves less room for tinting, so the warmest
+                # temperature Windows accepts depends on it: find it again.
+                display.warmest = 0
+            display.dim = dim
             self._apply(display)
-            return display.dim
+            return max(display.dim, display.dim_floor)
+
+    def idle_dimming(self) -> dict[str, int]:
+        """GDI name -> idle dimming level, where dimmed (for diagnostics)."""
+        with self._lock:
+            return {d.name: d.idle_dim for d in self._displays.values() if d.idle_dim < 100}
+
+    def _isolated(self, display: _GammaDisplay, step: Callable[[_GammaDisplay], None]) -> None:
+        """One display's failure must not stop the others from being set."""
+        try:
+            step(display)
+        except Exception:
+            log.exception("Changing the gamma ramp of %s failed", display.name)
 
     def _apply(self, display: _GammaDisplay) -> None:
         if display.hdr:
@@ -610,7 +1070,7 @@ class WindowsGammaBackend:
             return
         own = display.kelvin_override if display.kelvin_override is not None else self._kelvin
         kelvin = max(own, display.warmest)
-        dim = max(min(display.dim, display.idle_dim), display.dim_floor)
+        dim = max(display.effective_dim, display.dim_floor)
         if self._try(display, kelvin, dim) or (kelvin >= NEUTRAL_KELVIN and dim >= 100):
             return
         # Windows rejects ramps far from identity unless the GdiIcmGammaRange
@@ -641,9 +1101,9 @@ class WindowsGammaBackend:
 
     def _set(self, display: _GammaDisplay, ramp: win32.GammaRamp) -> bool:
         try:
-            if not win32.set_gamma_ramp(display.name, ramp):
+            if not self._api.set_gamma_ramp(display.name, ramp):
                 return False
-            applied = win32.get_gamma_ramp(display.name)
+            applied = self._api.get_gamma_ramp(display.name)
         except OSError as exc:
             self._warn_once(display.name, "dc", "Could not change the gamma ramp of %s: %s", display.name, exc)
             return False
@@ -659,6 +1119,7 @@ class WindowsGammaBackend:
             ramp = applied
         display.last_set = ramp
         display.leftover = False
+        self._journal.changed(display.key or display.name, display.base, ramp)
         return True
 
     def _current_displays(self) -> list[_GammaDisplay]:
@@ -666,25 +1127,41 @@ class WindowsGammaBackend:
         if self._listed_at is not None and now - self._listed_at < self.DISPLAYS_TTL:
             return list(self._displays.values())
         self._listed_at = now
-        sources: dict[str, bool] = {}  # GDI name -> HDR
-        if targets := win32.display_targets():
+        sources: dict[str, tuple[bool, str]] = {}  # GDI name -> (HDR, identity)
+        if targets := self._api.display_targets():
             for target in targets:
-                sources[target.gdi_name] = sources.get(target.gdi_name, False) or target.hdr
+                hdr, key = sources.get(target.gdi_name, (False, ""))
+                sources[target.gdi_name] = (hdr or target.hdr, key or target.key)
         else:
-            sources = dict.fromkeys(win32.attached_display_names(), False)
+            sources = {name: (False, "") for name in self._api.attached_display_names()}
         displays = {}
-        for name, hdr in sources.items():
+        for name, (hdr, key) in sources.items():
             display = self._displays.get(name) or _GammaDisplay(name)
+            if display.hdr and not hdr:
+                log.info("HDR was turned off for %s; night light and dimming apply to it again", name)
             display.hdr = hdr
-            self._sync_base(display)
+            display.key = key
+            ours = display.last_set is not None
+            self._isolated(display, self._sync_base)
+            if ours and display.last_set is None and not hdr and self._active(display):
+                # Our ramp was reset (the lock screen, waking) and is now the
+                # new base; put night light and dimming back over it at once,
+                # as verify() would have.
+                log.debug("The gamma ramp of %s was reset; applying it again", name)
+                self._isolated(display, self._apply)
+                self._reapplied = True
             displays[name] = display
         self._displays = displays
         return list(displays.values())
 
+    def _active(self, display: _GammaDisplay) -> bool:
+        """Whether this display should show something of ours (tint, dimming, a pause)."""
+        return self._kelvin < NEUTRAL_KELVIN or display.effective_dim < 100 or display.kelvin_override is not None
+
     def _sync_base(self, display: _GammaDisplay) -> None:
         """Re-read the display's base ramp if something other than us set its ramp."""
         try:
-            current = win32.get_gamma_ramp(display.name)
+            current = self._api.get_gamma_ramp(display.name)
         except OSError:
             return
         if current is None:
@@ -697,20 +1174,27 @@ class WindowsGammaBackend:
             # calibration; another color tool may have changed it too.
             log.info("The gamma ramp of %s was changed by something else; using it as the new base", display.name)
         display.last_set = None
+        key = display.key or display.name
         if not plausible_base(current):
-            display.base = None
+            recovered = self._journal.recognises(key, current)
+            display.base = None if recovered is None or ramps_match(recovered, identity_ramp(win32.RAMP_SIZE)) else recovered
             display.leftover = True
-            self._warn_once(
-                display.name,
-                "tinted",
-                "%s already had a tinted gamma ramp (left over from a crash, or another app such as f.lux); starting from a neutral one",
-                display.name,
-            )
-        elif ramps_match(current, identity_ramp(win32.RAMP_SIZE)):
-            display.base = None
+            if recovered is not None:
+                log.warning("%s still had the tint Winlight left when it last stopped unexpectedly; restoring the ramp it had before", display.name)
+            else:
+                self._warn_once(
+                    display.name,
+                    "tinted",
+                    "%s already had a tinted gamma ramp (left over from a crash, or another app such as f.lux); starting from a neutral one",
+                    display.name,
+                )
         else:
-            display.base = current
-            log.info("Keeping the existing gamma ramp of %s (its calibration) as the base for night light", display.name)
+            self._journal.forget(key)  # whatever we left there is gone: the entry is stale
+            if ramps_match(current, identity_ramp(win32.RAMP_SIZE)):
+                display.base = None
+            else:
+                display.base = current
+                log.info("Keeping the existing gamma ramp of %s (its calibration) as the base for night light", display.name)
 
     def _warn_once(self, display: str, kind: str, message: str, *args) -> None:
         if (display, kind) not in self._warned:

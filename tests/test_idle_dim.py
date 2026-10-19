@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import pytest
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject
 from PySide6.QtTest import QTest
 
 from nightlight.hardware.brightness import MonitorInfo
@@ -16,17 +16,32 @@ OLD = MonitorInfo(5, "Old", False, key="ACI0001", display=r"\\.\DISPLAY6")
 
 
 class FakeMonitors(QObject):
-    brightnessChanged = Signal(int, object)
+    """MonitorManager as IdleDimmer uses it (by display key)."""
 
     def __init__(self):
         super().__init__()
         self.monitors = [DELL, PANEL, TV, HDR_SDR, HDR_DDC, OLD]
-        self.brightness = {0: 70, 1: 60, 2: 100, 3: 50, 4: 80}
+        self.brightness = {"DEL41A2": 70, "BOE0812": 60, "SAM7136": 100, "LGE0001": 50, "GSM0001": 80}
         self.sent = []
+        self.sources = []
 
-    def restore_brightness(self, index, value, fade=False):
-        self.sent.append((index, value))
-        self.brightness[index] = value
+    def value(self, key):
+        return self.brightness.get(key)
+
+    def restore_brightness(self, key, value, fade=False, source="restore"):
+        self.sent.append((key, value))
+        self.sources.append(source)
+        self.brightness[key] = value
+
+
+class FakeScheduler:
+    def __init__(self, sent):
+        self.held = []
+        self._sent = sent  # to see the order of calls
+
+    def set_held(self, held):
+        self.held.append(held)
+        self._sent.append(("schedule held", held))
 
 
 class FakeMemory:
@@ -72,7 +87,8 @@ def test_each_kind_of_display_is_dimmed_the_safe_way(dimmer):
     dimmer.check()
     settle()
     # Laptop panel through WMI (saves power), the HDR display through its SDR level:
-    assert monitors.sent == [(1, 30), (3, 30)]
+    assert monitors.sent == [("BOE0812", 30), ("LGE0001", 30)]
+    assert monitors.sources == ["idle", "idle"]  # not remembered as the user's choice; skipped if in standby
     # DDC/CI monitor, TV and the display without control: in software, no DDC/CI writes;
     # the HDR monitor controlled over DDC/CI is left alone (gamma does nothing in HDR).
     assert gamma.idle[-1] == {D1: 30, D3: 30, r"\\.\DISPLAY6": 30}
@@ -89,17 +105,17 @@ def test_input_brings_everything_back(dimmer):
     state["idle"] = 0.2  # a key was pressed
     dimmer.check()
     settle()
-    assert monitors.sent == [(1, 60), (3, 50)]
+    assert monitors.sent == [("BOE0812", 60), ("LGE0001", 50)]
     assert gamma.idle[-1] == {}  # the software layer is gone
     assert not dimmer.dimmed and memory.held == [True, False]
 
 
 def test_never_brightens(dimmer):
     dimmer, monitors, _, _, state = dimmer
-    monitors.brightness[1] = 10  # the laptop panel is already darker than 30%
+    monitors.brightness["BOE0812"] = 10  # the laptop panel is already darker than 30%
     state["idle"] = 600
     dimmer.check()
-    assert (1, 30) not in monitors.sent
+    assert ("BOE0812", 30) not in monitors.sent
 
 
 def test_coming_back_follows_the_schedule_that_moved_on_meanwhile(dimmer):
@@ -109,7 +125,7 @@ def test_coming_back_follows_the_schedule_that_moved_on_meanwhile(dimmer):
     memory.targets = {"BOE0812": 40}  # a schedule step passed while away
     state["idle"] = 0
     dimmer.check()
-    assert (1, 40) in monitors.sent
+    assert ("BOE0812", 40) in monitors.sent
 
 
 def test_not_while_something_keeps_the_display_on(dimmer):
@@ -124,7 +140,7 @@ def test_hidden_displays_are_left_alone(dimmer):
     state["idle"], state["hidden"] = 600, frozenset({"DEL41A2", "BOE0812"})
     dimmer.check()
     settle()
-    assert monitors.sent == [(3, 30)]
+    assert monitors.sent == [("LGE0001", 30)]
     assert D1 not in gamma.idle[-1]
 
 
@@ -134,7 +150,7 @@ def test_quitting_while_dimmed_undoes_it_at_once(dimmer):
     dimmer.check()
     monitors.sent.clear()
     dimmer.release()
-    assert monitors.sent == [(1, 60), (3, 50)] and gamma.idle[-1] == {}
+    assert monitors.sent == [("BOE0812", 60), ("LGE0001", 50)] and gamma.idle[-1] == {}
     assert not dimmer._fade_timer.isActive()
 
 
@@ -148,5 +164,33 @@ def test_without_a_gamma_backend_only_the_safe_hardware_paths_dim():
     dimmer = IdleDimmer(monitors, FakeMemory(), lambda: 3600, lambda: False)
     dimmer.configure(True, 5, 30)
     dimmer.check()
-    assert monitors.sent == [(1, 30), (3, 30)]  # never DDC/CI, even without software dimming
+    assert monitors.sent == [("BOE0812", 30), ("LGE0001", 30)]  # never DDC/CI, even without software dimming
     dimmer.configure(False, 5, 30)
+
+
+def test_the_brightness_schedule_is_held_while_dimmed_and_goes_after_the_restores():
+    state = {"idle": 600}
+    monitors, memory = FakeMonitors(), FakeMemory()
+    scheduler = FakeScheduler(monitors.sent)
+    dimmer = IdleDimmer(monitors, memory, lambda: state["idle"], lambda: False, frozenset, FakeGamma(), scheduler=scheduler)
+    dimmer.configure(True, 5, 30)
+    dimmer.check()
+    assert scheduler.held == [True]
+    monitors.sent.clear()
+    state["idle"] = 0
+    dimmer.check()
+    # Restores first, then the schedule may replace them (a point that began while away).
+    assert monitors.sent == [("BOE0812", 60), ("LGE0001", 50), ("schedule held", False)]
+    assert monitors.sources[-2:] == ["restore", "restore"]
+    dimmer.configure(False, 5, 30)
+
+
+def test_turning_it_off_while_dimmed_brings_the_displays_back(dimmer):
+    dimmer, monitors, memory, gamma, state = dimmer
+    state["idle"] = 600
+    dimmer.check()
+    settle()
+    monitors.sent.clear()
+    dimmer.configure(False, 5, 30)
+    settle()
+    assert monitors.sent == [("BOE0812", 60), ("LGE0001", 50)] and gamma.idle[-1] == {} and memory.held[-1] is False

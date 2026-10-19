@@ -1,0 +1,306 @@
+# SPDX-License-Identifier: GPL-3.0-only
+"""Building blocks of the settings window, in the style of Windows 11's
+Settings app: a navigation pane, page titles, cards of setting rows (title
+and description on the left, the control on the right) and On/Off switches.
+
+Everything is painted from the palette, so light and dark mode and the
+system accent colour carry through without a stylesheet.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPalette, QPen
+from PySide6.QtWidgets import QAbstractButton, QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+
+from nightlight.ui.widgets import HEADING_WEIGHT, SecondaryLabel, blend, set_font
+
+RADIUS = 7.0  # corner radius of cards, as Windows 11 draws them
+
+
+def accent(palette: QPalette) -> QColor:
+    """The system accent colour (Qt 6.6+), else the selection colour."""
+    role = getattr(QPalette.ColorRole, "Accent", QPalette.ColorRole.Highlight)
+    return palette.color(role)
+
+
+def is_dark(palette: QPalette) -> bool:
+    return palette.color(QPalette.ColorRole.Window).lightnessF() < 0.5
+
+
+class ToggleSwitch(QAbstractButton):
+    """An On/Off switch, like Windows 11's, with its state written beside it.
+
+    A checkable button underneath, so it keeps the check box interface
+    (setChecked, isChecked, toggled) and works from the keyboard."""
+
+    TRACK_W, TRACK_H = 40, 20
+
+    def __init__(self, accessible_name: str = "") -> None:
+        super().__init__()
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        if accessible_name:
+            self.setAccessibleName(accessible_name)
+        self.toggled.connect(self.update)
+
+    def sizeHint(self) -> QSize:
+        text = max(self.fontMetrics().horizontalAdvance(t) for t in ("On", "Off"))
+        return QSize(text + 12 + self.TRACK_W + 4, max(self.TRACK_H + 6, self.fontMetrics().height() + 6))
+
+    def hitButton(self, pos) -> bool:
+        return self.rect().contains(pos)
+
+    def paintEvent(self, _event) -> None:
+        palette = self.palette()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        enabled = self.isEnabled()
+        text_color = palette.color(QPalette.ColorRole.WindowText)
+        if not enabled:
+            text_color = blend(text_color, palette.color(QPalette.ColorRole.Window), 0.55)
+
+        track = QRectF(self.width() - self.TRACK_W - 2, (self.height() - self.TRACK_H) / 2, self.TRACK_W, self.TRACK_H)
+        text_rect = QRectF(0, 0, track.left() - 12, self.height())
+        painter.setPen(text_color)
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "On" if self.isChecked() else "Off")
+
+        radius = self.TRACK_H / 2
+        knob_r = self.TRACK_H / 2 - (4.5 if not self.isDown() else 3.5)
+        if self.isChecked():
+            fill = accent(palette) if enabled else blend(text_color, palette.color(QPalette.ColorRole.Window), 0.3)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(track, radius, radius)
+            knob_color = QColor("#000000") if is_dark(palette) else QColor("#ffffff")  # as Windows 11 draws it
+            center = QPointF(track.right() - radius, track.center().y())
+        else:
+            painter.setPen(QPen(text_color, 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(track.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+            knob_color = text_color
+            center = QPointF(track.left() + radius, track.center().y())
+        if self.underMouse() and enabled:
+            knob_r += 0.8
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(knob_color)
+        painter.drawEllipse(center, knob_r, knob_r)
+        if self.hasFocus():
+            pen = QPen(text_color, 1.4)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(track.adjusted(-3, -3, 3, 3), radius + 3, radius + 3)
+
+    def enterEvent(self, event) -> None:
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.update()
+        super().leaveEvent(event)
+
+
+class Card(QFrame):
+    """A rounded panel holding setting rows, divided by hairlines."""
+
+    def __init__(self, title: str = "") -> None:
+        super().__init__()
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 2, 0, 2)
+        self._layout.setSpacing(0)
+        self._card_rows: list[QWidget] = []
+        self.title = title
+
+    def add(self, widget: QWidget) -> QWidget:
+        if self._card_rows:
+            divider = _Divider()
+            self._layout.addWidget(divider)
+            widget.setProperty("divider", divider)
+        self._card_rows.append(widget)
+        self._layout.addWidget(widget)
+        return widget
+
+    def set_row_visible(self, row: QWidget, visible: bool) -> None:
+        row.setVisible(visible)
+        self._sync_dividers()
+
+    def _sync_dividers(self) -> None:
+        # A divider shows only between two visible rows.
+        seen_visible = False
+        for row in self._card_rows:
+            divider = row.property("divider")
+            if divider is not None:
+                divider.setVisible(seen_visible and not row.isHidden())
+            seen_visible |= not row.isHidden()
+
+    def paintEvent(self, _event) -> None:
+        palette = self.palette()
+        window = palette.color(QPalette.ColorRole.Window)
+        base = palette.color(QPalette.ColorRole.Base)
+        fill = blend(window, base, 0.75) if not is_dark(palette) else blend(window, QColor("#ffffff"), 0.045)
+        border = blend(window, palette.color(QPalette.ColorRole.WindowText), 0.1 if not is_dark(palette) else 0.06)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(border, 1))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), RADIUS, RADIUS)
+
+
+class _Divider(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFixedHeight(1)
+
+    def paintEvent(self, _event) -> None:
+        palette = self.palette()
+        window = palette.color(QPalette.ColorRole.Window)
+        painter = QPainter(self)
+        painter.fillRect(self.rect().adjusted(16, 0, -16, 0), blend(window, palette.color(QPalette.ColorRole.WindowText), 0.09))
+
+
+class SettingRow(QWidget):
+    """Title (and a quieter description) on the left, the control on the right;
+    or, with `below`, a wide control under the text."""
+
+    def __init__(self, title: str, description: str = "", control: QWidget | None = None, icon: QIcon | None = None,
+                 below: QWidget | None = None) -> None:
+        super().__init__()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 11, 14, 11)
+        outer.setSpacing(8)
+        line = QHBoxLayout()
+        line.setSpacing(12)
+        if icon is not None:
+            glyph = QLabel()
+            glyph.setPixmap(icon.pixmap(20, 20))
+            glyph.setFixedWidth(24)
+            line.addWidget(glyph, 0, Qt.AlignmentFlag.AlignVCenter)
+        text = QVBoxLayout()
+        text.setSpacing(1)
+        self.title = QLabel(title)
+        self.title.setWordWrap(True)
+        text.addWidget(self.title)
+        self.description = SecondaryLabel(description, scale=0.9)
+        self.description.setWordWrap(True)
+        self.description.setVisible(bool(description))
+        text.addWidget(self.description)
+        line.addLayout(text, 1)
+        if control is not None:
+            line.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+        outer.addLayout(line)
+        if below is not None:
+            outer.addWidget(below)
+        self.control = control
+
+    def set_description(self, text: str) -> None:
+        self.description.setText(text)
+        self.description.setVisible(bool(text))
+
+
+class SectionLabel(QLabel):
+    """A small heading above a card."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        set_font(self, 1.0, QFont.Weight.DemiBold)
+        self.setContentsMargins(2, 10, 0, 2)
+
+
+class PageTitle(QWidget):
+    def __init__(self, title: str, subtitle: str = "") -> None:
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 0, 0, 6)
+        layout.setSpacing(2)
+        heading = QLabel(title)
+        set_font(heading, 1.75, HEADING_WEIGHT)
+        layout.addWidget(heading)
+        if subtitle:
+            layout.addWidget(SecondaryLabel(subtitle))
+
+
+class NavButton(QAbstractButton):
+    """An entry of the navigation pane: a glyph and a label; the current
+    page has a soft highlight and an accent bar, as in Windows 11."""
+
+    def __init__(self, text: str, glyph: Callable[[QColor], QIcon]) -> None:
+        super().__init__()
+        self.setText(text)
+        self.setCheckable(True)
+        self.setAutoExclusive(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._glyph = glyph
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self) -> QSize:
+        return QSize(180, max(36, self.fontMetrics().height() + 18))
+
+    def paintEvent(self, _event) -> None:
+        palette = self.palette()
+        window = palette.color(QPalette.ColorRole.Window)
+        text = palette.color(QPalette.ColorRole.WindowText)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(2, 2, -2, -2)
+        hover = self.underMouse()
+        if self.isChecked() or hover:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(blend(window, text, 0.09 if self.isChecked() else 0.05))
+            painter.drawRoundedRect(rect, 5, 5)
+        if self.isChecked():
+            bar = QRectF(rect.left(), rect.center().y() - 8, 3, 16)
+            path = QPainterPath()
+            path.addRoundedRect(bar, 1.5, 1.5)
+            painter.fillPath(path, accent(palette))
+        icon = self._glyph(text)
+        icon.paint(painter, int(rect.left() + 14), int(rect.center().y() - 9), 18, 18)
+        painter.setPen(text)
+        painter.drawText(rect.adjusted(44, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
+        if self.hasFocus():
+            painter.setPen(QPen(text, 1.2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect, 5, 5)
+
+    def event(self, event) -> bool:
+        if event.type() in (QEvent.Type.Enter, QEvent.Type.Leave):
+            self.update()
+        return super().event(event)
+
+
+class StatusBadge(QWidget):
+    """A small rounded label: green for working, quiet grey otherwise."""
+
+    def __init__(self, text: str, good: bool) -> None:
+        super().__init__()
+        self._text = text
+        self._good = good
+        font = QFont(self.font())
+        font.setPointSizeF(font.pointSizeF() * 0.88)
+        self.setFont(font)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self) -> QSize:
+        metrics = self.fontMetrics()
+        return QSize(metrics.horizontalAdvance(self._text) + 20, metrics.height() + 8)
+
+    def paintEvent(self, _event) -> None:
+        palette = self.palette()
+        window = palette.color(QPalette.ColorRole.Window)
+        dark = is_dark(palette)
+        if self._good:
+            tone = QColor("#6ccb5f") if dark else QColor("#0f7b0f")
+        else:
+            tone = blend(palette.color(QPalette.ColorRole.WindowText), window, 0.35)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(blend(window, tone, 0.16 if dark else 0.12))
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+        painter.setPen(tone)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._text)

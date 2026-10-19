@@ -10,15 +10,15 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 
 - **Every display gets a slider.** DDC/CI for external monitors, the laptop's own control for its panel, Windows' SDR brightness for HDR displays, and software dimming for TVs and anything else.
 - **Night light** with a warm color shift, by custom times or sunrise and sunset at your city, with smooth transitions. It **pauses on the display showing a game, a video or an app you choose**, and keeps going on the others.
-- **Brightness that follows your day:** a schedule of levels (fixed times, or sunrise and sunset), dimming while you're away, and each display's level put back after restarting, sleep, or reconnecting a monitor.
-- **Your displays, your names:** rename displays or hide the ones you don't want in the panel.
+- **Brightness that follows your day:** presets (day and night, follow the sun, office hours…) or your own times, dimming while you're away, and each display's level put back after restarting, sleep, or reconnecting a monitor.
+- **Your displays, your names:** rename displays or hide the ones you don't want in the panel, and see how each one is controlled, with a compatibility report to share.
 - **Scriptable:** `winlight-cli --set 40`, `--night-light toggle`, and more, for AutoHotkey, Task Scheduler or a Stream Deck.
 - **Small and native:** a tray icon and a panel, light and dark mode, starts with Windows if you like.
 
 > **Winlight replaces Windows Night Light; it doesn't add to it.** If both are on, the screen is tinted twice and looks far too orange. Winlight shows a notice with a button to Windows' setting when it finds Windows Night Light on: turn that off and let Winlight do it.
 
 <p align="center">
-  <img src="docs/screenshots/settings-light.png" alt="Winlight settings: Night Light schedule and temperatures, startup and brightness options" width="520">
+  <img src="docs/screenshots/settings-light.png" alt="Winlight settings: pages in a navigation pane, with the Night Light schedule, temperatures and pausing for apps" width="520">
 </p>
 
 [⬇️ Download the latest release](https://github.com/Arnie14/Night-Light-Windows/releases/latest) · Windows 10 and 11, 64-bit
@@ -33,27 +33,28 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 
 | Feature | Status | Notes |
 |---|---|---|
-| Tray icon and quick-access panel, settings window | ✅ Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings. Light and dark mode follow Windows. |
-| Night light with an adjustable color temperature | ✅ Ready | Tested on a laptop panel. Keeps a monitor's calibration, works around Windows' limit on very warm colors, and skips HDR displays (Windows ignores gamma there). |
-| Scheduling: custom times, or sunrise and sunset at a city or coordinates | ✅ Ready | Cities from the time zone list (searchable, with Detect), with gradual transitions and temporary Suspend/Activate. |
+| Tray icon and quick-access panel, settings window | ✅ Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings. Light and dark mode follow Windows. A display that can't be changed right now has a disabled slider saying why in a few words. |
+| Night light with an adjustable color temperature | ✅ Ready | Tested on a laptop panel. Keeps a monitor's calibration (even after a crash), works around Windows' limit on very warm colors, and skips HDR displays (Windows ignores gamma there). |
+| Scheduling: custom times, or sunrise and sunset at a city or coordinates | ✅ Ready | Cities from the time zone list (searchable, with Detect), with gradual transitions and temporary Suspend/Activate. Right across daylight saving changes. |
+| Brightness by time of day, with presets | ✅ Ready | Tested on a laptop panel. Presets or your own times (clock, or sunrise/sunset ± minutes), optionally gradual. Applied once per point: a level you pick stands until the next one, and restarts or sleeping through a point don't repeat or miss it. |
 | Laptop panel brightness | ✅ Ready | Through WMI. Never goes fully dark. |
-| External monitor brightness over DDC/CI | 🧪 Needs Windows testing | The Windows APIs are used directly, the way Monitorian and Twinkle Tray do. Sleeping and hung monitors are handled carefully (see [docs/windows-notes.md](docs/windows-notes.md)). |
-| SDR brightness for HDR displays | 🧪 Needs Windows testing | Windows' "SDR content brightness" (80–480 nits), as in Monitorian and Twinkle Tray, for HDR displays without DDC/CI. |
-| Software dimming for TVs and displays without brightness control | 🧪 Needs Windows testing | Dims the colors through the gamma ramp, together with night light, using Twinkle Tray's driver-safe curve. Can be turned off. |
-| Remember brightness, change all displays together | 🧪 Needs Windows testing | Restored after start, sleep and reconnecting, as Twinkle Tray does; linked sliders like Monitorian's "unison". |
-| Brightness schedule | 🧪 Needs Windows testing | Levels at times of day or sunrise/sunset ± minutes, as Twinkle Tray's "time of day adjustments". Moving a slider keeps your level until the next step. |
-| Pause night light for apps and fullscreen | 🧪 Needs Windows testing | As f.lux's "disable for": only on the display showing the app, fading out and back in. |
-| Rename and hide displays | 🧪 Needs Windows testing | Keyed by the display's id, so names follow it between ports. |
-| Command line (`winlight-cli`) | 🧪 Needs Windows testing | List, get and set brightness per display or all, relative changes, night light on/off/toggle, refresh, JSON output. |
-| Night light back at once after unlock and sleep | 🧪 Needs Windows testing | Listens for Windows' unlock, wake and display-on events, and checks the ramps every 1.5 s. |
-| Windows Night Light notice | 🧪 Needs Windows testing | Detects Windows Night Light from its registry state (undocumented) and offers to open its setting. |
-| One-click diagnostics, crash safe mode | 🧪 Needs Windows testing | "Report a Problem…" saves a zip and copies a summary; a display whose DDC/CI crashed or hung the app is skipped until retried. |
-| Private logs and reports | 🧪 Needs Windows testing | User name, computer name, home folder and emails are scrubbed from every log line and report; no location, custom names or listed app names are written. |
-| Never steals focus from fullscreen games | 🧪 Needs Windows testing | Windows' "don't interrupt" state and fullscreen detection keep Winlight from opening windows on its own over a game, video or presentation. |
-| Laptop brightness keys move external displays too | 🧪 Needs Windows testing | Optional. Follows the laptop panel's level rather than intercepting the keys. |
-| Dim when idle | 🧪 Needs Windows testing | Optional: displays dim after a few minutes without input and come back on the first key or mouse move. Not while a video, game or presentation keeps the screen on. External displays dim in software (no DDC/CI writes), the laptop panel through Windows (saving power), HDR displays through their SDR brightness or not at all. |
-| Displays followed after sleep | 🧪 Needs Windows testing | Re-detection at 2 s to 2 min after waking, each pass logged with its timing, stopping once every display is back. |
-| Multi-display detection, hotplug and sleep | 🧪 Needs Windows testing | Re-detection after display changes and waking, several times, as monitors are often slow to answer. |
+| Remember brightness | ✅ Ready | Tested on a laptop panel: restored after start and waking, as Twinkle Tray does. Displays are told apart by their EDID serial number, so identical monitors keep separate levels; levels saved by earlier betas carry over. |
+| Compatible displays list and compatibility report | ✅ Ready | Settings > Displays lists each display, its connection and how its brightness is controlled (DDC/CI, WMI, SDR level, software dimming or none, with why); the report can be copied or saved, or printed with `--report`. Sends nothing to the displays. |
+| Pause night light for apps and fullscreen | ✅ Ready | Tested on a laptop: a listed app and a fullscreen window in front pause it, also when already in front at start. As f.lux's "disable for": only on the display showing the app, fading out and back in. |
+| Command line (`winlight-cli`) | ✅ Ready | Tested against the running app: list, get and set brightness per display or all, relative changes, night light on/off/toggle/auto, refresh, diagnostics, JSON output, exit codes. |
+| Rename and hide displays | ✅ Ready | Keyed by the display's id, so names follow it between ports; names saved by beta 3 and 4 still apply. |
+| One-click diagnostics, crash safe mode | ✅ Ready (safe mode: 🧪) | "Report a Problem…" saves a zip and copies a summary (tested). A display whose DDC/CI crashed or hung the app is skipped until retried: tested with a real crash of a child process, but not yet with a real DDC/CI monitor. |
+| Private logs and reports | ✅ Ready | Tested on real logs, probe and diagnostics: user name, computer name, home folder and emails are scrubbed, display serials shortened, and no location, time zone, custom names or listed app names are written. |
+| Never steals focus from fullscreen games | ✅ Ready | Windows' "don't interrupt" state and fullscreen detection (both tested) keep Winlight from opening windows on its own over a game, video or presentation. |
+| External monitor brightness over DDC/CI | 🧪 Needs Windows testing | The Windows API bindings and their error handling are verified on Windows; a real DDC/CI monitor hasn't been driven yet. Monitors that hang are given up on after a few seconds and left alone, without affecting the others (see [docs/windows-notes.md](docs/windows-notes.md)). |
+| SDR brightness for HDR displays | 🧪 Needs Windows testing | Windows' "SDR content brightness" (80–480 nits), as in Monitorian and Twinkle Tray, for HDR displays without DDC/CI. Reading the level is verified; setting it needs an HDR display. |
+| Software dimming for TVs and displays without brightness control | 🧪 Needs Windows testing | Verified on a laptop's gamma ramp (20–100%, with night light on top); a TV hasn't been tried. Uses Twinkle Tray's driver-safe curve. Can be turned off. |
+| Change all displays together | 🧪 Needs Windows testing | Linked sliders like Monitorian's "unison"; needs two displays to try. |
+| Night light back at once after unlock and sleep | 🧪 Needs Windows testing | Windows' unlock, wake and display-on messages reach the app (tested with messages sent to its window), and a ramp Windows resets is put back within 1.5 s (tested). A real lock and sleep cycle hasn't been timed yet. |
+| Windows Night Light notice | 🧪 Needs Windows testing | Detects Windows Night Light from its registry state (undocumented; reading "off" is verified) and offers to open its setting. |
+| Laptop brightness keys move external displays too | 🧪 Needs Windows testing | Optional. Follows the laptop panel's level rather than intercepting the keys; needs an external display to try. |
+| Dim when idle | 🧪 Needs Windows testing | Optional: displays dim after a few minutes without input and come back on the first key or mouse move. Not while a video, game or presentation keeps the screen on. External displays dim in software (no DDC/CI writes), the laptop panel through Windows (saving power), HDR displays through their SDR brightness or not at all. Its parts are verified on a laptop; a real idle cycle hasn't been run. |
+| Multi-display detection, hotplug and sleep | 🧪 Needs Windows testing | Sleep, waking and displays turning off are handled from Windows' own notifications, with re-detection over two minutes after waking, each pass logged with its timing. Plugging monitors in and out, and a real sleep cycle, need testing with external monitors. |
 | Start at sign-in, start minimized | ✅ Ready | The current user's Run registry key; no administrator rights. |
 | Installer, portable zip, uninstaller | ✅ Ready | Per-user, built by GitHub Actions. |
 
@@ -94,7 +95,8 @@ On a KDE Plasma desktop the app drives Plasma's own brightness and Night Light s
 Most of these were learned from [Monitorian](https://github.com/emoacht/Monitorian) and [Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray); [docs/windows-notes.md](docs/windows-notes.md) has the details and what this app does about each.
 
 - DDC/CI support varies by monitor, cable, and dock. Some monitors have it disabled in their on-screen menu, and DisplayLink-based USB docks can't pass it at all.
-- DDC/CI calls are slow and sometimes fail for a moment, so they run off the UI thread, are retried on transient errors, and only the latest slider value is sent.
+- DDC/CI calls are slow and sometimes fail for a moment, so they run off the UI thread in one queue, are retried on transient errors, and only the latest slider value is sent. Every call has a time limit: a monitor that hangs is left alone until its call returns, and the others carry on.
+- Sleep and hibernation cause most trouble: monitors vanish, handles go stale, and DDC/CI to a sleeping monitor can wake it or hang it. Nothing is sent while the PC sleeps or the screens are off, and after waking, changes wait until the displays have been detected again.
 - Monitors often don't answer DDC/CI for several seconds after being plugged in or waking from sleep, so detection runs again a few times.
 - Requesting a monitor's DDC/CI capabilities string is slow and can hang on some monitors, so the Windows backend never asks for it; names come from the EDID.
 - Windows refuses gamma ramps that are too far from neutral, which limits how warm night light can go unless the `GdiIcmGammaRange` registry value is raised.
@@ -113,7 +115,8 @@ Most of these were learned from [Monitorian](https://github.com/emoacht/Monitori
 2. ✅ Laptop panel brightness, installer, first beta
 3. 🧪 External monitors, TVs and HDR displays, and this round's features: testing now ([installer test plan](docs/testing-installer.md), [full test plan](docs/windows-testing.md))
 4. 📋 Code signing, then a 1.0 release
-5. 📋 Hotkeys with an on-screen indicator, per-display brightness schedules
+5. ✅ Brightness by time of day, compatible displays list and report, sleep-safe monitor handling, renaming and hiding displays
+6. 📋 Hotkeys with an on-screen indicator, per-display brightness schedules
 
 ## 🔗 Related Projects
 
@@ -200,6 +203,7 @@ pytest
 Other options:
 
 - `python main.py --probe` prints what each Windows API reports about every display, and saves it as `probe.txt` in the log folder. Use it when a monitor misbehaves.
+- `python main.py --report` prints the hardware compatibility report (also in Settings > Displays) and saves it as `compatibility.txt` in the log folder. Unlike `--probe`, it sends nothing to the displays.
 - `--allow-multiple` lets a second copy start. Normally a second launch just opens the running copy's flyout.
 - `--quit` asks the running copy to quit cleanly (restoring normal colors). The installer uses it before upgrading or uninstalling.
 - `--diagnostics` saves the same zip as "Report a Problem…" and prints its path.
@@ -231,19 +235,25 @@ main.py                  entry point, command line and logging
 nightlight/
   app.py                 wires services to the UI
   config.py              settings and JSON storage
-  controller.py          applies the schedule to the displays (animation, overrides)
-  monitors.py            runs slow monitor calls on a background thread
-  watcher.py             notices display changes, hotplug and waking from sleep
+  controller.py          applies the night light schedule to the displays (animation, overrides)
+  monitors.py            the one queue of monitor calls, on a background thread, with each
+                         display's desired, commanded and observed brightness
+  brightness_scheduler.py  applies the brightness schedule, idempotently
+  watcher.py             notices display changes, hotplug, sleep and waking
   single_instance.py     keeps one copy running
   probe.py               the --probe diagnostic report
+  compat.py              the list of compatible displays and the compatibility report
   core/                  pure logic, no Qt or hardware: colortemp.py, schedule.py,
-                         brightness_schedule.py, locations.py
+                         brightness_schedule.py (and presets), clock.py (daylight saving),
+                         edid.py, locations.py
   hardware/              backend interfaces (brightness.py, gamma.py), windows.py + win32.py
-                         (Windows display APIs), winsystem.py (foreground app, unlock and
-                         power events, Windows Night Light), kde.py (Linux dev backend)
-  ui/                    tray, flyout, placement, settings_window, widgets, night_light_text, icons
+                         (Windows display APIs), winsystem.py (foreground app, sleep, display
+                         and session notifications, Windows Night Light), calls.py (time
+                         limits), kde.py (Linux dev backend)
+  ui/                    tray, flyout, placement, settings_window (+ settings_parts,
+                         settings_widgets), schedule_editor, widgets, night_light_text, icons
   autostart.py           starting at sign-in (Run key)
-  brightness_memory.py   which level each display should have: remembered, or the brightness schedule
+  brightness_memory.py   each display's remembered level, put back after start, sleep and reconnecting
   exemptions.py          pausing night light for apps and fullscreen
   commands.py, cli.py    the command line (winlight-cli) and what the app does for it
   diagnostics.py         "Report a Problem…"

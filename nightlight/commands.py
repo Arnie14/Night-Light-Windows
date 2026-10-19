@@ -77,12 +77,18 @@ class CommandHandler:
                 if selector != ALL:
                     raise _Error(f"{self._name(monitor)} has no brightness control.")
                 continue
-            current = self._monitors.brightness.get(monitor.index)
+            if (why := self._why_not_now(monitor)) is not None:
+                # Not responding, in standby, still being checked: a write now
+                # would be dropped, so say so rather than pretend.
+                if selector != ALL:
+                    raise _Error(f"{self._name(monitor)} can't be changed right now: {why}.")
+                continue
+            current = self._monitors.value(monitor.key)
             if relative and current is None:
                 raise _Error(f"The brightness of {self._name(monitor)} isn't known yet; try again in a moment.")
             target = (current + amount) if relative else amount
             target = max(monitor.minimum, min(100, target))
-            self._monitors.fade_brightness(monitor.index, target)
+            self._monitors.fade_brightness(monitor.key, target)
             changed.append(self._describe(number, monitor) | {"brightness": target})
         if not changed:
             raise _Error("No display with brightness control matched.")
@@ -125,6 +131,17 @@ class CommandHandler:
             raise _Error(f"{selector!r} matches several displays ({names}); use its number or id.")
         return matches
 
+    def _status(self, monitor: MonitorInfo) -> str:
+        """"ok", or why its brightness can't be changed now ("not responding", "unsupported", ...)."""
+        state = self._monitors.state(monitor.key)
+        return state.status.value if state is not None else ("ok" if monitor.supported else "unsupported")
+
+    def _why_not_now(self, monitor: MonitorInfo) -> str | None:
+        state = self._monitors.state(monitor.key)
+        if state is None or state.controllable:
+            return None
+        return (state.message or state.status.value).rstrip(".…").lower()
+
     def _name(self, monitor: MonitorInfo) -> str:
         return self._config().display(monitor.key).name or monitor.name
 
@@ -136,8 +153,9 @@ class CommandHandler:
             "number": number,
             "name": self._name(monitor),
             "id": monitor.key,
-            "brightness": self._monitors.brightness.get(monitor.index) if monitor.supported else None,
+            "brightness": self._monitors.value(monitor.key) if monitor.supported else None,
             "control": monitor.control if monitor.supported else None,
+            "status": self._status(monitor),
             "hidden": self._hidden(monitor),
         }
 

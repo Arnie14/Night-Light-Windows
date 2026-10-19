@@ -6,9 +6,18 @@
 - dxva2 (Monitor Configuration API): DDC/CI brightness of external monitors.
 - GDI: gamma ramps, used for night light.
 
+- The registry: each monitor's EDID, for a stable identity (core/edid.py).
+
 The approach follows Monitorian and Twinkle Tray (both MIT), which drive these
 same APIs; see docs/windows-notes.md. Structures are defined on every platform
 so their layout can be unit-tested; the functions need Windows.
+
+This module is the adapter between the app and Windows: the backends in
+windows.py only call the functions here (see DisplayApi there), so tests can
+replace it with a fake. ctypes is unforgiving, so the module also checks
+itself at run time: structure sizes against the SDK's (layout_problems),
+which optional APIs this Windows has (capabilities), and it turns error
+codes into explanations for the log (describe_error).
 """
 
 from __future__ import annotations
@@ -16,9 +25,13 @@ from __future__ import annotations
 import ctypes
 import logging
 import sys
+import threading
 import time
 from ctypes import wintypes
 from dataclasses import dataclass
+from functools import lru_cache
+
+from nightlight.core import edid as edid_parser
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +39,10 @@ log = logging.getLogger(__name__)
 
 QDC_ONLY_ACTIVE_PATHS = 0x2
 ERROR_SUCCESS = 0
+ERROR_ACCESS_DENIED = 5
+ERROR_GEN_FAILURE = 31
+ERROR_NOT_SUPPORTED = 50
+ERROR_INVALID_PARAMETER = 87
 ERROR_INSUFFICIENT_BUFFER = 122
 
 DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME = 1
@@ -188,6 +205,19 @@ class DisplayTarget:
     hdr: bool
     adapter: tuple[int, int] = (0, 0)  # the adapter's LUID (low, high), for per-target queries
     target_id: int = 0
+    edid: edid_parser.Edid | None = None  # from the registry; None if unreadable
+
+    @property
+    def key(self) -> str:
+        """A stable identity: the EDID's manufacturer and product code, plus its
+        serial number when it has one, so it survives a change of port and
+        tells identical monitors apart ("DEL41A2:7XKJ9F3")."""
+        return stable_key(self.hardware_id, self.edid.serial if self.edid else "")
+
+    @property
+    def model(self) -> str:
+        """The best model name known: Windows' friendly name, else the EDID's."""
+        return self.friendly_name or (self.edid.name if self.edid else "")
 
     @property
     def internal(self) -> bool:
@@ -207,6 +237,13 @@ class DisplayTarget:
         instance id it stays the same when the monitor moves to another port."""
         parts = self.instance_id.split("\\")
         return parts[1] if len(parts) >= 2 else ""
+
+
+def stable_key(hardware_id: str, serial: str) -> str:
+    """See DisplayTarget.key. Without a serial it is just the hardware id,
+    which is what older versions remembered settings under."""
+    serial = "".join(c for c in serial if c.isalnum() or c in "-_.")
+    return f"{hardware_id}:{serial}" if hardware_id and serial else hardware_id
 
 
 def instance_id_from_device_path(path: str) -> str:
@@ -254,18 +291,62 @@ _TRANSIENT_ERRORS = {
 }
 _GONE_ERRORS = {ERROR_GRAPHICS_INVALID_PHYSICAL_MONITOR_HANDLE, ERROR_GRAPHICS_MONITOR_NO_LONGER_EXISTS}
 _DDC_ATTEMPTS = 3
-_DDC_RETRY_DELAY = 0.05  # DDC/CI asks for at least 50 ms between messages
+_DDC_RETRY_DELAY = 0.05
+# DDC/CI asks hosts to leave at least 50 ms between messages to a monitor;
+# some monitors misbehave when written to faster.
+DDC_MIN_INTERVAL = 0.05
+
+# What a DDC/CI error means, in Monitorian's terms (its AccessStatus), and
+# what to tell the user. Codes are from winerror.h.
+DDC_STATUS = {
+    ERROR_GRAPHICS_I2C_ERROR_TRANSMITTING_DATA: ("transmission failed", "the signal didn't get through; a cable, adapter or dock may not pass DDC/CI"),
+    ERROR_GRAPHICS_I2C_ERROR_RECEIVING_DATA: ("transmission failed", "no answer came back; DDC/CI may be off in the display's menu"),
+    ERROR_GRAPHICS_DDCCI_VCP_NOT_SUPPORTED: ("not supported", "the display doesn't offer this setting over DDC/CI"),
+    ERROR_GRAPHICS_DDCCI_INVALID_DATA: ("invalid data", "the display's answer made no sense"),
+    ERROR_GRAPHICS_DDCCI_MONITOR_RETURNED_INVALID_TIMING_STATUS_BYTE: ("invalid message", "the display's answer was garbled"),
+    ERROR_GRAPHICS_DDCCI_INVALID_MESSAGE_COMMAND: ("invalid message", "the answer was garbled or missing; DDC/CI may be off, or this display has no DDC/CI"),
+    ERROR_GRAPHICS_DDCCI_INVALID_MESSAGE_LENGTH: ("invalid message", "the display's answer was cut short"),
+    ERROR_GRAPHICS_DDCCI_INVALID_MESSAGE_CHECKSUM: ("invalid message", "the display's answer was corrupted on the way"),
+    ERROR_GRAPHICS_INVALID_PHYSICAL_MONITOR_HANDLE: ("gone", "the display was disconnected or the display layout changed"),
+    ERROR_GRAPHICS_MONITOR_NO_LONGER_EXISTS: ("gone", "the display was disconnected"),
+    ERROR_SUCCESS: ("failed", "Windows reported a failure without an error code"),
+}
+# Errors from QueryDisplayConfig and friends, and what they usually mean here.
+_WIN32_HINTS = {
+    ERROR_ACCESS_DENIED: "this session isn't on the console (locked, or Remote Desktop)",
+    ERROR_GEN_FAILURE: "the graphics driver failed the request",
+    ERROR_NOT_SUPPORTED: "this version of Windows or the driver doesn't support it",
+    ERROR_INVALID_PARAMETER: "Windows rejected the request's layout or values",
+}
+
+
+def describe_error(code: int) -> str:
+    """A code as hex, Windows' own text, and what it usually means for a display."""
+    code &= 0xFFFFFFFF
+    hint = DDC_STATUS[code][1] if code in DDC_STATUS else _WIN32_HINTS.get(code, "")
+    system = _format_error(code) if code else ""
+    return " — ".join(part for part in (f"0x{code:08X} {system}".rstrip(), hint) if part)
 
 
 class DdcError(OSError):
     def __init__(self, what: str, code: int) -> None:
         self.code = code & 0xFFFFFFFF
-        super().__init__(f"{what} failed: 0x{self.code:08X} {_format_error(self.code)}".rstrip())
+        self.what = what
+        super().__init__(f"{what} failed: {describe_error(self.code)}")
 
     @property
     def monitor_gone(self) -> bool:
         """The handle no longer works: the monitor was unplugged or the displays were reconfigured."""
         return self.code in _GONE_ERRORS
+
+    @property
+    def transient(self) -> bool:
+        return self.code in _TRANSIENT_ERRORS
+
+    @property
+    def status(self) -> str:
+        """Monitorian's classification: "not supported", "invalid message", "gone", ..."""
+        return DDC_STATUS.get(self.code, ("failed", ""))[0]
 
 
 class PHYSICAL_MONITOR(ctypes.Structure):
@@ -411,10 +492,12 @@ def _format_error(code: int) -> str:
 def display_targets() -> list[DisplayTarget]:
     """All active displays, in Windows' path order. Empty if the query fails,
     so callers fall back to less detailed APIs instead of failing."""
+    if "display configuration" in _disabled_features:
+        return []
     try:
         paths = _query_active_paths()
-    except OSError:
-        log.warning("QueryDisplayConfig failed", exc_info=True)
+    except OSError as exc:
+        _warn_once("qdc", "QueryDisplayConfig failed (%s); using less detailed display information", describe_error(exc.winerror or 0))
         return []
     targets = []
     for path in paths:
@@ -422,23 +505,45 @@ def display_targets() -> list[DisplayTarget]:
         _fill_header(source.header, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, source, path.sourceInfo.adapterId, path.sourceInfo.id)
         target = DISPLAYCONFIG_TARGET_DEVICE_NAME()
         _fill_header(target.header, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME, target, path.targetInfo.adapterId, path.targetInfo.id)
-        if _device_info(source.header) or _device_info(target.header):
+        if (result := _device_info(source.header) or _device_info(target.header)) != ERROR_SUCCESS:
             # Twinkle Tray: a partial list could pair handles with the wrong
             # monitors, so give up and let callers use the fallback.
-            log.warning("DisplayConfigGetDeviceInfo failed; display names unavailable")
+            _warn_once("names", "DisplayConfigGetDeviceInfo failed (%s); display names unavailable", describe_error(result))
             return []
+        device_path = target.monitorDevicePath
         targets.append(
             DisplayTarget(
                 gdi_name=source.viewGdiDeviceName,
                 friendly_name=target.monitorFriendlyDeviceName.strip(),
-                device_path=target.monitorDevicePath,
+                device_path=device_path,
                 output_technology=path.targetInfo.outputTechnology,
                 hdr=_hdr_enabled(path.targetInfo.adapterId, path.targetInfo.id),
                 adapter=(path.targetInfo.adapterId.LowPart, path.targetInfo.adapterId.HighPart),
                 target_id=path.targetInfo.id,
+                edid=read_edid(instance_id_from_device_path(device_path)),
             )
         )
     return targets
+
+
+@lru_cache(maxsize=64)
+def read_edid(instance_id: str) -> edid_parser.Edid | None:
+    """The monitor's EDID as Windows stored it in the registry, parsed; None
+    if it isn't there or is invalid. Talks to the registry, not the monitor."""
+    if not instance_id or sys.platform != "win32":
+        return None
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"SYSTEM\CurrentControlSet\Enum\{instance_id}\Device Parameters") as key:
+            data, _kind = winreg.QueryValueEx(key, "EDID")
+    except OSError:
+        log.debug("No EDID in the registry for %s", instance_id)
+        return None
+    parsed = edid_parser.parse(data)
+    if parsed is None:
+        log.info("The EDID stored for %s is invalid; identifying it by its hardware id only", instance_id)
+    return parsed
 
 
 def _query_active_paths() -> list[DISPLAYCONFIG_PATH_INFO]:
@@ -469,13 +574,24 @@ def _device_info(header: DISPLAYCONFIG_DEVICE_INFO_HEADER) -> int:
     return _user32.DisplayConfigGetDeviceInfo(ctypes.byref(header))
 
 
+_advanced_color_2: bool | None = None  # whether this Windows has the 24H2 query; None until tried
+
+
 def _hdr_enabled(adapter: LUID, target_id: int) -> bool:
     # Windows 11 24H2 can report "advanced color" for SDR displays (auto color
     # management), so prefer the newer query, which states HDR explicitly.
-    info2 = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2()
-    _fill_header(info2.header, DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2, info2, adapter, target_id)
-    if _device_info(info2.header) == ERROR_SUCCESS:
-        return info2.activeColorMode == DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR
+    # Older Windows rejects it; remember that rather than asking every time.
+    global _advanced_color_2
+    if _advanced_color_2 is not False:
+        info2 = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2()
+        _fill_header(info2.header, DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2, info2, adapter, target_id)
+        result = _device_info(info2.header)
+        if result == ERROR_SUCCESS:
+            _advanced_color_2 = True
+            return info2.activeColorMode == DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR
+        if result in (ERROR_NOT_SUPPORTED, ERROR_INVALID_PARAMETER) and _advanced_color_2 is None:
+            _advanced_color_2 = False
+            log.info("This Windows has no ADVANCED_COLOR_INFO_2 query (it arrived in 24H2); using the older HDR query")
     info = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO()
     _fill_header(info.header, DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO, info, adapter, target_id)
     if _device_info(info.header) == ERROR_SUCCESS:
@@ -519,7 +635,7 @@ def attached_display_names() -> list[str]:
 
 
 def ddc_available() -> bool:
-    return sys.platform == "win32" and _dxva2 is not None
+    return sys.platform == "win32" and _dxva2 is not None and "ddc" not in _disabled_features
 
 
 def physical_monitors() -> list[PhysicalMonitor]:
@@ -527,38 +643,77 @@ def physical_monitors() -> list[PhysicalMonitor]:
     and must pass each to destroy_physical_monitor()."""
     if not ddc_available():
         return []
-    monitors: list[PhysicalMonitor] = []
+    hmonitors: list[int] = []
 
     def collect(hmonitor, _hdc, _rect, _data):
-        info = MONITORINFOEXW()
-        info.cbSize = ctypes.sizeof(info)
-        name = info.szDevice if _user32.GetMonitorInfoW(hmonitor, ctypes.byref(info)) else ""
-        count = wintypes.DWORD()
-        # Virtual, remote and some USB displays have no physical monitors to
-        # give; skip them rather than failing every other display.
-        if not _dxva2.GetNumberOfPhysicalMonitorsFromHMONITOR(hmonitor, ctypes.byref(count)) or count.value == 0:
-            log.debug("No physical monitors for %s", name or hmonitor)
-            return True
-        array = (PHYSICAL_MONITOR * count.value)()
-        if not _dxva2.GetPhysicalMonitorsFromHMONITOR(hmonitor, count.value, array):
-            log.debug("GetPhysicalMonitorsFromHMONITOR failed for %s", name)
-            return True
-        for entry in array:
-            monitors.append(PhysicalMonitor(name, entry.hPhysicalMonitor or 0, entry.szPhysicalMonitorDescription))
+        # An exception must never escape a ctypes callback (ctypes would print
+        # it and return 0, ending the enumeration), so only collect here.
+        try:
+            hmonitors.append(hmonitor)
+        except Exception:
+            log.exception("EnumDisplayMonitors callback failed")
         return True
 
     callback = _MONITORENUMPROC(collect)  # kept referenced until the call returns
-    _user32.EnumDisplayMonitors(None, None, callback, 0)
+    if not _user32.EnumDisplayMonitors(None, None, callback, 0):
+        log.warning("EnumDisplayMonitors failed: %s", describe_error(ctypes.get_last_error()))
+    monitors: list[PhysicalMonitor] = []
+    for hmonitor in hmonitors:
+        monitors += _physical_monitors_of(hmonitor)
     return monitors
 
 
+def _physical_monitors_of(hmonitor: int) -> list[PhysicalMonitor]:
+    info = MONITORINFOEXW()
+    info.cbSize = ctypes.sizeof(info)
+    name = info.szDevice if _user32.GetMonitorInfoW(hmonitor, ctypes.byref(info)) else ""
+    count = wintypes.DWORD()
+    # Virtual, remote and some USB displays have no physical monitors to
+    # give; skip them rather than failing every other display.
+    if not _dxva2.GetNumberOfPhysicalMonitorsFromHMONITOR(hmonitor, ctypes.byref(count)) or count.value == 0:
+        log.debug("No physical monitors for %s", name or hmonitor)
+        return []
+    array = (PHYSICAL_MONITOR * count.value)()
+    # Twinkle Tray: this sometimes fails just after a display change and
+    # works a moment later, so try once more.
+    for attempt in range(2):
+        if _dxva2.GetPhysicalMonitorsFromHMONITOR(hmonitor, count.value, array):
+            return [PhysicalMonitor(name, entry.hPhysicalMonitor or 0, entry.szPhysicalMonitorDescription) for entry in array]
+        if attempt == 0:
+            time.sleep(0.2)
+    log.info("GetPhysicalMonitorsFromHMONITOR failed for %s: %s", name, describe_error(ctypes.get_last_error()))
+    return []
+
+
 def destroy_physical_monitor(handle: int) -> None:
+    forget_handle(handle)
     if ddc_available():
         _dxva2.DestroyPhysicalMonitor(handle)
 
 
-def _ddc_call(what: str, call) -> None:
+_last_message: dict[int, float] = {}  # handle -> when its last DDC/CI message was sent
+_spacing_lock = threading.Lock()
+
+
+def _space_messages(handle: int) -> None:
+    """Wait until DDC_MIN_INTERVAL has passed since the last message to this monitor."""
+    with _spacing_lock:
+        wait = _last_message.get(handle, 0.0) + DDC_MIN_INTERVAL - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    with _spacing_lock:
+        _last_message[handle] = time.monotonic()
+
+
+def forget_handle(handle: int) -> None:
+    with _spacing_lock:
+        _last_message.pop(handle, None)
+
+
+def _ddc_call(what: str, call, handle: int | None = None) -> None:
     for attempt in range(_DDC_ATTEMPTS):
+        if handle is not None:
+            _space_messages(handle)
         if call():
             return
         code = ctypes.get_last_error() & 0xFFFFFFFF
@@ -570,16 +725,21 @@ def _ddc_call(what: str, call) -> None:
 
 def get_vcp(handle: int, code: int) -> tuple[int, int]:
     """(current, maximum) of a VCP feature, e.g. VCP_LUMINANCE."""
+    if not 0 <= code <= 0xFF:
+        raise ValueError(f"VCP code out of range: {code}")
     current, maximum = wintypes.DWORD(), wintypes.DWORD()
     _ddc_call(
         f"Reading VCP 0x{code:02X}",
         lambda: _dxva2.GetVCPFeatureAndVCPFeatureReply(handle, code, None, ctypes.byref(current), ctypes.byref(maximum)),
+        handle,
     )
     return current.value, maximum.value
 
 
 def set_vcp(handle: int, code: int, value: int) -> None:
-    _ddc_call(f"Setting VCP 0x{code:02X}", lambda: _dxva2.SetVCPFeature(handle, code, value))
+    if not 0 <= code <= 0xFF or not 0 <= value <= 0xFFFF:
+        raise ValueError(f"VCP 0x{code:02X} value out of range: {value}")
+    _ddc_call(f"Setting VCP 0x{code:02X}", lambda: _dxva2.SetVCPFeature(handle, code, value), handle)
 
 
 def get_monitor_brightness(handle: int) -> tuple[int, int, int]:
@@ -591,13 +751,14 @@ def get_monitor_brightness(handle: int) -> tuple[int, int, int]:
     _ddc_call(
         "GetMonitorBrightness",
         lambda: _dxva2.GetMonitorBrightness(handle, ctypes.byref(minimum), ctypes.byref(current), ctypes.byref(maximum)),
+        handle,
     )
     return minimum.value, current.value, maximum.value
 
 
 def set_monitor_brightness(handle: int, value: int) -> None:
     # Monitorian: this can report success even when the monitor ignored it.
-    _ddc_call("SetMonitorBrightness", lambda: _dxva2.SetMonitorBrightness(handle, value))
+    _ddc_call("SetMonitorBrightness", lambda: _dxva2.SetMonitorBrightness(handle, value), handle)
 
 
 # --- Gamma ramps ------------------------------------------------------------
@@ -617,13 +778,15 @@ class _DisplayDC:
         return self._hdc
 
     def __exit__(self, *_exc) -> None:
-        _gdi32.DeleteDC(self._hdc)
+        if self._hdc:
+            _gdi32.DeleteDC(self._hdc)
 
 
 def get_gamma_ramp(gdi_name: str) -> GammaRamp | None:
     array = _GammaRampArray()
     with _DisplayDC(gdi_name) as hdc:
         if not _gdi32.GetDeviceGammaRamp(hdc, ctypes.byref(array)):
+            log.debug("GetDeviceGammaRamp failed for %s: %s", gdi_name, describe_error(ctypes.get_last_error()))
             return None
     return [list(channel) for channel in array]
 
@@ -632,9 +795,87 @@ def set_gamma_ramp(gdi_name: str, ramp: GammaRamp) -> bool:
     """False when Windows rejects the ramp. Its GDI refuses ramps too far
     from identity (very warm temperatures) unless the GdiIcmGammaRange
     registry value is raised; see docs/windows-notes.md."""
+    if len(ramp) != 3 or any(len(channel) != RAMP_SIZE for channel in ramp):
+        raise ValueError(f"a gamma ramp is 3 channels of {RAMP_SIZE} values")
     array = _GammaRampArray()
     for c, channel in enumerate(ramp):
         for i, value in enumerate(channel):
-            array[c][i] = value
+            array[c][i] = max(0, min(0xFFFF, int(value)))  # WORD: out-of-range values would wrap around
     with _DisplayDC(gdi_name) as hdc:
         return bool(_gdi32.SetDeviceGammaRamp(hdc, ctypes.byref(array)))
+
+
+# --- Run-time checks ----------------------------------------------------------
+
+# Sizes from the Windows SDK headers. A wrong size makes Windows reject the
+# call, or worse, read or write past the structure.
+_POINTER = ctypes.sizeof(ctypes.c_void_p)
+EXPECTED_SIZES = {
+    "DISPLAYCONFIG_PATH_INFO": (DISPLAYCONFIG_PATH_INFO, 72),
+    "DISPLAYCONFIG_MODE_INFO": (DISPLAYCONFIG_MODE_INFO, 64),
+    "DISPLAYCONFIG_DEVICE_INFO_HEADER": (DISPLAYCONFIG_DEVICE_INFO_HEADER, 20),
+    "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO": (DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO, 32),
+    "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2": (DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2, 36),
+    "DISPLAYCONFIG_SDR_WHITE_LEVEL": (DISPLAYCONFIG_SDR_WHITE_LEVEL, 24),
+    "DISPLAYCONFIG_SET_SDR_WHITE_LEVEL": (DISPLAYCONFIG_SET_SDR_WHITE_LEVEL, 28),
+}
+# These use wintypes (8-byte DWORD/LONG on 64-bit Linux), so they only match on Windows.
+WINDOWS_ONLY_SIZES = {
+    "DISPLAYCONFIG_SOURCE_DEVICE_NAME": (DISPLAYCONFIG_SOURCE_DEVICE_NAME, 84),
+    "DISPLAYCONFIG_TARGET_DEVICE_NAME": (DISPLAYCONFIG_TARGET_DEVICE_NAME, 420),
+    "MONITORINFOEXW": (MONITORINFOEXW, 104),
+    "PHYSICAL_MONITOR": (PHYSICAL_MONITOR, _POINTER + 256),
+    "DISPLAY_DEVICEW": (DISPLAY_DEVICEW, 840),
+}
+# Which feature each structure is needed for, to turn off only that feature.
+_STRUCT_FEATURE = {"PHYSICAL_MONITOR": "ddc", "MONITORINFOEXW": "ddc"}
+
+
+def layout_problems() -> list[str]:
+    """Structures whose size doesn't match the SDK's; empty when all is well."""
+    checks = dict(EXPECTED_SIZES)
+    if sys.platform == "win32":
+        checks.update(WINDOWS_ONLY_SIZES)
+    return [f"{name} is {ctypes.sizeof(cls)} bytes, expected {size}" for name, (cls, size) in checks.items() if ctypes.sizeof(cls) != size]
+
+
+_disabled_features: set[str] = set()
+
+
+def self_check() -> list[str]:
+    """Check the structure layouts once at startup; log and turn off what is broken."""
+    problems = layout_problems()
+    for problem in problems:
+        name = problem.split(" ", 1)[0]
+        feature = _STRUCT_FEATURE.get(name, "display configuration")
+        _disabled_features.add(feature)
+        log.error("ctypes layout problem: %s; turning off %s to stay safe", problem, feature)
+    return problems
+
+
+def capabilities() -> dict[str, object]:
+    """What this Windows offers, for the log, --probe and the compatibility report."""
+    if sys.platform != "win32":
+        return {"windows": False}
+    version = sys.getwindowsversion()
+    return {
+        "windows": True,
+        "build": version.build,
+        "dxva2 (DDC/CI)": ddc_available(),
+        "QueryDisplayConfig": hasattr(_user32, "QueryDisplayConfig") and "display configuration" not in _disabled_features,
+        "ADVANCED_COLOR_INFO_2 (24H2 HDR query)": {True: "yes", False: "no", None: "not tried yet"}[_advanced_color_2],
+        "SDR white level": hasattr(_user32, "DisplayConfigSetDeviceInfo"),
+        "gamma ramps": hasattr(_gdi32, "SetDeviceGammaRamp"),
+        "layout problems": layout_problems() or "none",
+    }
+
+
+_warned: set[str] = set()
+
+
+def _warn_once(kind: str, message: str, *args) -> None:
+    if kind not in _warned:
+        _warned.add(kind)
+        log.warning(message, *args)
+    else:
+        log.debug(message, *args)

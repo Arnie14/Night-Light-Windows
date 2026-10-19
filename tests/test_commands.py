@@ -33,15 +33,24 @@ class FakeGamma:
 
 
 class FakeMonitors:
+    """MonitorManager as the commands use it (by display key)."""
+
     def __init__(self):
         self.monitors = MONITORS
-        self.brightness = {0: 70, 1: 50, 2: 100}
+        self.brightness = {"DEL41A2": 70, "BOE0812": 50, "SAM7136": 100}
+        self.states = {}  # key -> DisplayState, where a test sets one; else controllable
         self.faded = []
         self.retried = 0
 
-    def fade_brightness(self, index, value):
-        self.faded.append((index, value))
-        self.brightness[index] = value
+    def value(self, key):
+        return self.brightness.get(key)
+
+    def state(self, key):
+        return self.states.get(key)
+
+    def fade_brightness(self, key, value):
+        self.faded.append((key, value))
+        self.brightness[key] = value
 
     def retry(self):
         self.retried += 1
@@ -71,17 +80,18 @@ def test_list_numbers_displays_as_the_panel_does(handler):
     assert "Night light:" in reply["output"]
 
 
-@pytest.mark.parametrize(("display", "index"), [("1", 0), ("dell", 0), ("DEL41A2", 0), ("laptop", 1), ("2", 1)])
-def test_set_one_display_by_number_name_or_id(handler, display, index):
+@pytest.mark.parametrize(("display", "key"), [("1", "DEL41A2"), ("dell", "DEL41A2"), ("DEL41A2", "DEL41A2"), ("laptop", "BOE0812"),
+                                            ("2", "BOE0812")])
+def test_set_one_display_by_number_name_or_id(handler, display, key):
     commands, monitors, _ = handler
     assert commands.handle({"command": "set", "value": "40", "display": display})["ok"]
-    assert monitors.faded == [(index, 40)]
+    assert monitors.faded == [(key, 40)]
 
 
 def test_set_all_skips_hidden_and_unsupported_displays(handler):
     commands, monitors, _ = handler
     assert commands.handle({"command": "set", "value": "40"})["ok"]
-    assert monitors.faded == [(0, 40), (1, 40)]
+    assert monitors.faded == [("DEL41A2", 40), ("BOE0812", 40)]
 
 
 def test_relative_changes_and_limits(handler):
@@ -89,7 +99,7 @@ def test_relative_changes_and_limits(handler):
     commands.handle({"command": "set", "value": "+50", "display": "1"})
     commands.handle({"command": "set", "value": "-80", "display": "laptop"})
     commands.handle({"command": "set", "value": "-90", "display": "tv"})  # hidden, but asked for by name
-    assert monitors.faded == [(0, 100), (1, 1), (2, 20)]  # each display's own floor
+    assert monitors.faded == [("DEL41A2", 100), ("BOE0812", 1), ("SAM7136", 20)]  # each display's own floor
 
 
 @pytest.mark.parametrize(
@@ -106,6 +116,28 @@ def test_errors_say_what_is_wrong(handler, request_, message):
     commands, _, _ = handler
     reply = commands.handle(request_)
     assert not reply["ok"] and message in reply["output"]
+
+
+def test_a_display_that_cannot_be_changed_now_says_why(handler):
+    from nightlight.monitors import DisplayState, Status
+
+    commands, monitors, _ = handler
+    stuck = DisplayState(MONITORS[0], Status.NOT_RESPONDING)
+    stuck.message = "Not responding"
+    monitors.states["DEL41A2"] = stuck
+    reply = commands.handle({"command": "set", "value": "40", "display": "dell"})
+    assert not reply["ok"] and "can't be changed right now: not responding" in reply["output"]
+    assert commands.handle({"command": "set", "value": "40"})["ok"]  # all: the others still change
+    assert monitors.faded == [("BOE0812", 40)]
+    listed = commands.handle({"command": "list"})["data"]["displays"]
+    assert [d["status"] for d in listed] == ["not responding", "ok", "ok", "unsupported"]
+
+
+def test_a_relative_change_needs_a_known_level(handler):
+    commands, monitors, _ = handler
+    monitors.brightness.pop("DEL41A2")  # not read yet
+    reply = commands.handle({"command": "set", "value": "+5", "display": "dell"})
+    assert not reply["ok"] and "isn't known yet" in reply["output"] and monitors.faded == []
 
 
 def test_get_one_display_prints_just_the_number(handler):
@@ -158,7 +190,7 @@ def test_the_command_line_talks_to_the_running_app(handler):
     running.requestReceived.connect(lambda request, reply: reply(commands.handle(request)))
     try:
         code, out, _ = run_cli(name, "--set", "+5", "--display", "dell")
-        assert code == 0 and "DELL U2720Q" in out and monitors.faded == [(0, 75)]
+        assert code == 0 and "DELL U2720Q" in out and monitors.faded == [("DEL41A2", 75)]
         code, out, _ = run_cli(name, "--list", "--json")
         assert code == 0 and json.loads(out)["displays"][0]["brightness"] == 75
         code, _, err = run_cli(name, "--set", "50", "--display", "nope")

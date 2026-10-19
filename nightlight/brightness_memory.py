@@ -1,41 +1,44 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Keeps each display at the brightness it should have: the level the user
-set, or the level the brightness schedule asks for.
+"""Remembers each monitor's brightness and puts it back when it gets lost.
 
 Monitors and laptop panels often come back at a different brightness after
 the PC starts, wakes from sleep or the monitor is reconnected. Like Twinkle
 Tray's "Apply brightness at startup" and its re-apply after hardware and power
-events, the right level is put back then:
+events, the last level set in this app is restored then:
 
 - when the app starts,
 - after waking from sleep, or a display turning on (`restore_all_soon`),
 - when a monitor appears that wasn't there at the previous detection.
 
-What "the right level" is, in one place (`target`), so remembered and
-scheduled levels never fight (Twinkle Tray fixed bugs where startup or
-hardware events overwrote the current level, or sliders reverted):
+Only those moments: a monitor that stays connected is never changed behind
+the user's back, so its own buttons and Windows' adaptive or battery
+brightness keep working. Only levels set in this app (by the user or the
+brightness schedule) are remembered, not levels read from the monitor, so a
+monitor that wakes up at the wrong level can't overwrite the remembered one
+before it is restored. (Twinkle Tray fixed bugs where startup or hardware
+events overwrote the current level, or sliders reverted.)
 
-1. With the brightness schedule on: the user's own level if they set it
-   after the current step began (a manual change pauses the schedule until
-   its next step), otherwise the scheduled level.
-2. With the schedule off: the last level the user set, if remembering is on.
-3. Hidden displays are left alone.
+The brightness schedule (brightness_scheduler.py) decides when its points
+apply; the levels it sets are remembered like the user's, so a monitor
+reconnected in the evening comes back at the evening level, and a level the
+user picks afterwards wins until the schedule's next point.
 
-At each step of the schedule the new level is set on every (visible) display,
-which also ends any manual pause. Nothing else changes a display behind the
-user's back, so its own buttons and Windows' adaptive or battery brightness
-keep working. Only levels set by the user are remembered, not levels read
-from the monitor, so a monitor that wakes at the wrong level can't overwrite
-the remembered one.
+A restore waits until the monitor's current level has been read. Monitors
+often don't answer DDC/CI for a few seconds after waking or being plugged in,
+and detection runs again several times then, so a monitor that doesn't
+answer yet is simply restored at a later detection. Unprompted changes go
+through MonitorManager.restore_brightness, which skips a monitor that says
+it is in standby (DDC/CI can wake or hang it); it is restored at a later
+reading. Hidden displays are left alone, and nothing is restored while idle
+dimming holds the displays down.
 
-Unprompted changes go through MonitorManager.restore_brightness, which skips
-a monitor that says it is asleep (DDC/CI can wake or hang it); it is then
-done at a later reading. Monitors also often don't answer for a few seconds
-after waking, and detection runs again several times then (see app.py).
+Displays are remembered by their stable key (EDID manufacturer, product and
+serial, see win32.DisplayTarget.key). Levels saved by older versions under
+the hardware id alone are carried over the first time the display is seen.
 
-The levels live in a small file next to the settings, with when each was
-set, written a moment after the last change rather than on every step of a
-slider drag.
+The levels live in their own small file next to the settings, with when each
+was set, written a moment after the last change rather than on every step of
+a slider drag.
 """
 
 from __future__ import annotations
@@ -43,21 +46,18 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer
 
-from nightlight.config import BrightnessScheduleConfig
-from nightlight.core.brightness_schedule import ScheduledLevel, scheduled_level
-from nightlight.hardware.brightness import MonitorInfo
-from nightlight.monitors import MonitorManager
+from nightlight.hardware.brightness import MonitorInfo, legacy_key
+from nightlight.monitors import RESTORE, MonitorManager
 
 log = logging.getLogger(__name__)
 
 SAVE_DELAY_MS = 2000
-SCHEDULE_CHECK_MS = 15_000
 
 
 class BrightnessMemory(QObject):
@@ -75,20 +75,15 @@ class BrightnessMemory(QObject):
         self._enabled = enabled
         self._clock = clock
         self.levels, self.set_at = load(path)
-        self._schedule = BrightnessScheduleConfig()
-        self._location: tuple[float, float] | None = None
-        self._hidden: frozenset[str] = frozenset()
-        self._step_since: datetime | None = None  # start of the schedule step last applied
-        self._held = False  # idle dimming is on: don't brighten anything until it ends
+        self._hidden: Callable[[str], bool] = lambda _key: False
+        self._held = False  # idle dimming holds the displays down: restore nothing until it ends
         self._present: set[str] = set()  # keys at the previous detection
         self._due: set[str] = set()  # keys to restore once their level has been read
         self._restore_everything = True  # at start-up, every monitor is due
         self._save_timer = QTimer(self, singleShot=True, interval=SAVE_DELAY_MS)
         self._save_timer.timeout.connect(self.save)
-        self._schedule_timer = QTimer(self, interval=SCHEDULE_CHECK_MS)
-        self._schedule_timer.timeout.connect(self._check_schedule)
         monitors.monitorsChanged.connect(self._on_monitors_changed)
-        monitors.brightnessChanged.connect(self._on_brightness)
+        monitors.observed.connect(self._on_observed)
         monitors.brightnessSet.connect(self._on_set)
         monitors.restoreDeferred.connect(self._on_deferred)
 
@@ -100,45 +95,28 @@ class BrightnessMemory(QObject):
         """Turning it on doesn't restore anything right away: the levels on
         screen now are what the user sees and has presumably accepted."""
         self._enabled = enabled
-        if not enabled and not self._schedule.enabled:
+        if not enabled:
             self._due.clear()
 
-    def set_schedule(self, schedule: BrightnessScheduleConfig, location: tuple[float, float] | None = None) -> None:
-        """A changed schedule takes effect at once, as a new step would."""
-        changed = (schedule, location) != (self._schedule, self._location)
-        self._schedule, self._location = schedule, location
-        if schedule.enabled:
-            self._schedule_timer.start()
-            if changed:
-                self._step_since = None
-                self._check_schedule(apply_now=True)
-        else:
-            self._schedule_timer.stop()
-            self._step_since = None
+    def set_hidden(self, hidden: Callable[[str], bool] | Iterable[str]) -> None:
+        """Displays to leave alone: a predicate on keys (it may know older
+        keys), or a set of keys."""
+        if not callable(hidden):
+            keys = frozenset(hidden)
+            hidden = keys.__contains__
+        self._hidden = hidden
+        self._due = {key for key in self._due if not hidden(key)}
 
     def set_held(self, held: bool) -> None:
-        """While displays are dimmed for idle, hold back schedule steps and
-        restores; when it ends, IdleDimmer sets every display to target()."""
+        """While displays are dimmed for idle, hold back restores; when it
+        ends, IdleDimmer sets every display to target()."""
         self._held = held
 
-    def set_hidden(self, keys: frozenset[str]) -> None:
-        self._hidden = frozenset(keys)
-        self._due -= self._hidden
-
     def target(self, monitor: MonitorInfo) -> int | None:
-        """The level this display should be at now, or None to leave it alone."""
-        if monitor.key in self._hidden:
+        """The level this display should be at, or None to leave it alone."""
+        if self._hidden(monitor.key) or not self._enabled or monitor.key not in self.levels:
             return None
-        step = self._scheduled()
-        if step is not None:
-            set_at = self.set_at.get(monitor.key)
-            manual = monitor.key in self.levels and set_at is not None and set_at >= step.since
-            level = self.levels[monitor.key] if manual else step.level
-        elif self._enabled and monitor.key in self.levels:
-            level = self.levels[monitor.key]
-        else:
-            return None
-        return max(level, monitor.minimum)  # e.g. a laptop panel isn't set to black
+        return max(self.levels[monitor.key], monitor.minimum)  # e.g. a laptop panel isn't set to black
 
     def restore_all_soon(self) -> None:
         """After waking from sleep: restore every monitor at the next detection."""
@@ -152,64 +130,52 @@ class BrightnessMemory(QObject):
             log.warning("Could not save brightness levels to %s", self._path, exc_info=True)
 
     def shutdown(self) -> None:
-        self._schedule_timer.stop()
         if self._save_timer.isActive():
             self.save()
 
-    def _scheduled(self) -> ScheduledLevel | None:
-        return scheduled_level(self._schedule, self._clock(), self._location)
-
-    def _check_schedule(self, apply_now: bool = False) -> None:
-        """At a new step of the schedule, fade every visible display to its level."""
-        step = self._scheduled()
-        if step is None:
-            return
-        first = self._step_since is None
-        new_step = step.since != self._step_since
-        self._step_since = step.since
-        if not (apply_now or (new_step and not first)):
-            return  # at start-up, the restore after detection applies it
-        if self._held:
-            return  # dimmed for idle: the new step's level is applied on waking (target())
-        log.info("Brightness schedule: %d%% since %s", step.level, f"{step.since:%H:%M}")
-        for monitor in self._monitors.monitors:
-            if monitor.supported and (level := self.target(monitor)) is not None:
-                self._monitors.restore_brightness(monitor.index, level, fade=True)
-
     def _on_monitors_changed(self, monitors: list[MonitorInfo]) -> None:
         keys = {m.key for m in monitors if m.supported}
-        new = keys if self._restore_everything else keys - self._present
-        self._due = {m.key for m in monitors if m.key in (self._due | new) & keys and self.target(m) is not None}
-        if self._due:
-            log.info("Restoring brightness of %s once read", ", ".join(sorted(self._due)))
+        self._migrate(keys)
+        if self._enabled:
+            new = keys if self._restore_everything else keys - self._present
+            due = (self._due | new) & keys & self.levels.keys()
+            self._due = {key for key in due if not self._hidden(key)}
+            if self._due:
+                log.info("Restoring brightness of %s once read", ", ".join(sorted(self._due)))
         self._restore_everything = False
         self._present = keys
 
-    def _on_brightness(self, index: int, value: int | None) -> None:
-        monitor = self._monitors.monitor(index)
-        if monitor is None or monitor.key not in self._due or value is None or self._held:
+    def _migrate(self, keys: set[str]) -> None:
+        """Carry levels saved under a display's old key (hardware id only) over to its key now."""
+        for key in keys - self.levels.keys():
+            old = legacy_key(key)
+            if old != key and old in self.levels and not any(k != key and legacy_key(k) == old for k in keys):
+                self.levels[key] = self.levels.pop(old)
+                if old in self.set_at:
+                    self.set_at[key] = self.set_at.pop(old)
+                log.info("Remembered brightness of %s now kept under %s", old, key)
+                self._save_timer.start()
+
+    def _on_observed(self, key: str, value: int | None) -> None:
+        monitor = self._monitors.monitor(key)
+        if monitor is None or key not in self._due or value is None or self._held:
             return  # not due, not answering yet (a later detection retries), or dimmed for idle
-        self._due.discard(monitor.key)
+        self._due.discard(key)
         target = self.target(monitor)
         if target is not None and value != target:
             log.info("Restoring %s brightness: %d%% -> %d%%", monitor.name, value, target)
-            self._monitors.restore_brightness(index, target)
+            self._monitors.restore_brightness(key, target)
 
-    def _on_deferred(self, index: int) -> None:
+    def _on_deferred(self, key: str, source: str) -> None:
         """The monitor was asleep or the write failed: restore at a later reading."""
-        monitor = self._monitors.monitor(index)
-        if monitor is not None and self.target(monitor) is not None:
-            self._due.add(monitor.key)
+        if source == RESTORE and self._enabled and key in self.levels and not self._hidden(key):
+            self._due.add(key)
 
-    def _on_set(self, index: int, value: int) -> None:
-        monitor = self._monitors.monitor(index)
-        if monitor is None:
-            return
-        self._due.discard(monitor.key)  # the user just chose a level; don't override it
-        # Kept even with remembering off: it is what pauses the schedule.
-        self.levels[monitor.key] = value
-        self.set_at[monitor.key] = self._clock()
-        if self._enabled or self._schedule.enabled:
+    def _on_set(self, key: str, value: int, source: str) -> None:
+        self._due.discard(key)  # a level was just chosen; don't override it
+        if self._enabled and self.levels.get(key) != value:
+            self.levels[key] = value
+            self.set_at[key] = self._clock()
             self._save_timer.start()
 
 
@@ -243,7 +209,7 @@ def load(path: Path) -> tuple[dict[str, int], dict[str, datetime]]:
 
 def save(levels: dict[str, int], set_at: dict[str, datetime], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {"version": 2, "levels": levels, "set_at": {key: moment.isoformat() for key, moment in set_at.items()}}
+    data = {"version": 2, "levels": levels, "set_at": {key: moment.isoformat() for key, moment in set_at.items() if key in levels}}
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     os.replace(tmp, path)

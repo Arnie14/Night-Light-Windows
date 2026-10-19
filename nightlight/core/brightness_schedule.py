@@ -1,65 +1,179 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Which brightness the schedule asks for at a given moment.
+"""Brightness by time of day: which level the schedule asks for at a moment.
 
-Twinkle Tray's "time of day adjustments": a list of steps, each a clock time
-or sunrise/sunset plus an offset, and a level. The level of the most recent
-step applies until the next one. Pure logic with no Qt or hardware.
+Pure logic, like core/schedule.py. A schedule is a list of points ("from
+20:00, 50%"; "from 30 minutes after sunset, 40%"). The level at any moment
+comes from the most recent point that has passed, found by laying the points
+out over yesterday, today and tomorrow, the way Twinkle Tray finds "the
+latest adjustment at or before now" and KDE's night light finds its
+transition. That makes the answer a function of the time alone, never of
+what happened before, which is what lets the app apply the schedule
+idempotently: asking again gives the same point, and only a new point
+(identified by the instant it began) is a change to apply.
+
+Times are built in the local zone and compared as absolute instants (see
+core/clock.py), so daylight saving changes neither skip nor repeat a point.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 
 from astral import Observer
 from astral.sun import sun
 
-from nightlight.config import SUNRISE, SUNSET, BrightnessScheduleConfig, BrightnessStep, parse_hhmm
+from nightlight.config import Anchor, BrightnessScheduleConfig, SchedulePoint, parse_hhmm
+from nightlight.core.clock import days_around, fixed, local, wall_time
 
 log = logging.getLogger(__name__)
 
-# When the sun doesn't rise or set (polar day or night), or no location is
-# set, sunrise and sunset steps fall back to these, as KDE's night light does.
-FALLBACK = {SUNRISE: time(6, 0), SUNSET: time(18, 0)}
+# When the sun doesn't rise or set (polar day and night), or no location is
+# set, sunrise and sunset points use these times instead, as night light does
+# (KDE's fallback).
+FALLBACK_SUNRISE = time(6, 0)
+FALLBACK_SUNSET = time(18, 0)
+
+
+@dataclass(frozen=True)
+class Preset:
+    name: str
+    description: str
+    points: tuple[SchedulePoint, ...]
+    transition_minutes: int = 0
+
+
+CUSTOM = "custom"
+PRESETS: dict[str, Preset] = {
+    "day_night": Preset(
+        "Day and night",
+        "Full brightness by day, half from 20:00",
+        (SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00")),
+    ),
+    "follow_sun": Preset(
+        "Follow the sun",
+        "Bright from sunrise, dimmer after sunset (uses the Night Light location)",
+        (SchedulePoint(100, anchor=Anchor.SUNRISE), SchedulePoint(70, anchor=Anchor.SUNSET), SchedulePoint(40, anchor=Anchor.SUNSET, offset_minutes=90)),
+        transition_minutes=30,
+    ),
+    "office": Preset(
+        "Office hours",
+        "Bright for the working day, easing off in the evening",
+        (SchedulePoint(85, "08:00"), SchedulePoint(60, "18:00"), SchedulePoint(35, "22:00")),
+    ),
+    "wind_down": Preset(
+        "Evening wind-down",
+        "Steps down through the evening, gradually",
+        (SchedulePoint(100, "07:00"), SchedulePoint(80, "18:00"), SchedulePoint(60, "20:00"), SchedulePoint(40, "22:00")),
+        transition_minutes=30,
+    ),
+    "night_owl": Preset(
+        "Night owl",
+        "A late start, and dim after midnight",
+        (SchedulePoint(90, "10:00"), SchedulePoint(70, "20:00"), SchedulePoint(40, "00:30")),
+    ),
+    "dark_room": Preset(
+        "Dark room",
+        "Low levels for a dim room or to spare an OLED",
+        (SchedulePoint(70, "08:00"), SchedulePoint(40, "19:00"), SchedulePoint(20, "23:00")),
+    ),
+}
+
+
+@dataclass(frozen=True)
+class Boundary:
+    """One point of the schedule on one day."""
+
+    at: datetime  # fixed-offset, see core/clock.py
+    level: int
+    point: int  # index into the schedule's points
+
+    @property
+    def id(self) -> str:
+        """Identifies this occurrence across restarts: the instant, in UTC."""
+        return self.at.astimezone(_UTC).isoformat()
 
 
 @dataclass(frozen=True)
 class ScheduledLevel:
-    level: int
-    since: datetime  # when this step started; a manual change after it wins until the next
-    until: datetime | None  # when the next step starts
+    level: int  # what the schedule asks for now
+    since: Boundary  # the point in effect
+    next: Boundary | None
+    transitioning: bool  # still moving from the previous point's level
+    approximate_sun: bool  # sunrise/sunset points used the fallback times
 
 
-def step_times(step: BrightnessStep, day: date, now: datetime, location: tuple[float, float] | None) -> datetime:
-    tz = now.tzinfo
-    if step.at in (SUNRISE, SUNSET):
-        moment = None
-        if location is not None:
-            try:
-                moment = sun(Observer(*location), date=day, tzinfo=tz)[step.at]
-            except ValueError:
-                pass  # no sunrise or sunset that day
-        if moment is None:
-            moment = datetime.combine(day, FALLBACK[step.at], tz)
-    else:
-        moment = datetime.combine(day, parse_hhmm(step.at), tz)
-    return moment + timedelta(minutes=step.offset_minutes)
+_UTC = timezone.utc
 
 
-def scheduled_level(config: BrightnessScheduleConfig, now: datetime, location: tuple[float, float] | None = None) -> ScheduledLevel | None:
-    """The level the schedule asks for at `now` (timezone-aware), or None
-    when the schedule is off or empty."""
-    if not config.enabled or not config.steps:
+def sun_times(day: date, zone: tzinfo, location: tuple[float, float] | None) -> tuple[datetime, datetime, bool]:
+    """(sunrise, sunset, approximate) on `day`; the fallback times when the
+    location is unknown or the sun doesn't rise or set there that day."""
+    if location is not None:
+        try:
+            events = sun(Observer(*location), date=day, tzinfo=zone)
+            return fixed(events["sunrise"]), fixed(events["sunset"]), False
+        except ValueError:
+            pass  # polar day or night
+    return wall_time(day, FALLBACK_SUNRISE, zone), wall_time(day, FALLBACK_SUNSET, zone), True
+
+
+def boundaries(config: BrightnessScheduleConfig, now: datetime, zone: tzinfo | None = None,
+               location: tuple[float, float] | None = None) -> tuple[list[Boundary], bool]:
+    """Every point on the days around `now`, in time order, and whether any
+    sun point was approximate. Points falling on the same instant are merged,
+    the later one in the list winning, so two points never fire together."""
+    tz = zone or now.tzinfo
+    found: dict[datetime, Boundary] = {}
+    approximate = False
+    for day in days_around(now, zone, before=2, after=1):
+        sun_cache: tuple[datetime, datetime, bool] | None = None
+        for index, point in enumerate(config.points):
+            if point.anchor is Anchor.CLOCK:
+                at = wall_time(day, parse_hhmm(point.at), tz)
+            else:
+                sun_cache = sun_cache or sun_times(day, tz, location)
+                sunrise, sunset, approx = sun_cache
+                approximate |= approx
+                at = local((sunrise if point.anchor is Anchor.SUNRISE else sunset) + timedelta(minutes=point.offset_minutes), tz)
+            key = at.astimezone(_UTC)
+            found[key] = Boundary(at, point.level, index)  # same instant: the later point wins
+    return sorted(found.values(), key=lambda b: b.at), approximate
+
+
+def scheduled_level(config: BrightnessScheduleConfig, now: datetime, zone: tzinfo | None = None,
+                    location: tuple[float, float] | None = None) -> ScheduledLevel | None:
+    """The level the schedule asks for at `now` (timezone-aware); None if it is off."""
+    if not config.enabled or not config.points:
         return None
-    moments = sorted(
-        (step_times(step, now.date() + timedelta(days=offset), now, location), step.level)
-        for offset in (-1, 0, 1)
-        for step in config.steps
-    )
-    started = [m for m in moments if m[0] <= now]
-    upcoming = [m for m in moments if m[0] > now]
-    if not started:  # can't happen with yesterday's steps included, but be safe
+    laid_out, approximate = boundaries(config, now, zone, location)
+    passed = [b for b in laid_out if b.at <= now]
+    if not passed:
         return None
-    since, level = started[-1]
-    return ScheduledLevel(level, since, upcoming[0][0] if upcoming else None)
+    since = passed[-1]
+    upcoming = next((b for b in laid_out if b.at > now), None)
+    level, transitioning = since.level, False
+    if config.transition_minutes > 0 and len(passed) >= 2:
+        duration = timedelta(minutes=config.transition_minutes)
+        if upcoming is not None:
+            duration = min(duration, upcoming.at - since.at)  # never runs into the next point
+        elapsed = now - since.at
+        if elapsed < duration:
+            previous = passed[-2].level
+            level = round(previous + (since.level - previous) * (elapsed / duration))
+            transitioning = True
+    return ScheduledLevel(level, since, upcoming, transitioning, approximate)
+
+
+def describe(config: BrightnessScheduleConfig) -> str:
+    """The points in words: "07:00 100% · 20:00 50%"."""
+    parts = []
+    for point in config.points:
+        if point.anchor is Anchor.CLOCK:
+            when = point.at
+        else:
+            offset = f" {'+' if point.offset_minutes > 0 else '-'} {abs(point.offset_minutes)} min" if point.offset_minutes else ""
+            when = f"{point.anchor.value}{offset}"
+        parts.append(f"{when} {point.level}%")
+    return " · ".join(parts)

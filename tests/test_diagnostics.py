@@ -18,8 +18,17 @@ class FakeGamma:
 
 
 class FakeMonitors:
+    """MonitorManager as diagnostics reads it (by display key)."""
+
     monitors = [MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2"), MonitorInfo(1, "Old TV", False, key="SAM0001", reason="Didn't answer over DDC/CI")]
-    brightness = {0: 70}
+    brightness = {"DEL41A2": 70}
+    states = {}
+
+    def value(self, key):
+        return self.brightness.get(key)
+
+    def state(self, key):
+        return self.states.get(key)
 
 
 def sources(tmp_path, log_dir=None):
@@ -91,4 +100,41 @@ def test_the_last_wake_is_in_the_summary(tmp_path):
     src.last_wake = lambda: ["+5 s: 1 of 1 answering (DELL U2720Q 70%)", "answering again: DELL U2720Q at +5 s"]
     text = diagnostics.summary(src)
     assert "Last wake from sleep" in text and "+5 s: 1 of 1 answering" in text
+    controller.shutdown()
+
+
+def test_a_display_that_does_not_answer_now_says_so(tmp_path):
+    from nightlight.monitors import DisplayState, Status
+
+    src, controller = sources(tmp_path)
+    monitors = FakeMonitors()
+    monitors.states = {"DEL41A2": DisplayState(FakeMonitors.monitors[0], Status.NOT_RESPONDING, message="Not responding")}
+    src.monitors = monitors
+    assert "70% via hardware (not responding: Not responding)" in diagnostics.summary(src)
+    controller.shutdown()
+
+
+def test_the_compatibility_report_is_included_and_scrubbed(tmp_path, monkeypatch):
+    from nightlight import privacy
+
+    monkeypatch.setattr(diagnostics, "scrub", privacy.Scrubber(user="anurag", computer="ANURAG-PC", home=r"C:\Users\Anurag"))
+    src, controller = sources(tmp_path)
+    src.compatibility = lambda: "1. DELL\n   Identity:     DEL41A2:7XKJ9F3\n   saved by anurag\n"
+    path, _ = diagnostics.write_bundle(src, tmp_path / "out")
+    with zipfile.ZipFile(path) as bundle:
+        report = bundle.read("compatibility.txt").decode()
+    assert "DEL41A2:…J9F3" in report and "7XKJ9F3" not in report and "anurag" not in report
+    controller.shutdown()
+
+
+def test_a_failing_compatibility_report_does_not_stop_the_bundle(tmp_path):
+    src, controller = sources(tmp_path)
+
+    def broken():
+        raise RuntimeError("no displays")
+
+    src.compatibility = broken
+    path, _ = diagnostics.write_bundle(src, tmp_path / "out")
+    with zipfile.ZipFile(path) as bundle:
+        assert "summary.txt" in bundle.namelist() and "compatibility.txt" not in bundle.namelist()
     controller.shutdown()

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QFont, QGuiApplication
@@ -37,9 +38,8 @@ class Flyout(QFrame):
         super().__init__()
         self._monitors = monitors
         self._controller = controller
-        self._rows: dict[int, MonitorBrightness] = {}
+        self._rows: dict[str, MonitorBrightness] = {}  # by display key
         self._linked = False
-        self._prefs: dict[str, DisplayPrefs] = {}  # custom names and hidden displays, by key
         self._hidden_at = 0.0
         self._anchor: QRect | None = None  # the tray icon it opened from
         self._as_window = as_window
@@ -100,8 +100,8 @@ class Flyout(QFrame):
         layout.addLayout(night)
 
         monitors.monitorsChanged.connect(self._rebuild)
-        monitors.brightnessChanged.connect(self._on_brightness)
-        monitors.error.connect(self._monitor_status.setText)
+        monitors.displayChanged.connect(self._on_display_changed)
+        monitors.error.connect(self._show_error)
         controller.changed.connect(self._update_night_light)
         self._rebuild(monitors.monitors)
         self._update_night_light()
@@ -151,61 +151,72 @@ class Flyout(QFrame):
         size = self.size() if self.isVisible() else self.sizeHint()
         return flyout_position(size, screen.geometry(), screen.availableGeometry(), anchor)
 
-    def set_windows_night_light(self, on: bool | None) -> None:
-        """Show the notice while Windows' own Night Light is on too (it stacks with ours)."""
-        if self.windows_night_light.isVisible() != bool(on):
-            self.windows_night_light.setVisible(bool(on))
-            self.adjustSize()
-
-    def set_display_prefs(self, prefs: tuple[DisplayPrefs, ...]) -> None:
-        """Custom names, and displays to leave out of the panel (and linked changes)."""
-        self._prefs = {p.key: p for p in prefs}
-        self._rebuild(self._monitors.monitors)
-
     def _refresh(self) -> None:
         self._monitor_status.setText("Detecting monitors…")
         self._monitor_status.show()
-        self._monitors.retry()  # includes displays skipped after a crash or hang
+        self._monitors.retry()  # the user asked: check every display, those skipped after a crash too
+
+    def _show_error(self, message: str) -> None:
+        self._monitor_status.setText(message)
+        self._monitor_status.show()
 
     def _rebuild(self, monitors: list[MonitorInfo]) -> None:
         for row in self._rows.values():
             row.deleteLater()
         self._rows.clear()
         for info in monitors:
-            prefs = self._prefs.get(info.key, DisplayPrefs(info.key))
+            prefs = self._display_prefs(info.key)
             if prefs.hidden:
                 continue
-            row = MonitorBrightness(info, prefs.name)
+            row = MonitorBrightness(info, self._monitors.state(info.key), prefs.name)
             row.brightnessRequested.connect(self._on_brightness_requested)
-            if info.index in self._monitors.brightness:
-                row.set_brightness(self._monitors.brightness[info.index])
             self._monitor_layout.addWidget(row)
-            self._rows[info.index] = row
+            self._rows[info.key] = row
         if self._rows:
             self._monitor_status.hide()
         elif monitors:
             self._monitor_status.setText("Every display is hidden; show them in Settings > Displays.")
             self._monitor_status.show()
         else:
-            self._monitor_status.setText("No monitors with DDC/CI brightness control found.")
+            self._monitor_status.setText("No displays found.")
             self._monitor_status.show()
         self.adjustSize()
+
+    def set_windows_night_light(self, on: bool | None) -> None:
+        """Show the notice while Windows' own Night Light is on too (it stacks with ours)."""
+        if self.windows_night_light.isVisible() != bool(on):
+            self.windows_night_light.setVisible(bool(on))
+            self.adjustSize()
+
+    def set_display_prefs(self, prefs: tuple[DisplayPrefs, ...] | Callable[[str], DisplayPrefs]) -> None:
+        """Custom names, and displays to leave out of the panel (and linked changes).
+        A lookup (AppConfig.display) also finds names saved under older keys."""
+        if callable(prefs):
+            self._display_prefs = prefs
+        else:
+            by_key = {p.key: p for p in prefs}
+            self._display_prefs = lambda key: by_key.get(key, DisplayPrefs(key))
+        self._rebuild(self._monitors.monitors)
+
+    def _display_prefs(self, key: str) -> DisplayPrefs:
+        return DisplayPrefs(key)
 
     def set_linked(self, linked: bool) -> None:
         """Whether moving one monitor's slider moves them all, like Monitorian's
         "unison" and Twinkle Tray's "linked levels"."""
         self._linked = linked
 
-    def _on_brightness_requested(self, index: int, value: int) -> None:
-        self._monitors.set_brightness(index, value)
+    def _on_brightness_requested(self, key: str, value: int) -> None:
+        self._monitors.set_brightness(key, value)
         if self._linked:
             for other in self._rows.values():
-                if other.info.index != index and other.info.supported:
-                    self._monitors.set_brightness(other.info.index, other.clamp(value))
+                if other.key != key and other.controllable:
+                    self._monitors.set_brightness(other.key, other.clamp(value))
 
-    def _on_brightness(self, index: int, value: int | None) -> None:
-        if row := self._rows.get(index):
-            row.set_brightness(value)
+    def _on_display_changed(self, key: str) -> None:
+        row, state = self._rows.get(key), self._monitors.state(key)
+        if row is not None and state is not None:
+            row.update_state(state)
 
     def _update_night_light(self) -> None:
         controller = self._controller

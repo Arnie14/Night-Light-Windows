@@ -3,6 +3,8 @@
 
 Loading is deliberately forgiving: a missing, corrupt or hand-edited file
 never stops the app from starting; bad values fall back to defaults.
+Settings written by older versions load too (the brightness schedule's
+"steps" from 0.1.0 beta 3 and 4 become "points").
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ log = logging.getLogger(__name__)
 
 CONFIG_VERSION = 1
 MAX_TRANSITION_MINUTES = 600
+MAX_IDLE_MINUTES = 240
 
 
 class Mode(StrEnum):
@@ -83,25 +86,58 @@ class GeneralConfig:
     idle_minutes: int = 5
     idle_level: int = 20
 
+    def normalized(self) -> GeneralConfig:
+        # The same ranges as the settings window's fields.
+        return replace(self, idle_minutes=_clamp(self.idle_minutes, 1, MAX_IDLE_MINUTES), idle_level=_clamp(self.idle_level, 0, 100))
 
-SUNRISE, SUNSET = "sunrise", "sunset"
+
+class Anchor(StrEnum):
+    """What a brightness schedule point's time is relative to."""
+
+    CLOCK = "clock"  # a time of day
+    SUNRISE = "sunrise"
+    SUNSET = "sunset"
+
+
+# Kept for code and settings from 0.1.0 beta 3 and 4, which wrote "at": "sunrise".
+SUNRISE, SUNSET = Anchor.SUNRISE.value, Anchor.SUNSET.value
+MAX_SUN_OFFSET_MINUTES = 240
+MAX_SCHEDULE_POINTS = 12
 
 
 @dataclass(frozen=True)
-class BrightnessStep:
-    """At `at` ("HH:MM", "sunrise" or "sunset", plus `offset_minutes`), set displays to `level`."""
+class SchedulePoint:
+    """From this moment on, displays are set to `level` (until the next point)."""
 
-    at: str = "07:00"
-    level: int = 80
-    offset_minutes: int = 0
+    level: int = 100
+    at: str = "07:00"  # HH:MM, for Anchor.CLOCK
+    anchor: Anchor = Anchor.CLOCK
+    offset_minutes: int = 0  # before (-) or after (+) sunrise or sunset
+
+    def normalized(self) -> SchedulePoint:
+        return replace(
+            self,
+            level=_clamp(self.level, 0, 100),
+            at=self.at if _is_hhmm(self.at) else "07:00",
+            offset_minutes=_clamp(self.offset_minutes, -MAX_SUN_OFFSET_MINUTES, MAX_SUN_OFFSET_MINUTES),
+        )
+
+
+DEFAULT_SCHEDULE_POINTS = (SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00"))
 
 
 @dataclass(frozen=True)
 class BrightnessScheduleConfig:
-    """Twinkle Tray's "time of day adjustments": brightness levels at times of day."""
+    """Brightness by time of day, like Twinkle Tray's time adjustments."""
 
     enabled: bool = False
-    steps: tuple[BrightnessStep, ...] = (BrightnessStep("07:00", 80), BrightnessStep("20:00", 40))
+    preset: str = "day_night"  # the preset the points came from, or "custom"
+    points: tuple[SchedulePoint, ...] = DEFAULT_SCHEDULE_POINTS
+    transition_minutes: int = 0  # 0: change at each point (with a short fade); else gradually
+
+    def normalized(self) -> BrightnessScheduleConfig:
+        points = tuple(p.normalized() for p in self.points[:MAX_SCHEDULE_POINTS]) or DEFAULT_SCHEDULE_POINTS
+        return replace(self, points=points, transition_minutes=_clamp(self.transition_minutes, 0, MAX_TRANSITION_MINUTES))
 
 
 @dataclass(frozen=True)
@@ -121,7 +157,17 @@ class AppConfig:
     displays: tuple[DisplayPrefs, ...] = ()
 
     def display(self, key: str) -> DisplayPrefs:
-        return next((d for d in self.displays if d.key == key), DisplayPrefs(key))
+        """A display's preferences, also when saved under its key from an
+        older version (the hardware id without the serial)."""
+        exact = next((d for d in self.displays if d.key == key), None)
+        if exact is not None:
+            return exact
+        legacy = key.split(":", 1)[0]
+        return next((replace(d, key=key) for d in self.displays if d.key == legacy and legacy != key), DisplayPrefs(key))
+
+    def hidden(self, key: str) -> bool:
+        """Whether a display is hidden; always ask this way (it knows the older keys)."""
+        return self.display(key).hidden
 
 
 def parse_hhmm(text: str) -> time:
@@ -133,7 +179,7 @@ def default_path() -> Path:
 
 
 def log_dir() -> Path:
-    """Where night-light.log and probe.txt go."""
+    """Where night-light.log, probe.txt and compatibility.txt go."""
     return Path(platformdirs.user_log_dir("night-light", appauthor=False))
 
 
@@ -150,7 +196,7 @@ def load(path: Path) -> AppConfig:
         return AppConfig()
     return AppConfig(
         night_light=_from_dict(NightLightConfig, "night_light", raw.get("night_light")).normalized(),
-        general=_from_dict(GeneralConfig, "general", raw.get("general")),
+        general=_from_dict(GeneralConfig, "general", raw.get("general")).normalized(),
         brightness_schedule=_schedule_from(raw.get("brightness_schedule")),
         displays=_displays_from(raw.get("displays")),
     )
@@ -182,22 +228,38 @@ def _from_dict[T](cls: type[T], section: str, data: object) -> T:
 
 
 def _schedule_from(data: object) -> BrightnessScheduleConfig:
-    defaults = BrightnessScheduleConfig()
+    """The brightness schedule, from "points" (this version) or "steps" (0.1.0 beta 3 and 4)."""
     if not isinstance(data, dict):
-        return defaults
-    enabled = data.get("enabled") if isinstance(data.get("enabled"), bool) else defaults.enabled
-    steps = defaults.steps
-    if isinstance(data.get("steps"), list):
-        steps = tuple(step for item in data["steps"] if (step := _step_from(item)) is not None)
-    return BrightnessScheduleConfig(enabled, steps)
+        return BrightnessScheduleConfig()
+    scalars = {k: v for k, v in data.items() if k not in ("points", "steps")}
+    schedule = _from_dict(BrightnessScheduleConfig, "brightness_schedule", scalars)
+    if isinstance(data.get("points"), list):
+        points = tuple(_from_dict(SchedulePoint, "brightness_schedule.points", p) for p in data["points"] if isinstance(p, dict))
+        schedule = replace(schedule, points=points)
+    elif isinstance(data.get("steps"), list):
+        points = tuple(point for item in data["steps"] if (point := _point_from_step(item)) is not None)
+        # Old schedules had no presets or gradual changes; an empty one gets the default points (and their preset).
+        if points and "preset" not in data:
+            schedule = replace(schedule, preset="custom")
+        schedule = replace(schedule, points=points)
+    return schedule.normalized()
 
 
-def _step_from(item: object) -> BrightnessStep | None:
-    step = _from_dict(BrightnessStep, "brightness_schedule.steps", item)
-    if not isinstance(item, dict) or not (step.at in (SUNRISE, SUNSET) or _is_hhmm(step.at)):
+def _point_from_step(item: object) -> SchedulePoint | None:
+    """A 0.1.0 beta 3/4 step: {"at": "HH:MM" | "sunrise" | "sunset", "level", "offset_minutes"}."""
+    if not isinstance(item, dict):
         log.warning("Ignoring invalid brightness step %r", item)
         return None
-    return replace(step, level=_clamp(step.level, 0, 100), offset_minutes=_clamp(step.offset_minutes, -720, 720))
+    at, level, offset = item.get("at", "07:00"), item.get("level", 80), item.get("offset_minutes", 0)
+    if not isinstance(level, int) or isinstance(level, bool) or not isinstance(offset, int) or isinstance(offset, bool):
+        log.warning("Ignoring invalid brightness step %r", item)
+        return None
+    if at in (SUNRISE, SUNSET):
+        return SchedulePoint(level, anchor=Anchor(at), offset_minutes=offset)
+    if isinstance(at, str) and _is_hhmm(at):
+        return SchedulePoint(level, at)
+    log.warning("Ignoring invalid brightness step %r", item)
+    return None
 
 
 def _displays_from(data: object) -> tuple[DisplayPrefs, ...]:
@@ -217,12 +279,15 @@ def _to_json(config: AppConfig) -> dict:
     data = asdict(config)
     data["displays"] = {d.key: {"name": d.name, "hidden": d.hidden} for d in config.displays}
     data["night_light"]["exempt_apps"] = list(config.night_light.exempt_apps)
+    data["brightness_schedule"]["points"] = [asdict(p) for p in config.brightness_schedule.points]
     return data
 
 
 def _coerce(name: str, value: object, default: object) -> object:
     if name == "mode":
         return Mode(value)
+    if name == "anchor":
+        return Anchor(value)
     if isinstance(default, tuple):  # a list of strings, such as exempt_apps
         if isinstance(value, list) and all(isinstance(v, str) for v in value):
             return tuple(value)
@@ -245,6 +310,6 @@ def _clamp(value, low, high):
 def _is_hhmm(text: str) -> bool:
     try:
         parse_hhmm(text)
-    except ValueError:
+    except (TypeError, ValueError):
         return False
     return True

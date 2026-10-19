@@ -60,6 +60,11 @@ class ForegroundWatcher(QObject):
             self._timer.stop()
             self._publish({})
 
+    @property
+    def paused(self) -> dict[str, str]:
+        """Display -> reason, as last published."""
+        return dict(self._paused)
+
     def check(self) -> None:
         self._publish(paused_displays(self._probe(), self._config))
 
