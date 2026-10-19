@@ -55,6 +55,21 @@ def paused_text(controller: NightLightController, display_name: Callable[[str], 
     return "Paused on " + "; ".join(parts)
 
 
+def brightness_status(scheduler) -> str:
+    """The brightness schedule now, like night light's status: "55% → 40% by
+    20:30" while changing, "70% · 40% at 20:00" otherwise; "" while it is off.
+    `scheduler` is a BrightnessScheduler, or None."""
+    state = getattr(scheduler, "state", None)
+    if state is None or not scheduler.config.enabled:
+        return ""
+    if state.transitioning and state.level != state.since.level:
+        end = f" by {_hhmm(state.transition_end)}" if state.transition_end is not None else ""
+        return f"{state.level}% → {state.since.level}%{end}"
+    if state.next is not None and state.next.level != state.level:
+        return f"{state.level}% · {state.next.level}% at {_hhmm(state.next.at)}"
+    return f"{state.level}%"
+
+
 def display_label(gdi_name: str) -> str:
     """A GDI name such as DISPLAY2 -> "display 2"."""
     number = gdi_name.rsplit("DISPLAY", 1)[-1]

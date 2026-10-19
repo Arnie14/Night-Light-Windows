@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from nightlight import APP_NAME
 from nightlight.controller import NightLightController
 from nightlight.ui import icons
-from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status, paused_text
+from nightlight.ui.night_light_text import brightness_status, build_override_menu, is_night_light_on, night_light_status, paused_text
 
 
 class Tray(QSystemTrayIcon):
@@ -22,6 +22,7 @@ class Tray(QSystemTrayIcon):
         super().__init__()
         self._controller = controller
         self.display_name: Callable[[str], str] | None = None  # set by the app: GDI name -> display name
+        self._scheduler = None
 
         self._menu = QMenu()
         self._override_menu = QMenu()
@@ -47,7 +48,15 @@ class Tray(QSystemTrayIcon):
         controller = self._controller
         self.setIcon(icons.night_icon() if is_night_light_on(controller) else icons.day_icon())
         paused = paused_text(controller, self.display_name)
-        self.setToolTip(f"{APP_NAME}\nNight Light: {night_light_status(controller)}" + (f"\n{paused}" if paused else ""))
+        brightness = brightness_status(self._scheduler)
+        self.setToolTip(f"{APP_NAME}\nNight Light: {night_light_status(controller)}" + (f"\nBrightness: {brightness}" if brightness else "")
+                        + (f"\n{paused}" if paused else ""))
+
+    def set_scheduler(self, scheduler) -> None:
+        """Show the brightness schedule too, while it is on."""
+        self._scheduler = scheduler
+        scheduler.changed.connect(self._update)
+        self._update()
 
     def _update_menu(self) -> None:
         # "Suspend ▸" / "Activate ▸" with KDE's durations, or "Resume" / "Turn Off".

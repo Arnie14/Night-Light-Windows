@@ -24,7 +24,14 @@ from nightlight.controller import NightLightController
 from nightlight.hardware.brightness import MonitorInfo
 from nightlight.monitors import MonitorManager
 from nightlight.ui import icons
-from nightlight.ui.night_light_text import build_override_menu, display_label, is_night_light_on, night_light_status, paused_text
+from nightlight.ui.night_light_text import (
+    brightness_status,
+    build_override_menu,
+    display_label,
+    is_night_light_on,
+    night_light_status,
+    paused_text,
+)
 from nightlight.ui.placement import flyout_position
 from nightlight.ui.widgets import HEADING_WEIGHT, GlyphButton, MonitorBrightness, SecondaryLabel, Separator, WindowsNightLightNotice, set_font
 
@@ -72,6 +79,11 @@ class Flyout(QFrame):
         self._monitor_layout.setContentsMargins(0, 0, 4, 0)  # line up with the header's right edge
         self._monitor_layout.setSpacing(14)
         layout.addLayout(self._monitor_layout)
+        self._scheduler = None
+        self.schedule_text = SecondaryLabel(scale=0.92)  # the brightness schedule, while it is on
+        self.schedule_text.setWordWrap(True)
+        self.schedule_text.setVisible(False)
+        layout.addWidget(self.schedule_text)
 
         layout.addSpacing(2)
         layout.addWidget(Separator())
@@ -227,6 +239,16 @@ class Flyout(QFrame):
             return  # don't rebuild the menu under the user's cursor
         self._toggle.setText(build_override_menu(controller, self._override_menu))
         self._toggle.setMenu(None if self._override_menu.isEmpty() else self._override_menu)
+
+    def set_scheduler(self, scheduler) -> None:
+        self._scheduler = scheduler
+        scheduler.changed.connect(self._update_schedule)
+        self._update_schedule()
+
+    def _update_schedule(self) -> None:
+        text = brightness_status(self._scheduler)
+        self.schedule_text.setText(f"Brightness schedule: {text}")
+        self.schedule_text.setVisible(bool(text))
 
     def display_name_of(self, gdi_name: str) -> str:
         """A display's name (its custom one if given), from its GDI name."""

@@ -4,10 +4,13 @@ Detection"), and bringing them back on the first input.
 
 Idle means no keyboard or mouse input for the chosen minutes. It never
 counts while an app keeps the display on (video players, browsers playing
-video, presentations: Windows' display-required state, the signal they set
-for exactly this), nor while a game or video is fullscreen or Windows says
-not to interrupt; Twinkle Tray has the same two exceptions ("fullscreen apps
-block idle detection", "media blocks idle detection").
+video, video calls, presentations: Windows' display-required state, the
+signal they set for exactly this), while a game runs exclusive fullscreen or
+Windows' presentation mode is on, or while an app the user listed is in
+front (NightLightApp._idle_held). A window that merely fills the screen (a
+browser or an editor in fullscreen) doesn't hold it: in beta 5 it did, so
+dimming never happened with such a window in front. Music alone doesn't
+hold it either: the screen isn't needed for that.
 
 How each display is dimmed, the safe way for each:
 - External displays (DDC/CI monitors, TVs, displays without control) are

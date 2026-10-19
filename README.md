@@ -33,18 +33,18 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 
 | Feature | Status | Notes |
 |---|---|---|
-| Tray icon and quick-access panel, settings window | ● Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings. Light and dark mode follow Windows. A display that can't be changed right now has a disabled slider saying why in a few words. |
+| Tray icon and quick-access panel, settings window | ● Ready | Modelled on KDE Plasma's "Brightness and Color" panel and Night Light settings. Light and dark mode follow Windows, or pick one in Settings > General. A display that can't be changed right now has a disabled slider saying why in a few words. |
 | Night light with an adjustable color temperature | ● Ready | Tested on a laptop panel. Keeps a monitor's calibration (even after a crash), works around Windows' limit on very warm colors, and skips HDR displays (Windows ignores gamma there). |
-| Scheduling: custom times, or sunrise and sunset at a city or coordinates | ● Ready | Cities from the time zone list (searchable, with Detect), with gradual transitions and temporary Suspend/Activate. Right across daylight saving changes. |
-| Brightness by time of day, with presets | ● Ready | Tested on a laptop panel. Presets or your own times (clock, or sunrise/sunset ± minutes), optionally gradual. Applied once per point: a level you pick stands until the next one, and restarts or sleeping through a point don't repeat or miss it. |
+| Scheduling: custom times, or sunrise and sunset at a city or coordinates | ● Ready | Cities from the time zone list (searchable, with Detect), with gradual transitions and temporary Suspend/Activate. Right across daylight saving changes. At sunrise and sunset the change follows twilight, or takes a length you choose (none, or 5 to 120 minutes). A sleep-friendly suggestion (2700 K or warmer for the hours before bed) fills in the values with one click. |
+| Brightness by time of day, with presets | ● Ready | Tested on a laptop panel. Presets or your own times (clock, or sunrise/sunset ± minutes), optionally gradual. Applied once per point: a level you pick stands until the next one, and restarts or sleeping through a point don't repeat or miss it. The tray tooltip and panel show the level now and the next change. |
 | Laptop panel brightness | ● Ready | Through WMI. Never goes fully dark. |
 | Remember brightness | ● Ready | Tested on a laptop panel: restored after start and waking, as Twinkle Tray does. Displays are told apart by their EDID serial number, so identical monitors keep separate levels; levels saved by earlier betas carry over. |
 | Compatible displays list and compatibility report | ● Ready | Settings > Displays lists each display, its connection and how its brightness is controlled (DDC/CI, WMI, SDR level, software dimming or none, with why); the report can be copied or saved, or printed with `--report`. Sends nothing to the displays. |
-| Pause night light for apps and fullscreen | ● Ready | Tested on a laptop: a listed app or a fullscreen window in front pauses it on that display only (the panel says which), also when already in front at start, and it fades back when the app is minimized, closed or left. As f.lux's "disable for": only on the display showing the app, fading out and back in. |
+| Pause night light for apps and fullscreen | ● Ready | Two separate switches: any fullscreen app, or only the apps you choose (in front, fullscreen or not). Tested on a laptop: it pauses on that display only (the panel says which), also when already in front at start, and fades back when the app is minimized, closed or left. As f.lux's "disable for". |
 | Command line (`winlight-cli`) | ● Ready | Tested installed, from PATH: list, get and set brightness per display (by number, name or part of an id) or all, relative changes, showing the panel after a change, night light on/off/toggle/auto, refresh, diagnostics, JSON output, exit codes, output to files and pipes, names in any script, many calls at once. |
 | Keep each display's color calibration | ● Ready | Optional, in Settings > Displays. Tested on a laptop: when Windows drops a calibration (the screen turning off and on, waking, or before Winlight started), it is put back, with night light on top; a new calibration is taken up. |
 | Rename and hide displays | ● Ready | Keyed by the display's id, so names follow it between ports; names saved by beta 3 and 4 still apply. |
-| One-click diagnostics, crash safe mode | ● Ready (safe mode: ◐) | "Report a Problem…" saves a zip and copies a summary (tested). A display whose DDC/CI crashed or hung the app is skipped until retried: tested with a real crash of a child process, but not yet with a real DDC/CI monitor. |
+| One-click diagnostics, crash safe mode | ● Ready (safe mode: ◐) | "Report a Problem…" saves a zip and copies a summary (tested); the zip is deleted after 7 days and the summary cleared from the clipboard after 10 minutes. A display whose DDC/CI crashed or hung the app is skipped until retried: tested with a real crash of a child process, but not yet with a real DDC/CI monitor. |
 | Private logs and reports | ● Ready | Tested on real logs, probe and diagnostics: user name, computer name, home folder and emails are scrubbed, display serials shortened, and no location, time zone, custom names or listed app names are written. |
 | Never steals focus from fullscreen games | ● Ready | Windows' "don't interrupt" state and fullscreen detection (both tested) keep Winlight from opening windows on its own over a game, video or presentation. |
 | External monitor brightness over DDC/CI | ◐ In testing | The Windows API bindings and their error handling are verified on Windows; a real DDC/CI monitor hasn't been driven yet. Monitors that hang are given up on after a few seconds and left alone, without affecting the others (see [docs/windows-notes.md](docs/windows-notes.md)). |
@@ -54,9 +54,9 @@ Brightness and night light for every display on Windows: external monitors, TVs 
 | Night light back at once after unlock and sleep | ◐ In testing | Windows' unlock, wake and display-on messages reach the app (tested with messages sent to its window), and a ramp Windows resets is put back within 1.5 s (tested). A real lock and sleep cycle hasn't been timed yet. |
 | Windows Night Light notice | ◐ In testing | Detects Windows Night Light from its registry state (undocumented; reading "off" is verified) and offers to open its setting. |
 | Laptop brightness keys move external displays too | ◐ In testing | Optional. Follows the laptop panel's level rather than intercepting the keys; needs an external display to try. |
-| Dim when idle | ◐ In testing | Optional: displays dim after a few minutes without input and come back on the first key or mouse move. Not while a video, game or presentation keeps the screen on. External displays dim in software (no DDC/CI writes), the laptop panel through Windows (saving power), HDR displays through their SDR brightness or not at all. Its parts are verified on a laptop; a real idle cycle hasn't been run. |
+| Dim when idle | ◐ In testing | Optional: displays dim after a few minutes without input and come back on the first key or mouse move. Not while an app keeps the screen on (videos, calls, presentations), a game runs exclusive fullscreen, or an app you list is in front; a window that only fills the screen no longer stops it. External displays dim in software (no DDC/CI writes), the laptop panel through Windows (saving power), HDR displays through their SDR brightness or not at all. Its parts are verified on a laptop; a real idle cycle hasn't been run. |
 | Multi-display detection, hotplug and sleep | ◐ In testing | Sleep, waking and displays turning off are handled from Windows' own notifications, with re-detection over two minutes after waking, each pass logged with its timing. Plugging monitors in and out, and a real sleep cycle, need testing with external monitors. |
-| Start at sign-in, start minimized | ● Ready | The current user's Run registry key; no administrator rights. |
+| Start at sign-in, start minimized | ● Ready | On by default: the installer adds the entry (the current user's Run key, no administrator rights), and the setting switches it on and off as Task Manager does. Winlight no longer rewrites the entry at every start, which Microsoft Defender flagged in beta 5. |
 | Installer, portable zip, uninstaller | ● Ready | Per-user, built by GitHub Actions. |
 
 ## Goals
@@ -159,7 +159,7 @@ Display numbers are the order in the panel and in `--list`. Changes fade rather 
 
 ## Reporting a problem
 
-Right-click the tray icon and choose **Report a Problem…**. Winlight saves a `Winlight-diagnostics-….zip` to your Desktop (logs, settings, and what it knows about each display) and copies a summary to the clipboard.
+Right-click the tray icon and choose **Report a Problem…**. Winlight saves a `Winlight-diagnostics-….zip` to your Desktop (logs, settings, and what it knows about each display) and copies a summary to the clipboard. It deletes the zip after 7 days, and clears the summary from the clipboard after 10 minutes if it's still there.
 
 Reports are meant to be posted publicly, so nothing personal goes in: your user name, computer name, home folder and email addresses are replaced with placeholders in every file, and your location, city, custom display names and the names of apps you listed aren't included at all. The same goes for the log file itself. Open an [issue](https://github.com/Arnie14/Night-Light-Windows/issues), paste the summary and attach the zip.
 
@@ -170,7 +170,7 @@ Get the latest build from [Releases](https://github.com/Arnie14/Night-Light-Wind
 - **`Winlight-<version>-setup.exe`**: installs for your user only (no administrator rights), with a Start menu entry and an uninstaller.
 - **`Winlight-<version>-portable.zip`**: unzip anywhere and run `Winlight.exe`.
 
-Builds are beta and not yet code-signed, so Windows SmartScreen may show "Windows protected your PC". Choose **More info → Run anyway**. External monitors need DDC/CI switched on in their own on-screen menu.
+Builds are beta and not yet code-signed, so Windows SmartScreen may show "Windows protected your PC". Choose **More info → Run anyway**. Microsoft Defender flagged beta 5 (`Behavior:Win32/Persistence.A!ml`) because it rewrote its start-up entry at every start; beta 6 doesn't. If Defender flags a build, please [submit it to Microsoft as a false positive](https://www.microsoft.com/wdsi/filesubmission) and open an issue. External monitors need DDC/CI switched on in their own on-screen menu.
 
 ## Getting Started (from source)
 

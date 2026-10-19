@@ -225,7 +225,7 @@ Brightness options, in Settings > Brightness:
 
 Pausing night light (Settings > Night Light > Pause night light):
 
-- [ ] Tick "While an app is fullscreen": a fullscreen video (browser F11, or a player) and a game, borderless and exclusive fullscreen, each fade their display to normal colors within about half a second; the other displays stay warm. Leaving fullscreen fades it back. Note any game that isn't detected.
+- [ ] Turn on "Pause for any fullscreen app": a fullscreen video (browser F11, or a player) and a game, borderless and exclusive fullscreen, each fade their display to normal colors within about half a second; the other displays stay warm. Leaving fullscreen fades it back. Note any game that isn't detected.
 - [ ] Add an app with "Add an app" (it lists running apps) and with "Browse for an app…": switching to it pauses night light on its display; switching away resumes it.
 - [ ] The panel and the tray tooltip say "Paused for …" meanwhile.
 - [ ] Nothing flashes or jumps: starting the app at night fades in, Quit fades out quickly, pausing and resuming fade.

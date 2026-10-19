@@ -26,6 +26,8 @@ log = logging.getLogger(__name__)
 CONFIG_VERSION = 1
 MAX_TRANSITION_MINUTES = 600
 MAX_IDLE_MINUTES = 240
+MAX_SOLAR_TRANSITION_MINUTES = 120
+THEMES = ("system", "light", "dark")
 
 
 class Mode(StrEnum):
@@ -51,7 +53,11 @@ class NightLightConfig:
     # Pause night light on the display showing these apps (f.lux's "disable
     # for" list): lower-case executable names such as "photoshop.exe".
     exempt_apps: tuple[str, ...] = ()
-    exempt_fullscreen: bool = False  # pause it on a display while an app is fullscreen there (games, video)
+    exempt_fullscreen: bool = False  # pause it on a display while any app is fullscreen there (games, video)
+    pause_for_apps: bool = True  # pause it for exempt_apps (a switch of its own; the list is kept while off)
+    # Sunrise and sunset: how long the change takes. -1 follows twilight
+    # (sunset to civil dusk, dawn to sunrise, about 30 min); 0 is instant.
+    solar_transition_minutes: int = -1
 
     def normalized(self) -> NightLightConfig:
         defaults = NightLightConfig()
@@ -65,12 +71,13 @@ class NightLightConfig:
             latitude=_clamp(self.latitude, -90.0, 90.0),
             longitude=_clamp(self.longitude, -180.0, 180.0),
             exempt_apps=tuple(sorted({app.strip().lower() for app in self.exempt_apps if app.strip()})),
+            solar_transition_minutes=-1 if self.solar_transition_minutes < 0 else _clamp(self.solar_transition_minutes, 0, MAX_SOLAR_TRANSITION_MINUTES),
         )
 
 
 @dataclass(frozen=True)
 class GeneralConfig:
-    start_with_windows: bool = False  # start when the user signs in
+    start_with_windows: bool = True  # start when the user signs in
     start_minimized: bool = True  # start in the tray only, without opening the settings
     remember_brightness: bool = True  # restore each monitor's level after start, sleep and reconnecting
     link_brightness: bool = False  # one slider moves every monitor's brightness
@@ -85,13 +92,23 @@ class GeneralConfig:
     idle_dim: bool = False
     idle_minutes: int = 5
     idle_level: int = 20
+    # Never dim for idle while one of these apps is in front (a call, a video
+    # in a player that doesn't keep the screen on): lower-case exe names.
+    idle_exempt_apps: tuple[str, ...] = ()
     # Put each display's color calibration back when Windows drops it (e.g.
     # after the screen turns off and on), as calibration loaders do.
     keep_calibration: bool = False
+    theme: str = "system"  # "system" (follow Windows), "light" or "dark"
 
     def normalized(self) -> GeneralConfig:
         # The same ranges as the settings window's fields.
-        return replace(self, idle_minutes=_clamp(self.idle_minutes, 1, MAX_IDLE_MINUTES), idle_level=_clamp(self.idle_level, 0, 100))
+        return replace(
+            self,
+            idle_minutes=_clamp(self.idle_minutes, 1, MAX_IDLE_MINUTES),
+            idle_level=_clamp(self.idle_level, 0, 100),
+            idle_exempt_apps=tuple(sorted({app.strip().lower() for app in self.idle_exempt_apps if app.strip()})),
+            theme=self.theme if self.theme in THEMES else "system",
+        )
 
 
 class Anchor(StrEnum):
@@ -278,6 +295,7 @@ def _to_json(config: AppConfig) -> dict:
     data = asdict(config)
     data["displays"] = {d.key: {"name": d.name, "hidden": d.hidden} for d in config.displays}
     data["night_light"]["exempt_apps"] = list(config.night_light.exempt_apps)
+    data["general"]["idle_exempt_apps"] = list(config.general.idle_exempt_apps)
     data["brightness_schedule"]["points"] = [asdict(p) for p in config.brightness_schedule.points]
     return data
 

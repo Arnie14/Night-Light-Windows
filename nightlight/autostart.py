@@ -3,13 +3,23 @@
 
 On Windows this is a value under the current user's
 HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run key, as Monitorian,
-Twinkle Tray and most tray apps do: no administrator rights needed, and it
+Twinkle Tray and most tray apps use: no administrator rights needed, and it
 shows up in Task Manager's Startup tab. On Linux (for development) it is an
 XDG autostart .desktop file.
 
-The settings file is the source of truth: at every start the app re-writes
-or removes the entry to match it, so moving the app's folder or switching
-Python installs doesn't leave a stale command behind.
+The installer creates the Run value (its "Start Winlight when I sign in"
+task, ticked by default) and the uninstaller removes it. The app itself
+only turns the entry on and off the way Task Manager does, through
+Explorer's StartupApproved\\Run key, and it never touches either key at
+start. Beta 5 rewrote the Run value at every start, and Microsoft Defender's
+behavior monitoring took that, from an unsigned program, for malware
+setting itself up to persist (Behavior:Win32/Persistence.A!ml), then
+quarantined the app. The Run value is written by the app only when the user
+turns the setting on and there is none for this program (the portable zip,
+or the task unticked at install).
+
+The registry is the source of truth: the installer, Task Manager or the
+Settings app may change it, so the app reads it at start (read()).
 """
 
 from __future__ import annotations
@@ -17,8 +27,10 @@ from __future__ import annotations
 import logging
 import os
 import shlex
+import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -28,6 +40,11 @@ log = logging.getLogger(__name__)
 
 APP_ID = APP_NAME  # the value's name in the Run key
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+# Task Manager's on/off switch for each Run value: 12 bytes, an odd first
+# byte meaning disabled, then when it was disabled. No value means enabled.
+APPROVED_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+DISABLED = 0x03
+_FILETIME_EPOCH = 11644473600  # seconds from 1601 to 1970
 
 
 def launch_command() -> list[str]:
@@ -41,6 +58,17 @@ def launch_command() -> list[str]:
         python = windowless
     main = Path(__file__).resolve().parent.parent / "main.py"
     return [str(python), str(main)]
+
+
+def disabled_value(now: float | None = None) -> bytes:
+    """StartupApproved data for "disabled", as Task Manager writes it."""
+    filetime = int(((time.time() if now is None else now) + _FILETIME_EPOCH) * 10_000_000)
+    return struct.pack("<IQ", DISABLED, filetime)
+
+
+def _arguments(command: str) -> list[str]:
+    """A Run value's command split into its parts, for comparing paths."""
+    return [os.path.normcase(part.strip('"')) for part in shlex.split(command, posix=False)]
 
 
 class Autostart(Protocol):
@@ -61,22 +89,45 @@ class WindowsAutostart:
         return self._command
 
     def is_enabled(self) -> bool:
-        try:
-            with self._reg.OpenKey(self._reg.HKEY_CURRENT_USER, RUN_KEY) as key:
-                self._reg.QueryValueEx(key, APP_ID)
-                return True
-        except OSError:
-            return False
+        return self._run_value() is not None and self._approved()
 
     def set_enabled(self, enabled: bool) -> None:
-        with self._reg.CreateKeyEx(self._reg.HKEY_CURRENT_USER, RUN_KEY, 0, self._reg.KEY_SET_VALUE) as key:
-            if enabled:
-                self._reg.SetValueEx(key, APP_ID, 0, self._reg.REG_SZ, self._command)
-            else:
+        reg = self._reg
+        if enabled:
+            value = self._run_value()
+            if value is None or _arguments(value) != _arguments(self._command):
+                # None for this program (portable, or unticked at install),
+                # or one for a copy somewhere else: only ever on the user's say.
+                with reg.CreateKeyEx(reg.HKEY_CURRENT_USER, RUN_KEY, 0, reg.KEY_SET_VALUE) as key:
+                    reg.SetValueEx(key, APP_ID, 0, reg.REG_SZ, self._command)
+                log.info("Added %s to the programs that start at sign-in", APP_NAME)
+            if not self._approved():
                 try:
-                    self._reg.DeleteValue(key, APP_ID)
+                    with reg.OpenKey(reg.HKEY_CURRENT_USER, APPROVED_KEY, 0, reg.KEY_SET_VALUE) as key:
+                        reg.DeleteValue(key, APP_ID)
                 except FileNotFoundError:
                     pass
+        elif self.is_enabled():
+            # Off as Task Manager does it: the Run value stays, so turning it
+            # back on is no new start-up entry.
+            with reg.CreateKeyEx(reg.HKEY_CURRENT_USER, APPROVED_KEY, 0, reg.KEY_SET_VALUE) as key:
+                reg.SetValueEx(key, APP_ID, 0, reg.REG_BINARY, disabled_value())
+
+    def _run_value(self) -> str | None:
+        try:
+            with self._reg.OpenKey(self._reg.HKEY_CURRENT_USER, RUN_KEY) as key:
+                value, _kind = self._reg.QueryValueEx(key, APP_ID)
+                return str(value)
+        except OSError:
+            return None
+
+    def _approved(self) -> bool:
+        try:
+            with self._reg.OpenKey(self._reg.HKEY_CURRENT_USER, APPROVED_KEY) as key:
+                data, _kind = self._reg.QueryValueEx(key, APP_ID)
+        except OSError:
+            return True  # Explorer starts entries it has no switch for
+        return not (isinstance(data, bytes) and data and data[0] & 1)
 
 
 class XdgAutostart:
@@ -109,12 +160,25 @@ def create() -> Autostart | None:
     return None
 
 
-def sync(autostart: Autostart | None, enabled: bool) -> None:
-    """Make the sign-in entry match the setting; failures are logged, not raised."""
+def read(autostart: Autostart | None) -> bool | None:
+    """Whether the app starts at sign-in now, or None if that can't be told.
+    Only reads: nothing is written at start."""
+    if autostart is None:
+        return None
+    try:
+        return autostart.is_enabled()
+    except OSError:
+        log.warning("Could not tell whether %s starts at sign-in", APP_NAME, exc_info=True)
+        return None
+
+
+def change(autostart: Autostart | None, enabled: bool) -> None:
+    """Turn starting at sign-in on or off, when the user changes the setting;
+    failures are logged, not raised."""
     if autostart is None:
         return
     try:
-        if enabled or autostart.is_enabled():
+        if autostart.is_enabled() != enabled:
             autostart.set_enabled(enabled)
     except OSError:
         log.warning("Could not %s starting at sign-in", "turn on" if enabled else "turn off", exc_info=True)

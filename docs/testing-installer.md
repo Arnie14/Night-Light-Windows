@@ -9,13 +9,13 @@ Tell us your setup in the issue: Windows version, laptop or desktop, and each di
 ## 1. Install
 
 - [ ] Run `Winlight-<version>-setup.exe`. If SmartScreen says "Windows protected your PC", choose **More info → Run anyway** (the beta isn't code-signed yet).
-- [ ] No administrator prompt appears. Optionally tick "Add winlight-cli to PATH".
+- [ ] No administrator prompt appears. "Start Winlight when I sign in" is ticked; optionally tick "Add winlight-cli to PATH".
 - [ ] At the end, "Launch Winlight" starts it: a sun or moon icon appears in the tray (check the ^ overflow area), and no console window opens.
 
 ## 2. The panel
 
 - [ ] Click the tray icon: the panel opens above the taskbar, fully on screen, with a slider for each display.
-- [ ] Hover over the icon: the tooltip says "Winlight" and the night light status.
+- [ ] Hover over the icon: the tooltip says "Winlight" and the night light status, and the brightness schedule's level while that schedule is on.
 - [ ] Drag each slider: the display's brightness follows while you drag.
   - A display that says **Software dimming** gets darker by dimming its colors (normal for TVs).
   - One that says **HDR · SDR content brightness** changes Windows' SDR brightness.
@@ -30,8 +30,10 @@ In the panel, click ⚙ (Settings):
 - [ ] Drag the night light temperature: the screen previews it while you drag.
 - [ ] **Lock** the PC (Win+L) and unlock it: night light is back at once, without a visible flash of normal colors.
 - [ ] **Sleep** the PC and wake it: same.
-- [ ] Settings → Night Light → under **Pause night light**, turn on **While an app is fullscreen**, Apply. Play a video fullscreen or start a game: that display fades to normal colors, the others stay warm. Leave fullscreen: it fades back.
-- [ ] Add an app under **For these apps** (e.g. your photo editor), Apply, and switch to it: the same happens while it's in front.
+- [ ] Open Settings from the tray menu and from the panel, in dark mode: no white flash. Maximize the window, then click the same button again: it goes back to its smaller size.
+- [ ] With **Sunrise and sunset at location**, change **Transition duration** (twilight, none, or 5 to 120 minutes), Apply: the times listed under the temperatures change to match.
+- [ ] Settings → Night Light → under **Pause night light**, turn on **Pause for any fullscreen app**, Apply. Play a video fullscreen or start a game: that display fades to normal colors, the others stay warm. Leave fullscreen: it fades back.
+- [ ] Turn that off, turn on **Pause for chosen apps**, add an app (e.g. your photo editor), Apply, and switch to it: the same happens while it's in front, fullscreen or not; other fullscreen apps keep night light.
 - [ ] With a game or video fullscreen, start Winlight again from the Start menu: nothing pops up over it, and the game keeps focus.
 - [ ] Switch back to your usual schedule (custom times or sunset/sunrise).
 
@@ -44,7 +46,7 @@ In the panel, click ⚙ (Settings):
 - [ ] Settings → Displays → turn on **Keep each display's color calibration**, Apply (on a display with a calibration loaded). Let the screen turn off and wake it: the calibration is back at once (with night light on top), rather than flat colors until you sign in again.
 - [ ] Settings → **Displays**: each display is listed with how its brightness is controlled; **Copy report** puts the compatibility report on the clipboard. Under **Names and visibility**, rename one, untick "Show in panel" for another, Apply. The panel uses the new name and leaves out the hidden one.
 - [ ] Laptop with an external monitor: turn on **Follow the laptop's brightness keys**, Apply, and press the brightness keys: the external monitor follows within about 2 seconds.
-- [ ] Under **When I'm away**, turn on **Dim displays when I'm away**, set **After** 1 min and **Dim to** 20 %, Apply, and leave the PC alone: after a minute the displays fade down; move the mouse and they come back. Play a video and leave it: nothing dims.
+- [ ] Under **When I'm away**, turn on **Dim displays when I'm away**, set **After** 1 min and **Dim to** 20 %, Apply, and leave the PC alone: after a minute the displays fade down; move the mouse and they come back. Play a video and leave it: nothing dims. Open a web page in fullscreen (F11) and leave it: the displays dim. Add an app under **Never dim while these apps are in front** and leave it in front: nothing dims.
 - [ ] Sleep the PC for a few minutes with a monitor connected, wake it, and wait 2 minutes before **Report a Problem…**: the summary's "Last wake from sleep" section shows when each display answered again.
 
 ## 5. Command line (optional)
@@ -58,7 +60,8 @@ In a new terminal (or use the full path `%LOCALAPPDATA%\Programs\Winlight\winlig
 
 ## 6. Startup, upgrade, uninstall
 
-- [ ] Settings → General → **Start Winlight when I sign in**, Apply. Sign out and in: Winlight starts in the tray only.
+- [ ] Settings → General → **Start Winlight when I sign in** is on. Sign out and in: Winlight starts in the tray only. Turn it off, Apply: Task Manager → Startup apps shows Winlight as Disabled. Microsoft Defender doesn't flag or quarantine Winlight (Windows Security → Protection history).
+- [ ] Settings → General → **Theme**: Light and Dark change Winlight's windows at once; Follow Windows goes back to Windows' choice.
 - [ ] With night light on, run the installer again: Winlight closes itself, colors go back to normal, and your settings are kept after it starts again.
 - [ ] Uninstall (Settings → Apps → Winlight): Winlight closes first and colors return to normal. It's gone from the Start menu, and from Task Manager → Startup apps.
 

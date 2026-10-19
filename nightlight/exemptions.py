@@ -30,7 +30,7 @@ def paused_displays(app: ForegroundApp | None, config: NightLightConfig) -> dict
     """Display -> reason, for the display where night light should pause."""
     if app is None or not app.display:
         return {}
-    if app.exe and app.exe in config.exempt_apps:
+    if config.pause_for_apps and app.exe and app.exe in config.exempt_apps:
         return {app.display: app.exe}
     if config.exempt_fullscreen and app.fullscreen:
         return {app.display: f"{app.exe or 'an app'}{FULLSCREEN}"}
@@ -53,7 +53,7 @@ class ForegroundWatcher(QObject):
 
     def set_config(self, config: NightLightConfig) -> None:
         self._config = config
-        if config.exempt_apps or config.exempt_fullscreen:
+        if (config.pause_for_apps and config.exempt_apps) or config.exempt_fullscreen:
             self._timer.start()
             self.check()
         else:

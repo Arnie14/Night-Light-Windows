@@ -46,6 +46,7 @@ RestartApplications=no
 ChangesEnvironment=yes
 
 [Tasks]
+Name: "startup"; Description: "Start Winlight when I sign in (recommended)"; GroupDescription: "Startup:"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "addtopath"; Description: "Add winlight-cli to PATH, to control Winlight from scripts and the command line"; GroupDescription: "Command line:"; Flags: unchecked
 
@@ -58,6 +59,11 @@ Name: "{autoprograms}\Winlight"; Filename: "{app}\Winlight.exe"; AppUserModelID:
 Name: "{autodesktop}\Winlight"; Filename: "{app}\Winlight.exe"; AppUserModelID: "Winlight.Winlight"; Tasks: desktopicon
 
 [Registry]
+; Starting at sign-in. The installer writes this value, not the app: an
+; unsigned program adding itself to the Run key looks like malware setting
+; itself up to persist to Microsoft Defender (Behavior:Win32/Persistence.A!ml).
+; The app's setting only switches it on and off, as Task Manager does.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Winlight"; ValueData: """{app}\Winlight.exe"""; Flags: uninsdeletevalue; Tasks: startup
 ; The user's own PATH, so no administrator rights are needed; removed again on uninstall.
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NotOnPath(ExpandConstant('{app}'))
 
@@ -67,6 +73,7 @@ Filename: "{app}\Winlight.exe"; Description: "{cm:LaunchProgram,Winlight}"; Flag
 [Code]
 const
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  ApprovedKey = 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run';
   EnvKey = 'Environment';
 
 function NotOnPath(Dir: String): Boolean;
@@ -118,16 +125,28 @@ begin
   Result := '';
 end;
 
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  { Unticked on an upgrade: an earlier install's (or version's) entry goes. }
+  if (CurStep = ssPostInstall) and not WizardIsTaskSelected('startup') then
+  begin
+    RegDeleteValue(HKEY_CURRENT_USER, RunKey, 'Winlight');
+    RegDeleteValue(HKEY_CURRENT_USER, ApprovedKey, 'Winlight');
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
     QuitRunningCopy(ExpandConstant('{app}\Winlight.exe'));
-  { The app writes this value when "Start Winlight when I sign in" is on;
-    don't leave it pointing at a deleted program. Settings in
-    %LOCALAPPDATA%\night-light are kept, as most apps do. }
+  { Don't leave a start-up entry pointing at a deleted program, nor its
+    on/off switch (the app may have written both, for the portable zip or
+    an older version). Settings in %LOCALAPPDATA%\night-light are kept, as
+    most apps do. }
   if CurUninstallStep = usPostUninstall then
   begin
     RegDeleteValue(HKEY_CURRENT_USER, RunKey, 'Winlight');
+    RegDeleteValue(HKEY_CURRENT_USER, ApprovedKey, 'Winlight');
     RemoveFromPath(ExpandConstant('{app}'));
   end;
 end;

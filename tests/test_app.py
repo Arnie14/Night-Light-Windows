@@ -63,11 +63,47 @@ def test_start_not_minimized_opens_settings(start):
     assert night_light._settings is not None and night_light._settings.isVisible()
 
 
-def test_sign_in_entry_follows_the_setting(start):
-    night_light, entry = start(GeneralConfig(start_with_windows=True))
-    assert entry.enabled  # written at startup
+class CountingAutostart(RecordingAutostart):
+    def __init__(self, enabled):
+        self.enabled = enabled
+        self.writes = 0
+
+    def set_enabled(self, enabled):
+        self.writes += 1
+        self.enabled = enabled
+
+
+@pytest.mark.parametrize("in_windows", [True, False])
+def test_start_only_reads_the_sign_in_entry(start, monkeypatch, in_windows):
+    """Writing it at every start set off Defender: Windows' state is taken
+    into the settings instead (the installer or Task Manager may change it)."""
+    entry = CountingAutostart(in_windows)
+    monkeypatch.setattr(app_module.autostart, "create", lambda: entry)
+    night_light, _ = start(GeneralConfig(start_with_windows=not in_windows))
+    assert entry.writes == 0
+    assert night_light._config.general.start_with_windows is in_windows
+
+
+def test_sign_in_entry_changes_only_with_the_setting(start, monkeypatch):
+    entry = CountingAutostart(True)
+    monkeypatch.setattr(app_module.autostart, "create", lambda: entry)
+    night_light, _ = start(GeneralConfig(start_with_windows=True))
+    night_light._apply_settings(AppConfig(general=GeneralConfig(start_with_windows=True, link_brightness=True)))
+    assert entry.writes == 0  # an unrelated change touches nothing
     night_light._apply_settings(AppConfig(general=GeneralConfig(start_with_windows=False)))
-    assert not entry.enabled
+    assert not entry.enabled and entry.writes == 1
+    night_light._apply_settings(AppConfig(general=GeneralConfig(start_with_windows=True)))
+    assert entry.enabled and entry.writes == 2
+
+
+def test_settings_show_the_sign_in_state_windows_has_now(start, monkeypatch):
+    entry = CountingAutostart(True)
+    monkeypatch.setattr(app_module.autostart, "create", lambda: entry)
+    night_light, _ = start(GeneralConfig(start_with_windows=True))
+    entry.enabled = False  # turned off in Task Manager while running
+    night_light.show_settings()
+    assert not night_light._settings.start_with_windows.isChecked()
+    assert entry.writes == 0
 
 
 def test_brightness_settings_reach_the_memory_and_flyout(start):
@@ -422,3 +458,58 @@ def test_the_command_line_can_show_the_panel_after_a_change(start, monkeypatch):
     assert replies[-1]["ok"] and shown == [True]
     night_light.handle_request({"command": "set", "value": "50", "display": "nope", "panel": True}, replies.append)
     assert not replies[-1]["ok"] and shown == [True]  # a failed command doesn't pop the panel up
+
+
+@pytest.mark.parametrize(
+    ("display_required", "exclusive", "front", "listed", "held"),
+    [
+        (False, False, ("msedge.exe", True), (), False),  # a browser merely fullscreen: beta 5 never dimmed here
+        (True, False, ("msedge.exe", True), (), True),  # a video playing keeps the screen on
+        (False, True, ("game.exe", True), (), True),  # exclusive fullscreen game
+        (False, False, ("teams.exe", False), ("teams.exe",), True),  # listed, in front
+        (False, False, ("notepad.exe", False), ("teams.exe",), False),
+        (False, False, None, ("teams.exe",), False),
+    ],
+)
+def test_what_holds_idle_dimming(start, monkeypatch, display_required, exclusive, front, listed, held):
+    from nightlight.hardware.winsystem import ForegroundApp
+
+    night_light, _ = start(GeneralConfig(idle_dim=True, idle_exempt_apps=listed))
+    monkeypatch.setattr(app_module.winsystem, "display_required", lambda: display_required)
+    monkeypatch.setattr(app_module.winsystem, "exclusive_fullscreen", lambda: exclusive)
+    app = ForegroundApp(front[0], r"\\.\DISPLAY1", front[1]) if front else None
+    monkeypatch.setattr(app_module.winsystem, "foreground_app", lambda: app)
+    monkeypatch.setattr(app_module.winsystem, "user_busy", lambda: True)  # no longer what decides
+    assert night_light._idle_held() is held
+
+
+def test_the_theme_is_applied(start, monkeypatch):
+    applied = []
+    monkeypatch.setattr(app_module.theme, "apply", applied.append)
+    night_light, _ = start(GeneralConfig(theme="dark"))
+    assert applied[-1] == "dark"
+    night_light._apply_settings(AppConfig(general=GeneralConfig(theme="light")))
+    assert applied[-1] == "light"
+
+
+def test_report_a_problem_clears_its_summary_from_the_clipboard_later(start, monkeypatch, tmp_path):
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QMessageBox
+
+    night_light, _ = start(GeneralConfig())
+    monkeypatch.setattr(app_module.diagnostics, "write_bundle", lambda sources: (tmp_path / "Winlight-diagnostics-x.zip", "the summary"))
+    timers = []
+    monkeypatch.setattr(app_module.QTimer, "singleShot", lambda ms, *target: timers.append((ms, target[-1])))
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text() + self.informativeText()))
+    shown = []
+    night_light.report_problem()
+    clipboard = QGuiApplication.clipboard()
+    assert clipboard.text() == "the summary"
+    assert "deleted after 7 days" in shown[0] and "Diagnostics saved" in shown[0]
+    ms, clear = next(timer for timer in timers if timer[0] == 10 * 60_000)
+    clear()
+    assert clipboard.text() == ""
+    clipboard.setText("something the user copied since")
+    clear()
+    assert clipboard.text() == "something the user copied since"  # not ours: left alone
+    clipboard.clear()

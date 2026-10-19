@@ -164,3 +164,54 @@ def test_next_transition_for_override_menus():
     config = NightLightConfig(enabled=True, mode=Mode.ALWAYS, night_start="20:00", day_start="06:00")
     assert next_transition(config, at(12), to_night=True).start == at(20)
     assert next_transition(config, at(12), to_night=False).start == at(6, day=16)
+
+
+def solar_day(minutes):
+    config = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=50.45, longitude=30.52, solar_transition_minutes=minutes)
+    now = datetime(2025, 5, 25, 12, 0, tzinfo=KYIV_SUMMER)
+    return [t for t in schedule_around(config, now) if t.start.date() == now.date()]
+
+
+@pytest.mark.parametrize("minutes", [5, 30, 60, 120])
+def test_a_chosen_solar_transition_length(minutes):
+    """Evening from sunset, morning ending at sunrise (Kyiv, 2025-05-25:
+    sunrise 04:57:31, sunset 20:52:16, knighttime's values)."""
+    morning, evening = solar_day(minutes)
+    day = datetime(2025, 5, 25, tzinfo=KYIV_SUMMER)
+    sunrise, sunset = day.replace(hour=4, minute=57, second=31), day.replace(hour=20, minute=52, second=16)
+    assert abs(morning.end - sunrise) < timedelta(minutes=2) and abs(evening.start - sunset) < timedelta(minutes=2)
+    assert morning.end - morning.start == timedelta(minutes=minutes)
+    assert evening.end - evening.start == timedelta(minutes=minutes)
+
+
+def test_an_instant_solar_switch():
+    morning, evening = solar_day(0)
+    assert morning.start == morning.end and evening.start == evening.end
+    config = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=50.45, longitude=30.52, solar_transition_minutes=0)
+    just_after = evening.start + timedelta(seconds=30)
+    assert compute_state(config, just_after).temperature == config.night_temperature
+
+
+def test_twilight_is_the_default():
+    assert NightLightConfig().solar_transition_minutes == -1
+    assert solar_day(-1) == [t for t in schedule_around(
+        NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=50.45, longitude=30.52),
+        datetime(2025, 5, 25, 12, 0, tzinfo=KYIV_SUMMER)) if t.start.date() == datetime(2025, 5, 25).date()]
+
+
+def test_solar_transition_lengths_are_clamped():
+    assert NightLightConfig(solar_transition_minutes=-7).normalized().solar_transition_minutes == -1
+    assert NightLightConfig(solar_transition_minutes=999).normalized().solar_transition_minutes == 120
+
+
+@pytest.mark.parametrize("zone", ["America/New_York", "America/Los_Angeles", "Pacific/Auckland", "Asia/Kolkata"])
+def test_twilight_never_ends_before_it_begins_far_from_the_place(zone):
+    """Kyiv's schedule on a PC in another zone: dawn and sunrise can fall on
+    either side of midnight there. Beta 5 then paired dawn with the next
+    day's sunrise, and the morning change "ended" 23 hours before it began."""
+    config = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=50.45, longitude=30.52)
+    for day in range(1, 29, 3):
+        now = datetime(2026, 10, day, 12, 0, tzinfo=ZoneInfo(zone))
+        for transition in schedule_around(config, now):
+            assert transition.start <= transition.end, (zone, transition)
+            assert transition.end - transition.start < timedelta(hours=2), (zone, transition)

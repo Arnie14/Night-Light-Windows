@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, QTimeZone, QUrl
@@ -26,6 +27,7 @@ from nightlight.hardware.gamma import GammaBackend
 from nightlight.idle_dim import IdleDimmer
 from nightlight.monitors import MonitorManager
 from nightlight.safe_mode import SafeMode
+from nightlight.ui import reveal, theme
 from nightlight.ui.flyout import Flyout
 from nightlight.ui.settings_window import SettingsWindow
 from nightlight.ui.tray import Tray
@@ -47,6 +49,10 @@ WINDOWS_NIGHT_LIGHT_CHECK_MS = 10_000
 # How often to look whether the time zone changed (travel, or changed by
 # hand), besides when Windows reports a clock change.
 ZONE_CHECK_MS = 60_000
+# Deleting old diagnostics zips: a while after start (out of start-up's
+# way), then once a day for an app left running.
+CLEANUP_DELAY_MS = 60_000
+CLEANUP_INTERVAL_MS = 24 * 3600_000
 
 
 def system_zone():
@@ -93,7 +99,7 @@ class NightLightApp:
             self.monitors,
             self.brightness_memory,
             winsystem.idle_seconds,
-            lambda: winsystem.display_required() or winsystem.user_busy(),
+            self._idle_held,
             self._hidden_keys,
             gamma,
             scheduler=self.scheduler,
@@ -104,8 +110,7 @@ class NightLightApp:
         self._settings: SettingsWindow | None = None
         self._windows_night_light: bool | None = None
         self._autostart = autostart.create()
-        # Re-write (or remove) the sign-in entry, in case the app has moved.
-        autostart.sync(self._autostart, self._config.general.start_with_windows)
+        self._read_autostart()  # only read: writing it at every start set off Defender
 
         has_tray = QSystemTrayIcon.isSystemTrayAvailable()
         # Wayland doesn't let apps position their own popups, so there the
@@ -113,6 +118,7 @@ class NightLightApp:
         as_window = not has_tray or QGuiApplication.platformName() == "wayland"
         self.flyout = Flyout(self.monitors, self.controller, as_window=as_window)
         self.flyout.configureRequested.connect(self.show_settings)
+        self.flyout.set_scheduler(self.scheduler)
 
         self._exemptions = ForegroundWatcher(winsystem.foreground_app, self._config.night_light)
         self._exemptions.pausedChanged.connect(self.controller.set_paused)
@@ -125,6 +131,7 @@ class NightLightApp:
         if has_tray:
             self.tray = Tray(self.controller)
             self.tray.display_name = self.flyout.display_name_of
+            self.tray.set_scheduler(self.scheduler)
             self.tray.flyoutRequested.connect(self._open_flyout)
             self.tray.configureRequested.connect(self.show_settings)
             self.tray.diagnosticsRequested.connect(self.report_problem)
@@ -162,6 +169,11 @@ class NightLightApp:
         self._zone_check = QTimer(interval=ZONE_CHECK_MS)
         self._zone_check.timeout.connect(self._check_zone)
         self._zone_check.start()
+        # Old Report a Problem zips go from the Desktop: at start, then daily.
+        self._cleanup = QTimer(interval=CLEANUP_INTERVAL_MS)
+        self._cleanup.timeout.connect(diagnostics.remove_old_bundles)
+        self._cleanup.start()
+        QTimer.singleShot(CLEANUP_DELAY_MS, diagnostics.remove_old_bundles)
 
         qapp.aboutToQuit.connect(self._shutdown)
         self.monitors.refresh()
@@ -186,8 +198,16 @@ class NightLightApp:
         self._check_windows_night_light()
         self.flyout.toggle(anchor)
 
+    def _read_autostart(self) -> None:
+        """Take "start when I sign in" from Windows: the installer, Task
+        Manager or Windows' Settings may have changed it."""
+        enabled = autostart.read(self._autostart)
+        if enabled is not None and enabled != self._config.general.start_with_windows:
+            self._config = replace(self._config, general=replace(self._config.general, start_with_windows=enabled))
+
     def show_settings(self) -> None:
         if self._settings is None:
+            self._read_autostart()
             self._settings = SettingsWindow(
                 self.controller,
                 self._config,
@@ -203,9 +223,7 @@ class NightLightApp:
         self._settings.set_windows_night_light(self._windows_night_light)
         if self.tray:
             self.flyout.hide()
-        self._settings.show()
-        self._settings.raise_()
-        self._settings.activateWindow()
+        reveal.show_window(self._settings)
 
     def compatibility(self) -> list[compat.CompatibilityEntry]:
         warmest = getattr(self._gamma, "warmest_accepted", dict)()
@@ -221,13 +239,21 @@ class NightLightApp:
         except OSError as exc:
             QMessageBox.warning(None, APP_NAME, f"Could not save the diagnostics: {exc}")
             return
-        QGuiApplication.clipboard().setText(text)
+        clipboard = QGuiApplication.clipboard()
+        clipboard.setText(text)
+        # Cleared later if it's still ours: nothing lingers on the clipboard.
+        QTimer.singleShot(diagnostics.CLIPBOARD_MINUTES * 60_000, lambda: clipboard.text() == text and clipboard.clear())
         box = QMessageBox(QMessageBox.Icon.Information, f"{APP_NAME}: Report a Problem", "")
-        box.setText(f"Saved <b>{path.name}</b> to {path.parent}, and copied a summary to the clipboard.")
-        box.setInformativeText("Describe what happened, paste the summary, and attach the file.")
-        show = box.addButton("Show the File", QMessageBox.ButtonRole.ActionRole)
+        box.setText(f"<b>Diagnostics saved</b><br>{path.name}, in your {path.parent.name} folder. A summary is on the clipboard.")
+        box.setInformativeText(
+            "To report the problem, open an issue on GitHub: describe what happened, paste the summary and attach the file.\n\n"
+            "Nothing personal is included (no names or location). The file is deleted after "
+            f"{diagnostics.KEEP_DAYS} days and the clipboard is cleared after {diagnostics.CLIPBOARD_MINUTES} minutes."
+        )
+        show = box.addButton("Show File", QMessageBox.ButtonRole.ActionRole)
         issue = box.addButton("Open GitHub Issues", QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Close)
+        reveal.fade_in(box)
         box.exec()
         if box.clickedButton() is show:
             _reveal(path)
@@ -273,6 +299,19 @@ class NightLightApp:
             return night_light.latitude, night_light.longitude
         return None
 
+    def _idle_held(self) -> bool:
+        """Whether not to dim for idle now. Not just because a window is
+        fullscreen (a browser or an editor can be): an app keeping the screen
+        on (videos, calls, presentations; Windows' display-required state),
+        an exclusive-fullscreen game, or an app the user listed in front."""
+        if winsystem.display_required() or winsystem.exclusive_fullscreen():
+            return True
+        listed = self._config.general.idle_exempt_apps
+        if listed:
+            app = winsystem.foreground_app()
+            return bool(app and app.exe in listed)
+        return False
+
     def _hidden_keys(self) -> frozenset[str]:
         """The connected displays the user hid (found under older keys too)."""
         return frozenset(m.key for m in self.monitors.monitors if self._config.hidden(m.key))
@@ -285,7 +324,8 @@ class NightLightApp:
         except OSError:
             log.exception("Could not save settings to %s", self._config_path)
         self.controller.set_config(new.night_light)
-        autostart.sync(self._autostart, new.general.start_with_windows)
+        if new.general.start_with_windows != old.general.start_with_windows:
+            autostart.change(self._autostart, new.general.start_with_windows)
         self.brightness_memory.set_enabled(new.general.remember_brightness)
         if keep := getattr(self._gamma, "set_keep_calibration", None):
             keep(new.general.keep_calibration)
@@ -306,6 +346,7 @@ class NightLightApp:
         self.brightness_memory.set_hidden(settings.hidden)
         self.scheduler.set_hidden(settings.hidden)
         self._exemptions.set_config(settings.night_light)
+        theme.apply(general.theme)
 
     # --- Events ---------------------------------------------------------------
 

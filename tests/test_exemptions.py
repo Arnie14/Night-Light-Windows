@@ -44,3 +44,20 @@ def test_watcher_idles_without_exemptions():
     watcher.check()  # already reported at start (before connecting): no change now
     watcher.set_config(NightLightConfig())  # exemptions removed: resume everywhere
     assert seen == [{}] and not watcher._timer.isActive()
+
+
+def test_chosen_apps_have_a_switch_of_their_own():
+    """Off, the list is kept but pauses nothing; fullscreen is separate."""
+    listed = ForegroundApp("photoshop.exe", D2, False)
+    off = NightLightConfig(exempt_apps=("photoshop.exe",), pause_for_apps=False)
+    assert paused_displays(listed, off) == {}
+    assert off.exempt_apps == ("photoshop.exe",)
+    both_off_but_fullscreen = NightLightConfig(exempt_apps=("photoshop.exe",), pause_for_apps=False, exempt_fullscreen=True)
+    assert paused_displays(ForegroundApp("photoshop.exe", D2, True), both_off_but_fullscreen) == {D2: "photoshop.exe, fullscreen"}
+    assert paused_displays(listed, both_off_but_fullscreen) == {}
+
+
+def test_chosen_apps_pause_fullscreen_or_not_and_only_them():
+    config = NightLightConfig(exempt_apps=("photoshop.exe",))
+    assert paused_displays(ForegroundApp("photoshop.exe", D2, True), config) == {D2: "photoshop.exe"}
+    assert paused_displays(ForegroundApp("game.exe", D2, True), config) == {}  # any fullscreen app needs the other switch

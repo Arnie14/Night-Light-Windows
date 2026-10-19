@@ -95,7 +95,7 @@ jobs:
 
             Free software under the GNU GPL v3.0.
 
-            **Beta** — not code-signed yet. If SmartScreen warns, choose **More info → Run anyway**.
+            **Beta** — not code-signed yet. If SmartScreen warns, choose **More info → Run anyway**. If Microsoft Defender flags it, please [submit a false positive](https://www.microsoft.com/wdsi/filesubmission) and open an issue.
 
             | File | |
             |---|---|

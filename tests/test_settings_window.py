@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
-from PySide6.QtCore import QByteArray, QTimeZone
+from PySide6.QtCore import QByteArray, QTime, QTimeZone
 from PySide6.QtWidgets import QDialogButtonBox
 
 from nightlight.config import Anchor, AppConfig, BrightnessScheduleConfig, GeneralConfig, Mode, NightLightConfig, SchedulePoint
@@ -380,3 +381,89 @@ def test_keeping_color_calibrations_is_an_option_on_the_displays_page(window):
     assert pages[2].isAncestorOf(window.keep_calibration)
     window.keep_calibration.setChecked(True)
     assert window.current_config().general.keep_calibration and apply_button(window).isEnabled()
+
+
+def test_sunrise_and_sunset_have_a_transition_choice(window):
+    combo = window.solar_transition
+    assert window._night_card.isAncestorOf(combo) and not combo.isHidden()  # Kyiv: sunrise and sunset
+    assert combo.currentData() == -1 and "twilight" in combo.currentText().lower()
+    steps = [combo.itemData(i) for i in range(combo.count())]
+    assert steps[:2] == [-1, 0] and steps[2:] == list(range(5, 125, 5))
+    combo.setCurrentIndex(combo.findData(45))
+    assert window.current_config().night_light.solar_transition_minutes == 45
+    assert apply_button(window).isEnabled()
+    window.mode.setCurrentIndex(window.mode.findData(Mode.TIMES))
+    assert window._field_rows[combo].isHidden() and not window._field_rows[window.transition].isHidden()
+
+
+def test_an_odd_saved_solar_length_is_kept():
+    window, controller = make_window(night_light=replace(KYIV, solar_transition_minutes=7))
+    assert window.solar_transition.currentData() == 7
+    assert window.current_config().night_light.solar_transition_minutes == 7
+    controller.shutdown()
+
+
+def test_pausing_for_fullscreen_and_for_chosen_apps_are_separate_switches(window):
+    assert window.exempt_fullscreen is not window.pause_for_apps
+    assert window.pause_for_apps.isChecked() and window.exempt_apps.isEnabled()
+    window.exempt_apps.add("photoshop.exe")
+    window.pause_for_apps.setChecked(False)
+    assert not window.exempt_apps.isEnabled()
+    night_light = window.current_config().night_light
+    assert not night_light.pause_for_apps and night_light.exempt_apps == ("photoshop.exe",)  # kept while off
+    window.exempt_fullscreen.setChecked(True)
+    assert window.current_config().night_light.exempt_fullscreen
+
+
+def test_idle_dimming_can_skip_chosen_apps(window):
+    window.idle_dim.setChecked(False)
+    assert not window.idle_exempt_apps.isEnabled()
+    window.idle_dim.setChecked(True)
+    assert window.idle_exempt_apps.isEnabled()
+    window.idle_exempt_apps.add("Teams.exe")
+    assert window.current_config().general.idle_exempt_apps == ("teams.exe",)
+
+
+def test_theme_choice(window):
+    assert window.theme.currentData() == "system"
+    window.theme.setCurrentIndex(window.theme.findData("dark"))
+    assert window.current_config().general.theme == "dark"
+
+
+def test_sleep_friendly_values_fill_in_without_applying():
+    window, controller = make_window(night_light=replace(KYIV, night_temperature=4500))
+    window.use_sleep_settings.click()
+    assert window.night_temperature.value() == 2700
+    assert window.current_config().night_light.mode is Mode.LOCATION  # sunrise and sunset stay
+    assert apply_button(window).isEnabled() and controller.config.night_temperature == 4500  # not applied yet
+    controller.shutdown()
+
+
+def test_sleep_friendly_values_keep_a_warmer_choice_and_start_before_bedtime():
+    window, controller = make_window(night_light=NightLightConfig(enabled=True, mode=Mode.TIMES, night_temperature=2200))
+    assert not window._bedtime_row.isHidden()
+    window.bedtime.setTime(QTime(22, 30))
+    window.use_sleep_settings.click()
+    assert window.night_temperature.value() == 2200
+    assert window.current_config().night_light.night_start == "19:30"
+    controller.shutdown()
+
+
+def test_sleep_friendly_values_turn_night_light_on():
+    window, controller = make_window(night_light=replace(KYIV, enabled=False))
+    window.use_sleep_settings.click()
+    assert window.current_config().night_light.enabled
+    controller.shutdown()
+
+
+def test_the_window_fits_a_small_screen(window, monkeypatch):
+    from PySide6.QtCore import QRect
+
+    class SmallScreen:
+        def availableGeometry(self):
+            return QRect(0, 0, 1280, 672)  # 1080p at 150%, taskbar shown
+
+    monkeypatch.setattr("nightlight.ui.settings_window.QGuiApplication.screenAt", lambda _pos: SmallScreen())
+    window._fit_to_screen()
+    assert window.width() == 960 and window.height() + 40 <= 672 - 16
+    assert window.y() >= 0 and window.x() == (1280 - 960) // 2

@@ -4,7 +4,7 @@ import zipfile
 from datetime import datetime, timezone
 
 from nightlight import diagnostics
-from nightlight.config import AppConfig, DisplayPrefs, NightLightConfig
+from nightlight.config import AppConfig, DisplayPrefs, GeneralConfig, NightLightConfig
 from nightlight.controller import NightLightController
 from nightlight.hardware.brightness import MonitorInfo
 
@@ -83,13 +83,14 @@ def test_nothing_personal_gets_into_the_bundle(tmp_path, monkeypatch):
     controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
     settings = AppConfig(
         NightLightConfig(latitude=50.4501, longitude=30.5234, timezone="Europe/Kyiv", exempt_apps=("secret-project.exe",)),
+        GeneralConfig(idle_exempt_apps=("hidden-call.exe",)),
         displays=(DisplayPrefs("DEL41A2", "Anurag's desk"),),
     )
     src = diagnostics.Sources(FakeMonitors(), controller, lambda: settings, tmp_path / "settings.json", logs)
     path, _ = diagnostics.write_bundle(src, tmp_path / "out")
     with zipfile.ZipFile(path) as bundle:
         everything = "\n".join(bundle.read(name).decode() for name in bundle.namelist())
-    for secret in ("Anurag", "anurag", "ANURAG-PC", "example.com", "Kyiv", "50.45", "30.52", "secret-project", "desk"):
+    for secret in ("Anurag", "anurag", "ANURAG-PC", "example.com", "Kyiv", "50.45", "30.52", "secret-project", "hidden-call", "desk"):
         assert secret not in everything, secret
     assert "<home>" in everything and "<user>" in everything and "<computer>" in everything
     controller.shutdown()
@@ -137,4 +138,33 @@ def test_a_failing_compatibility_report_does_not_stop_the_bundle(tmp_path):
     path, _ = diagnostics.write_bundle(src, tmp_path / "out")
     with zipfile.ZipFile(path) as bundle:
         assert "summary.txt" in bundle.namelist() and "compatibility.txt" not in bundle.namelist()
+    controller.shutdown()
+
+
+def test_old_bundles_are_deleted_and_nothing_else(tmp_path):
+    import os
+
+    now = 1_800_000_000.0
+    old = tmp_path / "Winlight-diagnostics-20260101-120000.zip"
+    recent = tmp_path / "Winlight-diagnostics-20260110-120000.zip"
+    lookalike = tmp_path / "Winlight-diagnostics-20260101-120000 (1).zip"  # the user's copy: not ours to delete
+    other = tmp_path / "holiday.zip"
+    for path in (old, recent, lookalike, other):
+        path.write_bytes(b"zip")
+        os.utime(path, (now - 8 * 86400, now - 8 * 86400))
+    os.utime(recent, (now - 6 * 86400, now - 6 * 86400))
+    (tmp_path / "Winlight-diagnostics-20260101-000000.zip").mkdir()  # a folder by that name stays too
+    assert diagnostics.remove_old_bundles(tmp_path, now) == [old]
+    assert not old.exists() and recent.exists() and lookalike.exists() and other.exists()
+
+
+def test_cleaning_a_missing_folder_does_not_raise(tmp_path):
+    assert diagnostics.remove_old_bundles(tmp_path / "gone") == []
+
+
+def test_bundle_names_match_what_cleanup_deletes(tmp_path):
+    src, controller = sources(tmp_path)
+    path, _ = diagnostics.write_bundle(src, tmp_path / "out")
+    assert diagnostics.BUNDLE_NAME.fullmatch(path.name)
+    assert diagnostics.remove_old_bundles(tmp_path / "out", days=-1) == [path]  # anything counts as old
     controller.shutdown()

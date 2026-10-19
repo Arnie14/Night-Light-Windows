@@ -12,6 +12,8 @@ This is a beta release. It has been tested on Windows 11 with a laptop panel; ex
 
 Winlight is not yet code-signed, so Windows SmartScreen may warn about it. Choose "More info", then "Run anyway".
 
+Starting at sign-in is set up by this installer (the "Start Winlight when I sign in" task, ticked by default) and can be turned off in Winlight's settings or Task Manager. Microsoft Defender flagged beta 5 because the app rewrote its start-up entry every time it started; this version doesn't. If Defender still flags Winlight, please submit it to Microsoft as a false positive (https://www.microsoft.com/wdsi/filesubmission) and open an issue.
+
 
 TURN OFF WHAT CLASHES WITH WINLIGHT
 

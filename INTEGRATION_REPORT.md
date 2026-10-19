@@ -1,4 +1,4 @@
-# Integration report: 0.1.0 beta 5
+# Integration report: 0.1.0 beta 5 and beta 6
 
 Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability, scheduling, identity and UI work, built on a version from before beta 3) into `main` at beta 4 (`863dbe6`). This report summarizes the changes, design decisions, test results, unverified areas and deferred work.
 
@@ -13,6 +13,7 @@ Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability,
 - **Release round:** HDR brightness-lock detection with SDR fallback and a reason for every display's control; the CLI compared with Twinkle Tray's and Monitorian's (`--panel` and partial ids added); per-display pausing clearer and fixed for minimized apps; rename/hide end-to-end tests; a watcher audit (3 stuck states fixed); installer notes, author and GitHub link; roomier settings and Windows 11 style buttons (see [Release round](#release-round-010-beta-5)).
 - **Final round:** an option to keep display calibrations; the command line, installer and GUI checked again; 6 more bugs fixed, including a crash that garbage collection on a monitor thread could cause (see [Final round before release](#final-round-before-release)).
 - **Hardening pass:** 13 more bugs fixed, in concurrency, sleep, clashes with other software, files, logging and the CLI (see [Hardening pass](#hardening-pass)).
+- **Beta 6 round:** the Defender quarantine (the app no longer writes its start-up entry at start), dimming when a window is fullscreen, sunrise and sunset transition lengths, separate pause switches, brightness in the tray tooltip, restore on small screens, no white flash on opening, sleep-friendly values, a theme choice, and Report a Problem clean-up; 614 tests (see [Beta 6 round](#beta-6-round-010-beta-6)).
 
 ## What changed, by area
 
@@ -291,6 +292,88 @@ A new end-to-end test file (`test_display_prefs.py`, 8 tests) runs the whole app
   - The bottom bar is redrawn in the Windows 11 style: an accent Apply, a quiet bordered Reset, and a text-only Restore defaults on the left. It is painted from the palette in both themes.
   - The window opens a little larger (960×760).
 
+## Beta 6 round (0.1.0 Beta 6)
+
+Ten points from testing beta 5 on a single-display PC.
+
+### Microsoft Defender quarantined the app
+
+Defender recorded two detections on the test machine: `Behavior:Win32/Persistence.A!ml` and `Trojan:Win32/Bearfoos.A!ml`, both on the installed `Winlight.exe`.
+
+- **Cause of the behavior detection:** beta 5 rewrote its `HKCU\...\Run` value at every start, to keep the path current. Behavior monitoring took an unsigned program doing that for malware making itself persistent, then quarantined the program.
+- **The fix:**
+  - The installer now creates the start-up entry: a "Start Winlight when I sign in" task, ticked by default.
+  - The app never writes to the registry at start. It reads the entry, so the installer, Task Manager and Windows Settings stay in charge.
+  - The setting turns the entry off and on as Task Manager does, through Explorer's `StartupApproved\Run` switch, and keeps the Run value.
+  - The app writes a Run value only when the user turns the setting on and none exists for this program (the portable zip, or the task unticked at install).
+  - The uninstaller removes both values. An upgrade with the task unticked removes them too.
+- **Verified:**
+  - Against the real registry, under a throwaway name: 9 of 9 checks pass, including that turning on an entry that's already on writes nothing, and that Task Manager's own values read correctly.
+  - The installed beta 6 started without changing either key (compared by the keys' last-write times).
+  - No new detection appeared.
+- **Not fixed by this:** `Bearfoos.A!ml` is a machine-learning verdict on the file itself, common for unsigned PyInstaller programs. Only code signing, or reputation built through false-positive submissions to Microsoft, settles it. The README, installer notes and release page now say how to submit one.
+
+### Dimming when away
+
+Beta 5 counted any fullscreen window in front as "busy" (Windows' own state for it), so a fullscreen browser or editor stopped dimming entirely. Dimming is now held only by:
+
+- an app keeping the display on (videos, calls, presentations);
+- an exclusive-fullscreen Direct3D game, or Windows' presentation mode;
+- an app the user lists ("Never dim while these apps are in front", new).
+
+Music alone doesn't hold it.
+
+Verified on real Windows with a borderless window covering the screen: beta 5's test held dimming and the new one doesn't. A listed app holds it, and so does another process that asks Windows to keep the display on, until it stops (8 of 8).
+
+### Night light
+
+- **Sunrise and sunset:** the transition can follow twilight (the default, about 30 minutes), be instant, or last 5 to 120 minutes in 5-minute steps. The evening change starts at sunset and the morning change ends at sunrise.
+- **Pausing:** two separate switches, "Pause for any fullscreen app" and "Pause for chosen apps", each with its own toggle. The list applies only to the apps on it, fullscreen or not, and is kept while its switch is off.
+- **For better sleep:** the research advice (dim, warm light of about 2700 K or warmer for the 2 to 3 hours before bed; Harvard Health, Chang et al. 2015), worded as general guidance. "Use these" fills in the values without applying them:
+  - night light at 2700 K, or the user's own warmer value;
+  - night light turned on if it was off;
+  - with custom times, a start 3 hours before the bedtime given.
+- **Bug fixed:** with a location far from the PC's time zone, the morning twilight was paired with the next day's sunrise and "ended" 23 hours before it began. This was present in beta 5. Tested in four time zones.
+
+### Tray and panel
+
+While the brightness schedule is on, the tray tooltip and the panel show it:
+
+- the level now and the next change ("Brightness: 70% · 40% at 20:00");
+- during a gradual change, where it's going and when it gets there ("55% → 40% by 20:30").
+
+The tooltip stays under Windows' 127-character limit.
+
+### Settings window
+
+- **Maximize and restore:** clicking the real caption buttons (from another process) worked on this PC. The window's normal size, 960×760, was taller than a 1080p screen at 150% scaling, so "restore" brought back a window that still filled the screen. Reproduced by making the normal size taller than this screen. The window now opens centered and fits the screen's free area.
+- **White flash:** Windows shows a new window before its first paint. Measured by sampling the screen while the settings window opened in dark mode: a fully white frame in 6 of 9 openings. Windows now open transparent and fade in after the first paint (150 ms), applied to the settings window and the Report a Problem message: 0 of 9. Page switches and the tray panel showed no flash.
+- **Header:** a larger logo (48 px), name and description, with more room.
+- **Theme:** Follow Windows, Light or Dark (Settings > General > Appearance), through Qt's color scheme override.
+
+### Report a Problem
+
+- **Clean-up:** the zip is deleted after 7 days, a minute after start and then daily. Only files named exactly as Winlight names them are deleted; copies the user renamed are kept. The summary is cleared from the clipboard after 10 minutes, if it's still the summary.
+- **Message:** shorter, and says what to do next and what happens to the file.
+- **Privacy:** the new idle app list is left out of reports (only how many apps), like the pause list.
+
+### Tests
+
+**614** pass. New:
+
+- autostart: the registry rules, plus the app only reading at start and writing only on a change
+- what holds idle dimming
+- solar transition lengths, and twilight in four time zones
+- the separate pause switches
+- the brightness tooltip
+- the fade
+- fitting a small screen
+- the sleep values
+- the theme
+- clean-up and the clipboard
+
+Real-API checks: 113 of 113, plus the autostart (9) and idle-hold (8) checks above.
+
 ## Not verified (needs hardware or CI)
 
 - **External DDC/CI monitors:** real writes, the VCP 0xD6 power state, time limits on a hanging monitor, safe mode skipping a real monitor after a crash, flicker.
@@ -302,6 +385,7 @@ A new end-to-end test file (`test_display_prefs.py`, 8 tests) runs the whole app
 - **CI:** the GitHub Actions run used Python 3.13 and produced a build. On the test machine (Python 3.15), the PyInstaller build and Inno Setup installer were built and run, including installation with the PATH option, upgrade over a running copy, uninstall and reinstall.
 - **A time zone change while running:** handled from Windows' clock-change message and a check each minute (tested with a stand-in zone); not tried by changing this PC's zone.
 - **The GUI by eye:** layout at other scalings, keyboard navigation, the settings pages with real displays.
+- **Defender over time:** whether `Bearfoos.A!ml` (a verdict on the unsigned file) comes back for new builds; it needs code signing or Microsoft's review of a false-positive submission.
 
 ## Deferred
 

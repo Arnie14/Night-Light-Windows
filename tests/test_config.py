@@ -61,7 +61,7 @@ def test_files_from_before_general_settings_load(tmp_path):
 def test_bad_general_values_fall_back(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({"general": {"start_with_windows": "yes", "start_minimized": False}}))
-    assert config.load(path).general == GeneralConfig(start_with_windows=False, start_minimized=False)
+    assert config.load(path).general == GeneralConfig(start_minimized=False)  # the default, on
 
 
 def test_brightness_schedule_round_trip(tmp_path):

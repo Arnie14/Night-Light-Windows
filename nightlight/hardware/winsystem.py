@@ -115,18 +115,30 @@ def is_busy(notification_state: int | None, foreground_fullscreen: bool) -> bool
     return notification_state in _DO_NOT_INTERRUPT or foreground_fullscreen
 
 
+def notification_state() -> int | None:
+    """Windows' "don't interrupt" state (SHQueryUserNotificationState), or None."""
+    if sys.platform != "win32":
+        return None
+    state = ctypes.c_int()
+    try:
+        return state.value if _shell32.SHQueryUserNotificationState(ctypes.byref(state)) == 0 else None
+    except OSError:
+        return None
+
+
 def user_busy() -> bool:
     """Windows says not to interrupt, or the app in front is fullscreen.
     Opening a window then could minimize an exclusive-fullscreen game."""
     if sys.platform != "win32":
         return False
-    state = ctypes.c_int()
-    try:
-        notification_state = state.value if _shell32.SHQueryUserNotificationState(ctypes.byref(state)) == 0 else None
-    except OSError:
-        notification_state = None
     app = foreground_app()
-    return is_busy(notification_state, bool(app and app.fullscreen))
+    return is_busy(notification_state(), bool(app and app.fullscreen))
+
+
+def exclusive_fullscreen() -> bool:
+    """An exclusive-fullscreen Direct3D game, or Windows' presentation mode:
+    not just any window filling the screen (a browser or an editor can)."""
+    return notification_state() in (QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE)
 
 
 # --- Idle -------------------------------------------------------------------

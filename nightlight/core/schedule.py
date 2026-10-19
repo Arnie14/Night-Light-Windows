@@ -108,10 +108,12 @@ def schedule_around(config: NightLightConfig, now: datetime, zone: tzinfo | None
     days = days_around(now, zone)
     tz = zone or now.tzinfo
     if config.mode is Mode.LOCATION:
-        transitions = _solar_schedule(config.latitude, config.longitude, days, tz)
+        minutes = config.solar_transition_minutes
+        transitions = _solar_schedule(config.latitude, config.longitude, days, tz, minutes)
         if transitions is None:
             log.debug("No sunrise/sunset at the location today; using 06:00/18:00")  # no coordinates: logs are shared
-            transitions = _timed_schedule(FALLBACK_MORNING, FALLBACK_EVENING, FALLBACK_TRANSITION, days, tz)
+            duration = FALLBACK_TRANSITION if minutes < 0 else timedelta(minutes=minutes)
+            transitions = _timed_schedule(FALLBACK_MORNING, FALLBACK_EVENING, duration, days, tz)
     else:
         duration = timedelta(minutes=config.transition_minutes)
         transitions = _timed_schedule(parse_hhmm(config.day_start), parse_hhmm(config.night_start), duration, days, tz)
@@ -127,8 +129,11 @@ def _timed_schedule(morning: time, evening: time, duration: timedelta, days: lis
     return transitions
 
 
-def _solar_schedule(latitude: float, longitude: float, days: list[date], tz: tzinfo | None) -> list[Transition] | None:
+def _solar_schedule(latitude: float, longitude: float, days: list[date], tz: tzinfo | None,
+                    minutes: int = -1) -> list[Transition] | None:
     """Morning: civil dawn -> sunrise. Evening: sunset -> civil dusk (as knighttime).
+    With `minutes` >= 0, a fixed length instead: the evening change starts at
+    sunset, the morning one ends at sunrise (0: at once).
 
     Returns None if any day lacks these events, so the whole schedule falls
     back consistently instead of mixing solar and fixed days.
@@ -142,5 +147,16 @@ def _solar_schedule(latitude: float, longitude: float, days: list[date], tz: tzi
         except ValueError:
             return None
         dawn, sunrise, sunset, dusk = (fixed(events[name]) for name in ("dawn", "sunrise", "sunset", "dusk"))
+        # astral gives each event that falls on `day` in `tz`; far from the
+        # place's own zone, dawn and sunrise (or sunset and dusk) can fall on
+        # either side of midnight there, and the twilight would end before it
+        # began. A day earlier or later is the same twilight within a minute.
+        if dawn > sunrise:
+            dawn = local(dawn - timedelta(days=1), tz)
+        if dusk < sunset:
+            dusk = local(dusk + timedelta(days=1), tz)
+        if minutes >= 0:
+            length = timedelta(minutes=minutes)
+            dawn, dusk = local(sunrise - length, tz), local(sunset + length, tz)
         transitions += [Transition(dawn, sunrise, False), Transition(sunset, dusk, True)]
     return transitions

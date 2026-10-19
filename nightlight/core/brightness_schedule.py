@@ -102,6 +102,7 @@ class ScheduledLevel:
     next: Boundary | None
     transitioning: bool  # still moving from the previous point's level
     approximate_sun: bool  # sunrise/sunset points used the fallback times
+    transition_end: datetime | None = None  # when it reaches since.level, while transitioning
 
 
 _UTC = timezone.utc
@@ -153,7 +154,7 @@ def scheduled_level(config: BrightnessScheduleConfig, now: datetime, zone: tzinf
         return None
     since = passed[-1]
     upcoming = next((b for b in laid_out if b.at > now), None)
-    level, transitioning = since.level, False
+    level, transitioning, end = since.level, False, None
     if config.transition_minutes > 0 and len(passed) >= 2:
         duration = timedelta(minutes=config.transition_minutes)
         if upcoming is not None:
@@ -162,8 +163,8 @@ def scheduled_level(config: BrightnessScheduleConfig, now: datetime, zone: tzinf
         if elapsed < duration:
             previous = passed[-2].level
             level = round(previous + (since.level - previous) * (elapsed / duration))
-            transitioning = True
-    return ScheduledLevel(level, since, upcoming, transitioning, approximate)
+            transitioning, end = True, since.at + duration
+    return ScheduledLevel(level, since, upcoming, transitioning, approximate, end)
 
 
 def describe(config: BrightnessScheduleConfig) -> str:

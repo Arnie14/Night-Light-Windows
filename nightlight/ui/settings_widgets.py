@@ -26,13 +26,15 @@ from nightlight.hardware.brightness import MonitorInfo
 from nightlight.ui.widgets import SecondaryLabel
 
 class AppList(QWidget):
-    """Apps to pause night light for, by executable name."""
+    """Apps chosen by executable name (to pause night light for, or never to
+    dim for idle while in front)."""
 
     changed = Signal()
 
-    def __init__(self, running_apps: Callable[[], list[str]]) -> None:
+    def __init__(self, running_apps: Callable[[], list[str]], browse_title: str = "Pause night light for this app") -> None:
         super().__init__()
         self._running_apps = running_apps
+        self._browse_title = browse_title
         self.list = QListWidget()
         self.list.setFixedHeight(96)
         self.list.setSortingEnabled(True)
@@ -78,7 +80,7 @@ class AppList(QWidget):
         self._menu.addAction("Browse for an app…", self._browse)
 
     def _browse(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Pause night light for this app", "", "Programs (*.exe)")
+        path, _ = QFileDialog.getOpenFileName(self, self._browse_title, "", "Programs (*.exe)")
         if path:
             self.add(path.replace("\\", "/").rsplit("/", 1)[-1])
 

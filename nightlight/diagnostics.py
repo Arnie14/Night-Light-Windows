@@ -13,9 +13,14 @@ cheap display queries, but doesn't scan DDC/CI or tint displays (that's
 
 Reports get posted publicly, so nothing personal goes in (see privacy.py):
 no location, city or time zone, no custom display names (only that a
-display was renamed), no names of apps listed for pausing night light (only
-how many), and every file, logs included, is scrubbed of the user name,
+display was renamed), no names of apps listed for pausing night light or idle
+dimming (only how many), and every file, logs included, is scrubbed of the user name,
 computer name, home folder and email addresses.
+
+Nothing is left behind for long: zips older than KEEP_DAYS are deleted from
+where they are saved (only files named exactly as this module names them),
+and the app clears the summary from the clipboard after CLIPBOARD_MINUTES
+if it is still there.
 """
 
 from __future__ import annotations
@@ -23,7 +28,9 @@ from __future__ import annotations
 import json
 import logging
 import platform
+import re
 import sys
+import time
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -41,6 +48,10 @@ from nightlight.privacy import scrub
 log = logging.getLogger(__name__)
 
 ISSUES_URL = "https://github.com/Arnie14/Night-Light-Windows/issues/new"
+KEEP_DAYS = 7
+CLIPBOARD_MINUTES = 10
+# The names write_bundle gives, and only those, are cleaned up.
+BUNDLE_NAME = re.compile(rf"{re.escape(APP_NAME)}-diagnostics-\d{{8}}-\d{{6}}\.zip")
 
 
 @dataclass
@@ -132,6 +143,7 @@ def redacted_settings(app_config: config.AppConfig) -> dict:
     del night_light["latitude"], night_light["longitude"]
     night_light["location"] = ("a city" if app_config.night_light.timezone else "coordinates") if located else "not set"
     night_light["exempt_apps"] = f"{len(app_config.night_light.exempt_apps)} app(s)"
+    data["general"]["idle_exempt_apps"] = f"{len(app_config.general.idle_exempt_apps)} app(s)"
     data["displays"] = {key: {"renamed": bool(value["name"]), "hidden": value["hidden"]} for key, value in data["displays"].items()}
     return data
 
@@ -141,6 +153,28 @@ def default_folder() -> Path:
         if folder := QStandardPaths.writableLocation(location):
             return Path(folder)
     return Path.home()
+
+
+def remove_old_bundles(folder: Path | None = None, now: float | None = None, days: int = KEEP_DAYS) -> list[Path]:
+    """Delete diagnostics zips older than `days` from `folder` (the Desktop);
+    returns what was deleted. Never raises."""
+    folder = folder or default_folder()
+    cutoff = (time.time() if now is None else now) - days * 86400
+    removed = []
+    try:
+        candidates = [path for path in folder.iterdir() if BUNDLE_NAME.fullmatch(path.name)]
+    except OSError:
+        return removed
+    for path in candidates:
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed.append(path)
+        except OSError:
+            log.debug("Could not delete %s", path.name, exc_info=True)
+    if removed:
+        log.info("Deleted %d diagnostics file(s) older than %d days", len(removed), days)
+    return removed
 
 
 def write_bundle(sources: Sources, folder: Path | None = None) -> tuple[Path, str]:
