@@ -98,9 +98,9 @@ Windows 11 Pro 26200, one laptop panel (AUO 24ED, WMI, a calibrated gamma ramp),
 - **Screenshots** regenerated from the merged UI (`tools/screenshots.py`) and checked.
 - The panel was left at 100% with its calibration restored.
 
-## Hardening pass
+## Hardening
 
-A second pass before release, about finding and fixing bugs rather than adding features: concurrency and idempotency, sleep and hibernation, DDC/CI and ctypes, clashes with other software, dependencies, and logging. It was checked against the original goals of the reliability work and against the untouched backup of that work (`c3ab673`; the Desktop copy is identical, all 81 files compared).
+A second pass before release, about finding and fixing bugs rather than adding features: concurrency and idempotency, sleep and hibernation, DDC/CI and ctypes, clashes with other software, dependencies, and logging. 
 
 ### The original goals, checked
 
@@ -170,7 +170,7 @@ Thread names tell the UI, the queue and a stuck call apart, every backend call i
   - Changes waited for a fresh detection after waking.
   - The wake report stopped early once the display was back.
   - Sign-out shut down cleanly in 0.3 s, removing the tint and marking the journal clean.
-- **Observed on this laptop:** turning the screen off and on resets its gamma ramp to a flat one, dropping the ICC calibration (Windows does this without Winlight too). Winlight re-applies night light within 0.5 s over what Windows now shows, and leaves the calibration to Windows' loader. Keeping it ourselves, as DisplayCAL's loader does, is a possible later improvement.
+- **Observed on testing:** turning the screen off and on resets its gamma ramp to a flat one, dropping the ICC calibration (Windows does this without Winlight too). Winlight re-applies night light within 0.5 s over what Windows now shows, and leaves the calibration to Windows' loader. Keeping it ourselves, as DisplayCAL's loader does, is a later improvement.
 - **Clash with another program:** a second process rewriting the ramp every 0.7 s. Before the fix: replaced 7 times in 10 s with 14 log lines. After: 2 times, then one warning, with no more fighting.
 - **Idle dimming on the real panel:** dimmed to 20% through WMI, held, back to 100%, nothing remembered.
 - **Laptop keys:** a WMI change from another program reached the app at once.
@@ -182,11 +182,10 @@ Thread names tell the UI, the queue and a stuck call apart, every backend call i
 - **Dependencies:** `pip check` is clean; all code parses as Python 3.12, and no newer standard-library APIs are used. The `wmi` package warns about invalid escape sequences on Python 3.15, which a future Python will reject; CI uses 3.13. The Inno Setup installer was built, installed, upgraded, uninstalled and reinstalled on the Windows test machine.
 - **CI robustness:** the chaos test allows for a stalled thread on a loaded runner. The real-window test skips on CI, with a reason, only if Windows refuses the registration (no desktop session).
 
-## Final round before release
 
 ### Keeping color calibrations (new option)
 
-Settings > Displays > **Keep each display's color calibration** (off by default). On this laptop, turning the screen off and on makes Windows reset the ramp to a flat one, dropping the ICC calibration until Windows' loader runs again (usually the next sign-in). With the option on, Winlight puts it back, as DisplayCAL's profile loader does.
+Settings > Displays > **Keep each display's color calibration** (off by default). On test laptop, turning the screen off and on makes Windows reset the ramp to a flat one, dropping the ICC calibration until Windows' loader runs again (usually the next sign-in). With the option on, Winlight puts it back, as DisplayCAL's profile loader does.
 
 The backend stays small by reusing what was already there:
 
@@ -218,29 +217,6 @@ There are also 8 backend tests, plus settings and app tests.
   - 12 calls at once, all answered
   - about 0.4 s per call
 
-### Installer
-
-- Built with Inno Setup.
-- Installed silently with the PATH option, then upgraded over a running copy: the installer quit it first, replaced the files and didn't duplicate the PATH entry.
-- Uninstalled: program, Start menu entry, PATH entry and uninstall record removed, settings kept.
-- Reinstalled. Beta 5 is now installed on this PC, and the older beta was already gone before this round.
-
-### Other apps' names
-
-The app's own windows and tooltips no longer name other software; the repository's code comments and docs still credit them. Two places still mentioned other software:
-
-- **The compatibility report's last line**, shown in Settings, listed "KDE Plasma" and "Simulated" from the Linux development backends. It now lists only the Windows ways in.
-- **Tooltips:** the previously installed beta displayed older text. The current tooltips and per-display reasons were checked by parsing every string in the code.
-
-Log messages still mention f.lux where it helps a bug report.
-
-### GUI review
-
-Every settings page was rendered in full, in light and dark, along with the panel, and checked:
-
-- **Width:** pages with and without a scrollbar now have the same width, lined up with the notices above them (they differed by the scrollbar's width).
-- **Dividers:** the lines between rows were uneven at 125% display scaling. Some came out twice as thick, and a first fix made some vanish. They're now a single device pixel each, verified pixel by pixel across a page in both themes.
-- **Text:** "20 %" now reads "20%", like the rest.
 
 ### A crash found by repeating the test suite
 
@@ -302,13 +278,11 @@ A new end-to-end test file (`test_display_prefs.py`, 8 tests) runs the whole app
 
 ### watcher.py audit
 
-Three ways the app could get stuck for the rest of a session, now handled and tested:
-
 - **A sleep announced but never taken** (cancelled or failed): no resume comes. If the clock checks keep running normally 90 s later, the watcher carries on as if woken.
 - **A missed "display on" notification:** input while the displays are reported off means they are on.
 - **A clock change mistaken for a wake:** Windows' clock-change message now re-baselines the check.
 
-### Installer, about, look
+### Installer, about
 
 - **Installer:** an information page before installing covers the beta disclaimer (no warranty, SmartScreen), what clashes and should be turned off (Windows Night Light, other blue-light filters, GPU color settings, other DDC/CI brightness tools, calibration loaders, Windows' automatic brightness), and recommendations (DDC/CI on, direct connections, TVs, HDR, reporting problems). Publisher information, the GitHub link and copyright also appear in the program files' version details.
 - **About:** Settings > General has a creator credit and a View on GitHub button, along with the exact version ("0.1.0 Beta 5"). `__version__` is now `0.1.0-beta.5`, so diagnostics and reports name the build.
@@ -316,7 +290,6 @@ Three ways the app could get stuck for the rest of a session, now handled and te
   - Rows, section headings and page titles have more room, close to Windows 11 Settings' spacing.
   - The bottom bar is redrawn in the Windows 11 style: an accent Apply, a quiet bordered Reset, and a text-only Restore defaults on the left. It is painted from the palette in both themes.
   - The window opens a little larger (960×760).
-- **README:** formal headings without emojis, and a monochrome status scale (● Ready, ◐ In testing, ○ Planned). Screenshots regenerated.
 
 ## Not verified (needs hardware or CI)
 
@@ -351,13 +324,4 @@ Three ways the app could get stuck for the rest of a session, now handled and te
 | Docs and screenshots match | ✅ README, windows-notes, windows-testing, testing-installer, screenshots |
 | Unverified hardware and CI identified | ✅ See above |
 
-## Release steps
 
-At the time of this report, `main` is fast-forwarded to this work and tagged `v0.1.0-beta.5` locally. To publish, push both:
-
-```
-git push origin main
-git push origin v0.1.0-beta.5
-```
-
-Pushing the tag starts the release workflow: tests on Python 3.13, the build, and a GitHub release titled "Winlight 0.1.0 Beta 5", marked Latest, with the installer and portable zip. Push `beta5-integration` separately to preserve the integration branch.
