@@ -93,7 +93,7 @@ jobs:
           body: |
             <img src="https://raw.githubusercontent.com/Arnie14/Night-Light-Windows/${{ github.ref_name }}/docs/screenshots/flyout-light.png" width="300" alt="Winlight">
 
-            Free software under the GNU GPL v3.0.
+            Brightness, color and comfort for every display on Windows. Free software under the GNU GPL v3.0. New here? [Why Winlight](https://github.com/Arnie14/Night-Light-Windows/blob/main/docs/why-winlight.md) compares it with Windows' own controls and similar apps.
 
             **Beta** — not code-signed yet. If SmartScreen warns, choose **More info → Run anyway**. If Microsoft Defender flags it, please [submit a false positive](https://www.microsoft.com/wdsi/filesubmission) and open an issue.
 
