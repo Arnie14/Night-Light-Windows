@@ -7,6 +7,7 @@ neutral (no change); lower temperatures dim blue and green to warm the image.
 
 from __future__ import annotations
 
+import itertools
 import math
 
 MIN_KELVIN = 1000
@@ -158,7 +159,7 @@ def plausible_base(ramp: list[list[int]]) -> bool:
     for channel in ramp:
         if not channel or channel[-1] < PLAUSIBLE_BASE_PEAK * 65535:
             return False
-        if any(b < a for a, b in zip(channel, channel[1:])):
+        if any(b < a for a, b in itertools.pairwise(channel)):
             return False
     return True
 

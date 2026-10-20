@@ -3,8 +3,8 @@ import pytest
 from PySide6.QtCore import QObject
 from PySide6.QtTest import QTest
 
+from nightlight.brightness.idle_dim import IdleDimmer
 from nightlight.hardware.brightness import MonitorInfo
-from nightlight.idle_dim import IdleDimmer
 
 D1, D2, D3, D4, D5 = (rf"\\.\DISPLAY{n}" for n in range(1, 6))
 DELL = MonitorInfo(0, "DELL", True, key="DEL41A2", display=D1)  # DDC/CI

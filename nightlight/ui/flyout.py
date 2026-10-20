@@ -19,10 +19,10 @@ from PySide6.QtWidgets import (
 )
 
 from nightlight import APP_NAME
+from nightlight.brightness.monitors import MonitorManager
+from nightlight.color.controller import NightLightController
 from nightlight.config import DisplayPrefs
-from nightlight.controller import NightLightController
 from nightlight.hardware.brightness import MonitorInfo
-from nightlight.monitors import MonitorManager
 from nightlight.ui import icons
 from nightlight.ui.night_light_text import (
     brightness_status,

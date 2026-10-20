@@ -6,7 +6,7 @@ import threading
 
 from PySide6.QtCore import QObject
 
-from nightlight import gc_guard
+from nightlight.system import gc_guard
 
 
 class Cycle:
@@ -81,7 +81,7 @@ _Com.__module__ = "fakecom.client"
 def test_release_cycles_frees_tied_objects_now_without_a_collection():
     import gc
 
-    from nightlight.gc_guard import release_cycles
+    from nightlight.system.gc_guard import release_cycles
 
     released = []
     a, b = _Com(released), _Com(released)
@@ -101,7 +101,7 @@ def test_release_cycles_frees_tied_objects_now_without_a_collection():
 
 
 def test_release_cycles_leaves_other_modules_alone():
-    from nightlight.gc_guard import release_cycles
+    from nightlight.system.gc_guard import release_cycles
 
     class Plain:
         pass

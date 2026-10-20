@@ -19,7 +19,7 @@ back happens once, at its first occurrence.
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, timezone, tzinfo
 
 
 def fixed(moment: datetime) -> datetime:
@@ -36,7 +36,7 @@ def wall_time(day: date, at: time, zone: tzinfo) -> datetime:
     local = naive.replace(tzinfo=zone, fold=0)
     # A time in a spring-forward gap doesn't exist: fold=0 reads it with the
     # offset from before the change, which lands just after the gap.
-    return fixed(local.astimezone(timezone.utc).astimezone(zone))
+    return fixed(local.astimezone(UTC).astimezone(zone))
 
 
 def local(moment: datetime, zone: tzinfo | None) -> datetime:

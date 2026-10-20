@@ -33,7 +33,7 @@ def rows(tab: Path):
 
 
 def main(zoneinfo: Path) -> None:
-    countries = {code: name for code, name in rows(zoneinfo / "iso3166.tab")}
+    countries = dict(rows(zoneinfo / "iso3166.tab"))
     data = Path(__file__).resolve().parent.parent / "nightlight" / "data"
     zones = set()
     with (data / "timezones.csv").open("w", encoding="utf-8", newline="") as f:

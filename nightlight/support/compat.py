@@ -11,14 +11,14 @@ does ask each display and API directly.
 from __future__ import annotations
 
 import platform
-import textwrap
 import sys
+import textwrap
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from nightlight import APP_NAME, __version__
 from nightlight.hardware.brightness import CHANNEL_LABELS, MonitorInfo
-from nightlight.privacy import scrub
+from nightlight.support.privacy import scrub
 
 # The ways in on Windows, for the report's last line (the others are the
 # Linux development backends').
@@ -140,7 +140,7 @@ def system_summary() -> dict[str, str]:
 def render(items: list[CompatibilityEntry], system: dict[str, str] | None = None) -> str:
     """The report as plain text, readable in an issue or an email."""
     # In UTC: a local time zone's name tells where the user is (privacy.py).
-    lines = [f"{APP_NAME} hardware compatibility report", f"Created {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC", ""]
+    lines = [f"{APP_NAME} hardware compatibility report", f"Created {datetime.now(UTC):%Y-%m-%d %H:%M} UTC", ""]
     if system:
         width = max(len(k) for k in system)
         lines += [f"  {k.ljust(width)}  {v}" for k, v in system.items()] + [""]

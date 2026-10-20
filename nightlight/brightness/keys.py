@@ -22,8 +22,8 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QTimer
 
+from nightlight.brightness.monitors import MonitorManager
 from nightlight.hardware.brightness import MonitorInfo
-from nightlight.monitors import MonitorManager
 
 log = logging.getLogger(__name__)
 

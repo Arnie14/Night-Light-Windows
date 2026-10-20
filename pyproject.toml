@@ -1,11 +1,86 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "night-light-windows"
-version = "0.1.0"
-description = "Per-monitor brightness and night light control for Windows, inspired by KDE Plasma"
+name = "winlight"
+dynamic = ["version"]
+description = "Night light and brightness for every display on Windows, each with its own schedule"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
+dependencies = [
+    "PySide6>=6.8",
+    "astral>=3.2",
+    "platformdirs>=4.0",
+    "tzdata>=2024.1; sys_platform == 'win32'",  # time zones for zoneinfo (schedules across daylight saving changes)
+    "wmi>=1.5.1; sys_platform == 'win32'",  # built-in laptop panel brightness (installs pywin32)
+    "monitorcontrol>=3.1; sys_platform == 'linux'",  # DDC/CI for the "real" backend on Linux (development)
+    "jeepney>=0.8; sys_platform == 'linux'",  # KDE development backend only
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.15"]
+# Building the Windows app (packaging/build.py). Inno Setup 6 is installed
+# separately for the installer: https://jrsoftware.org/isdl.php
+build = ["pyinstaller>=6.10"]
+
+[project.urls]
+Homepage = "https://github.com/Arnie14/WinLight"
+Issues = "https://github.com/Arnie14/WinLight/issues"
+Releases = "https://github.com/Arnie14/WinLight/releases"
+
+[tool.setuptools.dynamic]
+version = { attr = "nightlight.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["nightlight*"]
+
+[tool.setuptools.package-data]
+nightlight = ["data/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 160
+target-version = "py312"
+extend-exclude = ["build", "dist", "Inno Setup 6"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # import order
+    "B",        # bugbear: likely bugs
+    "UP",       # newer Python syntax
+    "C4",       # comprehensions
+    "SIM",      # simplifications
+    "RUF",      # ruff's own
+    "PIE",      # misc. lints
+    "ISC",      # implicit string concatenation
+    "PT",       # pytest style
+    "RET",      # return statements
+    "PTH",      # pathlib over os.path
+    "LOG", "G", # logging calls
+    "T10",      # no debugger left in
+    "EXE",      # executable files
+]
+ignore = [
+    "PT011",   # pytest.raises(OSError) is specific enough for the Win32 errors tested
+    "PT018",   # several facts in one assert read as one statement in these tests
+    "RUF001",  # "·", "→" and "…" in UI text are deliberate
+    "B905",    # zip() over lists of equal length by construction
+    "B008",    # dataclass defaults built from frozen configs are immutable
+    "RUF059",  # unpacked fixtures keep their names for readability
+    "PTH123",  # open() is fine for the small scripts that use it
+    "G004",    # log messages use %-style where it matters; f-strings in a few debug lines
+    "SIM108",  # an if/else block reads better than a long one-line ternary
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["RUF012"]  # fakes keep simple class-level state
+
+[tool.ruff.lint.isort]
+known-first-party = ["nightlight"]

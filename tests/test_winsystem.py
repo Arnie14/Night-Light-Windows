@@ -210,7 +210,8 @@ def setting(guid, value):
 listening = events.listening
 QTimer.singleShot(200, lambda: None)  # let Windows' own current-state reports arrive first
 app.processEvents()
-on, off, panel = setting(winsystem.GUID_CONSOLE_DISPLAY_STATE, 1), setting(winsystem.GUID_CONSOLE_DISPLAY_STATE, 0), setting(winsystem.GUID_VIDEO_BRIGHTNESS, 35)
+on, off = setting(winsystem.GUID_CONSOLE_DISPLAY_STATE, 1), setting(winsystem.GUID_CONSOLE_DISPLAY_STATE, 0)
+panel = setting(winsystem.GUID_VIDEO_BRIGHTNESS, 35)
 for data in (on, off, on, panel):
     user32.SendMessageW(events._hwnd, winsystem.WM_POWERBROADCAST, winsystem.PBT_POWERSETTINGCHANGE, ctypes.addressof(data))
 user32.SendMessageW(events._hwnd, winsystem.WM_POWERBROADCAST, winsystem.PBT_APMSUSPEND, 0)

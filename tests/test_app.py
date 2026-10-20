@@ -2,14 +2,15 @@
 import dataclasses
 import json
 import time
+from datetime import UTC
 
 import pytest
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from nightlight import app as app_module
+from nightlight.brightness.wake_report import RESCAN_AFTER_WAKE_S
 from nightlight.config import AppConfig, GeneralConfig
 from nightlight.hardware import create_backends
-from nightlight.wake_report import RESCAN_AFTER_WAKE_S
 
 
 class RecordingAutostart:
@@ -223,7 +224,7 @@ def test_quitting_during_a_stuck_write_is_bounded_and_restores_colors(start, mon
 
     from PySide6.QtTest import QTest
 
-    from nightlight import monitors as monitors_module
+    from nightlight.brightness import monitors as monitors_module
     from nightlight.hardware.gamma import FakeGammaBackend
 
     monkeypatch.setattr(monitors_module, "SHUTDOWN_WAIT_S", 0.3)
@@ -248,20 +249,20 @@ def test_quitting_during_a_stuck_write_is_bounded_and_restores_colors(start, mon
 
 def test_night_light_and_brightness_schedule_firing_together(monkeypatch):
     # Both schedules change at 20:00: each does its part, neither blocks the other.
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from PySide6.QtTest import QTest
 
-    from nightlight import controller as controller_module
-    from nightlight.brightness_scheduler import BrightnessScheduler
+    from nightlight.brightness.monitors import MonitorManager
+    from nightlight.brightness.scheduler import BrightnessScheduler
+    from nightlight.color import controller as controller_module
+    from nightlight.color.controller import NightLightController
     from nightlight.config import BrightnessScheduleConfig, Mode, NightLightConfig, SchedulePoint
-    from nightlight.controller import NightLightController
     from nightlight.hardware.brightness import FakeBrightnessBackend
     from nightlight.hardware.gamma import FakeGammaBackend
-    from nightlight.monitors import MonitorManager
 
     monkeypatch.setattr(controller_module, "QUICK_ADJUST_MS", 100)
-    now = datetime(2026, 6, 15, 20, 0, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 15, 20, 0, 1, tzinfo=UTC)
     gamma, backend = FakeGammaBackend(), FakeBrightnessBackend(latency=0)
     monitors = MonitorManager(backend)
     scheduler = BrightnessScheduler(monitors, BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00")),
@@ -341,7 +342,7 @@ def test_an_app_already_in_front_at_start_pauses_night_light(start, monkeypatch)
 
 
 def test_diagnostics_from_the_command_line(start, monkeypatch, tmp_path):
-    from nightlight import diagnostics
+    from nightlight.support import diagnostics
 
     monkeypatch.setattr(diagnostics, "default_folder", lambda: tmp_path / "desk")
     night_light, _ = start(GeneralConfig())
@@ -433,8 +434,8 @@ def test_a_failing_command_line_request_is_still_answered(start, monkeypatch):
 
 
 def test_keeping_calibrations_reaches_the_gamma_backend(start):
-    from nightlight.hardware.gamma import FakeGammaBackend
     from nightlight.hardware.brightness import FakeBrightnessBackend
+    from nightlight.hardware.gamma import FakeGammaBackend
 
     class Gamma(FakeGammaBackend):
         def __init__(self):

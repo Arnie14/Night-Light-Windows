@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
+from nightlight.color.controller import NightLightController
 from nightlight.config import BrightnessScheduleConfig, Mode, NightLightConfig
 from nightlight.core.brightness_schedule import Boundary, ScheduledLevel
-from nightlight.controller import NightLightController
 from nightlight.ui.tray import Tray
 
 
@@ -19,7 +19,7 @@ class FakeGamma:
 
 @pytest.fixture
 def tray():
-    controller = NightLightController(FakeGamma(), NightLightConfig(enabled=True, mode=Mode.ALWAYS), lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), NightLightConfig(enabled=True, mode=Mode.ALWAYS), lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     tray = Tray(controller)
     yield tray
     controller.shutdown()
@@ -57,8 +57,8 @@ class FakeScheduler:
 
 
 def level(now, target, nxt=None, end=None):
-    since = Boundary(datetime(2026, 6, 15, 20, 0, tzinfo=timezone.utc), target, 1)
-    following = Boundary(datetime(2026, 6, 16, 7, 0, tzinfo=timezone.utc), nxt, 0) if nxt is not None else None
+    since = Boundary(datetime(2026, 6, 15, 20, 0, tzinfo=UTC), target, 1)
+    following = Boundary(datetime(2026, 6, 16, 7, 0, tzinfo=UTC), nxt, 0) if nxt is not None else None
     return ScheduledLevel(now, since, following, end is not None, False, end)
 
 
@@ -66,7 +66,7 @@ def test_tooltip_shows_the_brightness_schedule(tray):
     scheduler = FakeScheduler(level(70, 70, nxt=100))
     tray.set_scheduler(scheduler)
     assert "Brightness: 70% → 100% at 07:00" in tray.toolTip()
-    scheduler.state = level(55, 40, nxt=100, end=datetime(2026, 6, 15, 20, 30, tzinfo=timezone.utc))
+    scheduler.state = level(55, 40, nxt=100, end=datetime(2026, 6, 15, 20, 30, tzinfo=UTC))
     scheduler.changed.emit()
     assert "Brightness: 55% → 40%, changing until 20:30" in tray.toolTip()
     assert "·" not in tray.toolTip().split("Brightness:")[1]

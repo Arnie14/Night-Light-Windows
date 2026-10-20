@@ -4,17 +4,17 @@ import os
 import subprocess
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from PySide6.QtTest import QTest
 
-from nightlight.commands import CommandHandler
+from nightlight.cli.commands import CommandHandler
+from nightlight.color.controller import NightLightController
 from nightlight.config import AppConfig, DisplayPrefs, Mode, NightLightConfig
-from nightlight.controller import NightLightController
 from nightlight.hardware.brightness import MonitorInfo
-from nightlight.single_instance import SingleInstance
+from nightlight.system.single_instance import SingleInstance
 
 ROOT = Path(__file__).resolve().parent.parent
 MONITORS = [
@@ -59,7 +59,7 @@ class FakeMonitors:
 
 @pytest.fixture
 def handler():
-    controller = NightLightController(FakeGamma(), NightLightConfig(enabled=True, mode=Mode.TIMES), lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), NightLightConfig(enabled=True, mode=Mode.TIMES), lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     monitors = FakeMonitors()
     settings = {"config": AppConfig(displays=(DisplayPrefs("BOE0812", "Laptop"), DisplayPrefs("SAM7136", "", True)))}
     yield CommandHandler(monitors, controller, lambda: settings["config"]), monitors, controller
@@ -120,7 +120,7 @@ def test_errors_say_what_is_wrong(handler, request_, message):
 
 
 def test_a_display_that_cannot_be_changed_now_says_why(handler):
-    from nightlight.monitors import DisplayState, Status
+    from nightlight.brightness.monitors import DisplayState, Status
 
     commands, monitors, _ = handler
     stuck = DisplayState(MONITORS[0], Status.NOT_RESPONDING)
@@ -172,8 +172,8 @@ import sys
 from PySide6.QtCore import QCoreApplication
 app = QCoreApplication([])
 import main, argparse
-from nightlight import cli
-from nightlight.single_instance import SingleInstance
+from nightlight.cli import client as cli
+from nightlight.system.single_instance import SingleInstance
 parser = argparse.ArgumentParser()
 cli.add_arguments(parser)
 args = parser.parse_args(sys.argv[2:])
@@ -254,7 +254,7 @@ def test_part_of_an_id_selects_a_display_as_twinkle_trays_monitor_id_does(handle
 def test_panel_requests_are_built_alone_or_after_a_change():
     import argparse
 
-    from nightlight import cli
+    from nightlight.cli import client as cli
 
     parser = argparse.ArgumentParser()
     cli.add_arguments(parser)

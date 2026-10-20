@@ -44,8 +44,8 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QTimer
 
-from nightlight.brightness_memory import BrightnessMemory
-from nightlight.monitors import IDLE, RESTORE, MonitorManager
+from nightlight.brightness.memory import BrightnessMemory
+from nightlight.brightness.monitors import IDLE, RESTORE, MonitorManager
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ class IdleDimmer(QObject):
             if monitor.key in hidden:
                 continue
             current = self._monitors.value(monitor.key)
-            if monitor.supported and (monitor.internal and monitor.control == "hardware" or monitor.control == "sdr"):
+            if monitor.supported and ((monitor.internal and monitor.control == "hardware") or monitor.control == "sdr"):
                 target = max(monitor.minimum, self._level)
                 if current is not None and target < current:
                     levels[monitor.key] = target
@@ -182,7 +182,7 @@ class IdleDimmer(QObject):
         if self._gamma is None or not displays:
             return
         steps = [round(start + (end - start) * i / FADE_STEPS) for i in range(1, FADE_STEPS + 1)]
-        self._fade = [{d: level for d in displays} if level < 100 else {} for level in steps]
+        self._fade = [dict.fromkeys(displays, level) if level < 100 else {} for level in steps]
         self._fade_timer.start()
         self._fade_step()
 

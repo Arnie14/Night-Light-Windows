@@ -19,7 +19,7 @@ from pathlib import Path
 import platformdirs
 
 from nightlight.core.colortemp import MAX_KELVIN, MIN_KELVIN
-from nightlight.files import write_atomic
+from nightlight.system.files import write_atomic
 
 log = logging.getLogger(__name__)
 

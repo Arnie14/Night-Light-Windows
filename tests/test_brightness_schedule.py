@@ -3,20 +3,21 @@
 that applies it idempotently across restarts, sleep, overrides and daylight
 saving changes."""
 
+import itertools
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 from PySide6.QtCore import QObject, Signal
 
-from nightlight.brightness_scheduler import BrightnessScheduler
+from nightlight.brightness.monitors import SCHEDULE, USER, DisplayState, Status
+from nightlight.brightness.scheduler import BrightnessScheduler
 from nightlight.config import Anchor, BrightnessScheduleConfig, SchedulePoint
 from nightlight.core.brightness_schedule import PRESETS, boundaries, describe, scheduled_level
 from nightlight.hardware.brightness import MonitorInfo
-from nightlight.monitors import SCHEDULE, USER, DisplayState, Status
 
-UTC = timezone.utc
+UTC = UTC
 NEW_YORK = ZoneInfo("America/New_York")
 # The point logic without a transition (the default has one, as its preset does).
 DAY_NIGHT = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00")), transition_minutes=0)
@@ -68,7 +69,8 @@ def test_a_sunset_point_and_a_clock_point_on_the_same_instant_merge():
 
 
 def test_sun_points_follow_the_location():
-    config = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, anchor=Anchor.SUNRISE), SchedulePoint(40, anchor=Anchor.SUNSET, offset_minutes=30)))
+    points = (SchedulePoint(100, anchor=Anchor.SUNRISE), SchedulePoint(40, anchor=Anchor.SUNSET, offset_minutes=30))
+    config = BrightnessScheduleConfig(enabled=True, points=points)
     london = (51.5, -0.13)
     state = scheduled_level(config, at(21, 23), location=london)  # midsummer: sunset about 20:21 UTC
     assert not state.approximate_sun and state.level == 40
@@ -400,10 +402,10 @@ def wait_for(condition, timeout_ms=3000):
 @pytest.fixture
 def together(tmp_path):
     """Memory and schedule on one MonitorManager, created in the app's order."""
-    from nightlight import brightness_memory
-    from nightlight.brightness_memory import BrightnessMemory
+    from nightlight.brightness import memory as brightness_memory
+    from nightlight.brightness.memory import BrightnessMemory
+    from nightlight.brightness.monitors import MonitorManager
     from nightlight.hardware.brightness import FakeBrightnessBackend
-    from nightlight.monitors import MonitorManager
 
     made = []
 
@@ -463,7 +465,7 @@ def test_every_preset_changes_gradually_and_fits_between_its_times():
         assert preset.transition_minutes >= 30, key
         clock = sorted(p.at for p in preset.points if p.anchor is Anchor.CLOCK)
         minutes = [int(t[:2]) * 60 + int(t[3:]) for t in clock]
-        gaps = [b - a for a, b in zip(minutes, minutes[1:])] + ([minutes[0] + 1440 - minutes[-1]] if minutes else [])
+        gaps = [b - a for a, b in itertools.pairwise(minutes)] + ([minutes[0] + 1440 - minutes[-1]] if minutes else [])
         assert all(gap >= preset.transition_minutes for gap in gaps), (key, gaps)
 
 

@@ -13,26 +13,28 @@ from PySide6.QtCore import QTimer, QTimeZone, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
-from nightlight import APP_NAME, autostart, compat, config, diagnostics
-from nightlight.brightness_keys import BrightnessKeys
-from nightlight.brightness_memory import BrightnessMemory
-from nightlight.brightness_scheduler import BrightnessScheduler
-from nightlight.commands import CommandHandler
-from nightlight.controller import NightLightController
+from nightlight import APP_NAME, config
+from nightlight.brightness.idle_dim import IdleDimmer
+from nightlight.brightness.keys import BrightnessKeys
+from nightlight.brightness.memory import BrightnessMemory
+from nightlight.brightness.monitors import MonitorManager
+from nightlight.brightness.scheduler import BrightnessScheduler
+from nightlight.brightness.wake_report import WakeReport
+from nightlight.cli.commands import CommandHandler
+from nightlight.color.controller import NightLightController
+from nightlight.color.exemptions import ForegroundWatcher
 from nightlight.core.clock import zone_named
-from nightlight.exemptions import ForegroundWatcher
 from nightlight.hardware import winsystem
 from nightlight.hardware.brightness import BrightnessBackend
 from nightlight.hardware.gamma import GammaBackend
-from nightlight.idle_dim import IdleDimmer
-from nightlight.monitors import MonitorManager
-from nightlight.safe_mode import SafeMode
+from nightlight.support import compat, diagnostics
+from nightlight.system import autostart
+from nightlight.system.safe_mode import SafeMode
+from nightlight.system.watcher import DisplayWatcher
 from nightlight.ui import reveal, theme
 from nightlight.ui.flyout import Flyout
 from nightlight.ui.settings_window import SettingsWindow
 from nightlight.ui.tray import Tray
-from nightlight.wake_report import WakeReport
-from nightlight.watcher import DisplayWatcher
 
 log = logging.getLogger(__name__)
 

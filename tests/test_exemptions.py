@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
+from datetime import UTC
+
+from nightlight.color.exemptions import ForegroundWatcher, paused_displays
 from nightlight.config import NightLightConfig
-from nightlight.exemptions import ForegroundWatcher, paused_displays
 from nightlight.hardware.winsystem import ForegroundApp
 
 D2 = r"\\.\DISPLAY2"
@@ -100,10 +102,10 @@ def test_the_watcher_asks_windows_only_when_automatic_is_on():
 
 
 def test_automatic_pauses_read_well():
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    from nightlight.controller import NightLightController
-    from nightlight.exemptions import describe
+    from nightlight.color.controller import NightLightController
+    from nightlight.color.exemptions import describe
     from nightlight.ui.night_light_text import paused_text
 
     class Gamma:
@@ -119,7 +121,7 @@ def test_automatic_pauses_read_well():
     from nightlight.config import Mode
 
     controller = NightLightController(Gamma(), NightLightConfig(enabled=True, mode=Mode.ALWAYS),
-                                      lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+                                      lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     controller.set_paused({D2: "msedge.exe, automatic"})
     assert paused_text(controller) == "Paused on display 2 for msedge.exe (automatic)"
     assert describe("msedge.exe, automatic").startswith("video")

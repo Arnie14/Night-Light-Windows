@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 
 from PySide6.QtWidgets import QMenu
 
+from nightlight.color.controller import NightLightController
 from nightlight.config import Mode
-from nightlight.controller import NightLightController
 from nightlight.core.schedule import OverrideKind, next_transition
 
 

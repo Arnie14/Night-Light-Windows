@@ -28,7 +28,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def _finish(job: _Job, lock: threading.Lock, stuck: _StuckRegistry) -> None:
     meanwhile, discard the outcome and run its clean-up instead."""
     try:
         result, error = job.fn(), None
-    except BaseException as exc:  # noqa: BLE001 - handed to the caller
+    except BaseException as exc:
         result, error = None, exc
     with lock:
         abandoned = job.abandoned
@@ -172,7 +172,7 @@ class InlineRunner:
     """Runs calls straight away on the caller's thread, without a time limit.
     For tests that need calls to happen in a predictable order."""
 
-    stuck: list[str] = []
+    stuck: ClassVar[list[str]] = []  # never stuck: calls run inline
     threads_started = 0
 
     def call(self, fn: Callable[[], Any], timeout: float, what: str = "", on_late: Callable[[], None] | None = None) -> Any:

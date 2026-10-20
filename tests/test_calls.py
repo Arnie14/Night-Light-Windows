@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Calls with a time limit: nothing waits forever on a stuck call."""
 
+import contextlib
 import threading
 import time
 
@@ -59,10 +60,9 @@ def test_clean_up_runs_when_a_given_up_call_finally_returns():
 def test_a_call_finishing_right_at_the_deadline_is_not_lost():
     runner = CallRunner("test")
     for _ in range(20):
-        try:
+        # Either outcome is fine; what matters is that nothing hangs or crashes.
+        with contextlib.suppress(CallTimeout):
             assert runner.call(lambda: time.sleep(0.01) or "done", 0.01) == "done"
-        except CallTimeout:
-            pass  # either outcome is fine; what matters is that nothing hangs or crashes
     assert runner.call(lambda: "still works", 1) == "still works"
     runner.close()
 

@@ -25,6 +25,7 @@ from nightlight.config import AppConfig, DisplayPrefs
 from nightlight.hardware.brightness import MonitorInfo
 from nightlight.ui.widgets import SecondaryLabel
 
+
 class AppList(QWidget):
     """Apps chosen by executable name (to pause night light for, or never to
     dim for idle while in front)."""

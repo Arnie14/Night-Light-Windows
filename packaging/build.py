@@ -3,7 +3,7 @@
 Setup is installed, the installer. Run on Windows (PyInstaller doesn't
 cross-compile):
 
-    pip install -r requirements.txt -r requirements-build.txt
+    pip install -e ".[build]"
     python packaging/build.py                      # version from nightlight/__init__.py
     python packaging/build.py --version 0.1.0-beta.1
 
@@ -25,9 +25,10 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
 DIST = ROOT / "dist"
 INNO_SETUP = [
-    Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Inno Setup 6" / "ISCC.exe",
-    Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Inno Setup 6" / "ISCC.exe",
+    Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Inno Setup 6" / "ISCC.exe",
+    Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Inno Setup 6" / "ISCC.exe",
     Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Inno Setup 6" / "ISCC.exe",
+    ROOT / "Inno Setup 6" / "ISCC.exe",  # a copy next to the project (ignored by git)
 ]
 
 VERSION_INFO = """\

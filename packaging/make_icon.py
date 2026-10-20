@@ -15,8 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice  # noqa: E402
-from PySide6.QtGui import QGuiApplication  # noqa: E402
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+from PySide6.QtGui import QGuiApplication
 
 SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)  # what Explorer, the taskbar and Alt+Tab ask for
 

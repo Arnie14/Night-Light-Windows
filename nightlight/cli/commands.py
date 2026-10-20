@@ -16,11 +16,11 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
+from nightlight.brightness.monitors import MonitorManager
+from nightlight.color.controller import NightLightController
 from nightlight.config import AppConfig
-from nightlight.controller import NightLightController
 from nightlight.core.schedule import OverrideKind
 from nightlight.hardware.brightness import MonitorInfo
-from nightlight.monitors import MonitorManager
 from nightlight.ui.night_light_text import is_night_light_on, night_light_status
 
 log = logging.getLogger(__name__)

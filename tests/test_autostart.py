@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import struct
 
-from nightlight import autostart
-from nightlight.autostart import APPROVED_KEY, RUN_KEY, WindowsAutostart, XdgAutostart
+from nightlight.system import autostart
+from nightlight.system.autostart import APPROVED_KEY, RUN_KEY, WindowsAutostart, XdgAutostart
 
 
 class FakeKey:

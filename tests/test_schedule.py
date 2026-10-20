@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-only
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -7,7 +7,7 @@ import pytest
 from nightlight.config import Mode, NightLightConfig
 from nightlight.core.schedule import Override, OverrideKind, compute_state, next_transition, schedule_around
 
-UTC = timezone.utc
+UTC = UTC
 KYIV_SUMMER = timezone(timedelta(hours=3))
 
 TIMES = NightLightConfig(

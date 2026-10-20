@@ -34,7 +34,7 @@ import time
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import PySide6
@@ -42,8 +42,8 @@ from PySide6.QtCore import QStandardPaths, qVersion
 from PySide6.QtGui import QGuiApplication
 
 from nightlight import APP_NAME, __version__, config
-from nightlight.exemptions import describe as describe_pause
-from nightlight.privacy import scrub
+from nightlight.color.exemptions import describe as describe_pause
+from nightlight.support.privacy import scrub
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class Sources:
     config_path: Path
     log_dir: Path | None
     skipped: Callable[[], set[str]] = lambda: set()
-    last_wake: Callable[[], list[str]] = lambda: []
+    last_wake: Callable[[], list[str]] = list
     compatibility: Callable[[], str] | None = None  # the compatibility report (compat.py)
 
 
@@ -76,7 +76,7 @@ def summary(sources: Sources) -> str:
         f"{APP_NAME} {__version__} ({'installed build' if getattr(sys, 'frozen', False) else 'from source'})",
         f"Windows: {platform.platform()}" + (f" (build {sys.getwindowsversion().build})" if sys.platform == "win32" else ""),
         f"Python {platform.python_version()}, PySide6 {PySide6.__version__}, Qt {qVersion()}, {QGuiApplication.platformName()}",
-        f"Report made {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC",
+        f"Report made {datetime.now(UTC):%Y-%m-%d %H:%M} UTC",
         "",
         "Displays (as the app sees them):",
     ]

@@ -1,19 +1,19 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from PySide6.QtCore import QObject, Signal
 
-from nightlight import brightness_memory
-from nightlight.brightness_memory import BrightnessMemory
+from nightlight.brightness import memory as brightness_memory
+from nightlight.brightness.memory import BrightnessMemory
+from nightlight.brightness.monitors import RESTORE, SCHEDULE, USER
 from nightlight.hardware.brightness import MonitorInfo, with_unique_keys
-from nightlight.monitors import RESTORE, SCHEDULE, USER
 
 DELL = MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2")
 LG = MonitorInfo(1, "LG 27GL850", True, key="GSM5B7F")
 PANEL = MonitorInfo(2, "Built-in display", True, key="BOE0812", internal=True, minimum=1)
 NO_DDC = MonitorInfo(3, "Old monitor", False, key="ACI27A1")
-NOON = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
+NOON = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
 
 
 class FakeManager(QObject):

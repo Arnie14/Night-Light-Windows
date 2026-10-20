@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from PySide6.QtTest import QTest
 
-from nightlight import controller as controller_module
+from nightlight.color import controller as controller_module
+from nightlight.color.controller import NightLightController, step_towards
 from nightlight.config import Mode, NightLightConfig
-from nightlight.controller import NightLightController, step_towards
 from nightlight.core.schedule import OverrideKind
 
-NOON = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
+NOON = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
 
 
 class RecordingGamma:
@@ -219,7 +219,7 @@ def test_nothing_touches_the_displays_after_shutdown():
 
     gamma = Gamma()
     controller = NightLightController(gamma, NightLightConfig(enabled=True, mode=Mode.ALWAYS, night_temperature=3400),
-                                      lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+                                      lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     controller.shutdown()
     gamma.calls.clear()
     controller.verify()

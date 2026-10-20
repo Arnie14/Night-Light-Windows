@@ -25,10 +25,10 @@ import time
 import pytest
 from PySide6.QtTest import QTest
 
-from nightlight import monitors as monitors_module
-from nightlight.brightness_memory import BrightnessMemory
+from nightlight.brightness import monitors as monitors_module
+from nightlight.brightness.memory import BrightnessMemory
+from nightlight.brightness.monitors import IDLE, MonitorManager, Status
 from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo
-from nightlight.monitors import IDLE, MonitorManager, Status
 
 KEYS = ["AAA1:111", "BBB2:222", "CCC3:333", "DDD4:444", "AAA1:999"]  # the last: the same model, another serial
 TIMEOUT_S = 0.06

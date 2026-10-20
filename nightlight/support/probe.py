@@ -15,7 +15,7 @@ import sys
 import time
 import traceback
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import PySide6
@@ -23,7 +23,7 @@ from PySide6.QtCore import qVersion
 from PySide6.QtGui import QGuiApplication
 
 from nightlight import __version__
-from nightlight.privacy import scrub
+from nightlight.support.privacy import scrub
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ def _sections(lines: list[str]) -> Callable[[str, Callable[[Callable[[str], None
 
 def _system(out) -> None:
     # In UTC: a local time zone's name tells where the user is (privacy.py); this file goes into bug reports.
-    out(f"Night Light {__version__}, {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC")
+    out(f"Night Light {__version__}, {datetime.now(UTC):%Y-%m-%d %H:%M} UTC")
     out(f"OS: {platform.platform()}")
     if sys.platform == "win32":
         version = sys.getwindowsversion()

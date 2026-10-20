@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """The list of compatible displays and the compatibility report."""
 
-from nightlight import compat
+from nightlight.brightness.monitors import DisplayState, Status
 from nightlight.hardware.brightness import DisplayDetails, FakeBrightnessBackend, MonitorInfo
-from nightlight.monitors import DisplayState, Status
+from nightlight.support import compat
 
 DELL = MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2:7XKJ9F3", channel="ddc",
                    details=DisplayDetails("DEL", "DELL U2720Q", "7XKJ9F3", "DisplayPort", False, 2021, 27.0, r"\\.\DISPLAY1"))

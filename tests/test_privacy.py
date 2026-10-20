@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import logging
 
-from nightlight.privacy import Scrubber, ScrubbingFormatter
+from nightlight.support.privacy import Scrubber, ScrubbingFormatter
 
 SCRUB = Scrubber(user="jsmith", computer="JSMITH-PC", home=r"C:\Users\Jsmith")
 
@@ -29,7 +29,7 @@ def test_display_and_windows_details_stay():
 def test_tracebacks_are_scrubbed_too():
     formatter = ScrubbingFormatter("%(message)s")
     formatter_scrub = SCRUB
-    import nightlight.privacy as privacy
+    import nightlight.support.privacy as privacy
 
     original = privacy.scrub
     privacy.scrub = formatter_scrub

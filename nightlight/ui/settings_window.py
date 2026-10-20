@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, QTime, QTimeZone, Qt, QUrl, Signal
+from PySide6.QtCore import QStandardPaths, Qt, QTime, QTimeZone, QUrl, Signal
 from PySide6.QtGui import QCursor, QDesktopServices, QGuiApplication, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from nightlight import APP_NAME, AUTHOR, REPO_URL, display_version
+from nightlight.color.controller import NightLightController
 from nightlight.config import (
     MAX_IDLE_MINUTES,
     MAX_SOLAR_TRANSITION_MINUTES,
@@ -50,7 +51,6 @@ from nightlight.config import (
     Mode,
     NightLightConfig,
 )
-from nightlight.controller import NightLightController
 from nightlight.core import locations
 from nightlight.core.brightness_schedule import describe as describe_schedule
 from nightlight.core.schedule import OverrideKind
@@ -117,7 +117,7 @@ class SettingsWindow(QWidget):
         scheduler=None,
         compatibility: Callable[[], list] | None = None,
         report: Callable[[], str] | None = None,
-        running_apps: Callable[[], list[str]] = lambda: [],
+        running_apps: Callable[[], list[str]] = list,
         report_problem: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
@@ -398,8 +398,8 @@ class SettingsWindow(QWidget):
             (self.night_start, "Turn on at", "When the evening transition starts"),
             (self.day_start, "Turn off at", "When the morning transition starts"),
             (self.transition, "Transition", "How long the change between day and night takes"),
-            (self.solar_transition, "Transition", "Starts at sunset in the evening and ends at sunrise in the morning. "
-             "Twilight lasts longer in some places and seasons"),
+            (self.solar_transition, "Transition", ("Starts at sunset in the evening and ends at sunrise in the morning. "
+                                                    "Twilight lasts longer in some places and seasons")),
         ):
             self._field_rows[field] = self._night_card.add(SettingRow(title, description, field))
         layout.addWidget(self._night_card)

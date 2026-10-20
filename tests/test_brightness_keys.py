@@ -2,7 +2,7 @@
 import pytest
 from PySide6.QtCore import QObject, Signal
 
-from nightlight.brightness_keys import BrightnessKeys
+from nightlight.brightness.keys import BrightnessKeys
 from nightlight.hardware.brightness import MonitorInfo
 
 PANEL = MonitorInfo(0, "Built-in display", True, key="BOE0812", internal=True, minimum=1)

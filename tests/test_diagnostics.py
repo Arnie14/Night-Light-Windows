@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import json
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from nightlight import diagnostics
+from nightlight.color.controller import NightLightController
 from nightlight.config import AppConfig, DisplayPrefs, GeneralConfig, NightLightConfig
-from nightlight.controller import NightLightController
 from nightlight.hardware.brightness import MonitorInfo
+from nightlight.support import diagnostics
 
 
 class FakeGamma:
@@ -32,7 +32,7 @@ class FakeMonitors:
 
 
 def sources(tmp_path, log_dir=None):
-    controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     settings = AppConfig(NightLightConfig(latitude=50.4501, longitude=30.5234, timezone="Europe/Kyiv"), displays=(DisplayPrefs("DEL41A2", "Left"),))
     return diagnostics.Sources(FakeMonitors(), controller, lambda: settings, tmp_path / "settings.json", log_dir, lambda: {r"\\.\DISPLAY3"}), controller
 
@@ -70,8 +70,8 @@ def test_bundle_has_the_summary_logs_and_no_location(tmp_path):
 
 
 def test_nothing_personal_gets_into_the_bundle(tmp_path, monkeypatch):
-    from nightlight import privacy
     from nightlight.config import NightLightConfig
+    from nightlight.support import privacy
 
     monkeypatch.setattr(diagnostics, "scrub", privacy.Scrubber(user="jsmith", computer="JSMITH-PC", home=r"C:\Users\Jsmith"))
     logs = tmp_path / "logs"
@@ -80,7 +80,7 @@ def test_nothing_personal_gets_into_the_bundle(tmp_path, monkeypatch):
         "INFO Settings file: C:\\Users\\Jsmith\\AppData\\Local\\night-light\\settings.json\n"
         "INFO pipe night-light-jsmith on JSMITH-PC, mail jsmith@example.com\n"
     )
-    controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     settings = AppConfig(
         NightLightConfig(latitude=50.4501, longitude=30.5234, timezone="Europe/Kyiv", exempt_apps=("secret-project.exe",)),
         GeneralConfig(idle_exempt_apps=("hidden-call.exe",)),
@@ -105,7 +105,7 @@ def test_the_last_wake_is_in_the_summary(tmp_path):
 
 
 def test_a_display_that_does_not_answer_now_says_so(tmp_path):
-    from nightlight.monitors import DisplayState, Status
+    from nightlight.brightness.monitors import DisplayState, Status
 
     src, controller = sources(tmp_path)
     monitors = FakeMonitors()
@@ -116,7 +116,7 @@ def test_a_display_that_does_not_answer_now_says_so(tmp_path):
 
 
 def test_the_compatibility_report_is_included_and_scrubbed(tmp_path, monkeypatch):
-    from nightlight import privacy
+    from nightlight.support import privacy
 
     monkeypatch.setattr(diagnostics, "scrub", privacy.Scrubber(user="jsmith", computer="JSMITH-PC", home=r"C:\Users\Jsmith"))
     src, controller = sources(tmp_path)

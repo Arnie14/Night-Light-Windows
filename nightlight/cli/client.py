@@ -16,7 +16,7 @@ import json
 import sys
 
 from nightlight import APP_NAME
-from nightlight.single_instance import SingleInstance
+from nightlight.system.single_instance import SingleInstance
 
 EXAMPLES = """\
 examples:

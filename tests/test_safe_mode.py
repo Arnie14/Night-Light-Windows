@@ -6,7 +6,7 @@ from pathlib import Path
 
 from nightlight.hardware import win32, windows
 from nightlight.hardware.win32 import DisplayTarget, PhysicalMonitor
-from nightlight.safe_mode import SKIPPED_REASON, SKIPPED_SHORT, SafeMode
+from nightlight.system.safe_mode import SKIPPED_REASON, SKIPPED_SHORT, SafeMode
 
 ROOT = Path(__file__).resolve().parent.parent
 D1, D2 = r"\\.\DISPLAY1", r"\\.\DISPLAY2"
@@ -23,7 +23,7 @@ def test_a_call_that_finishes_leaves_nothing_behind(tmp_path):
 def test_a_crash_during_a_call_skips_that_display_next_time(tmp_path):
     # A real crash: the process dies inside the risky call.
     code = (
-        "import os, sys; from pathlib import Path; from nightlight.safe_mode import SafeMode\n"
+        "import os, sys; from pathlib import Path; from nightlight.system.safe_mode import SafeMode\n"
         f"safe = SafeMode(Path({str(tmp_path)!r}))\n"
         f"with safe.risky({D2!r}, 'detecting DELL on DISPLAY2'):\n"
         "    os._exit(3)\n"
@@ -61,7 +61,7 @@ def test_the_backend_does_not_probe_a_skipped_display(tmp_path, monkeypatch):
 def test_displays_probed_side_by_side_are_all_skipped_after_a_crash(tmp_path):
     # Detection probes displays in parallel: which one crashed is unknown, so all are skipped.
     code = (
-        "import os, threading; from pathlib import Path; from nightlight.safe_mode import SafeMode\n"
+        "import os, threading; from pathlib import Path; from nightlight.system.safe_mode import SafeMode\n"
         f"safe = SafeMode(Path({str(tmp_path)!r}))\n"
         "inside = threading.Barrier(3)\n"
         "def probe(name):\n"

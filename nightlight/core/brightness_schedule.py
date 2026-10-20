@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 
 from astral import Observer
 from astral.sun import sun
@@ -119,7 +119,7 @@ class ScheduledLevel:
     transition_end: datetime | None = None  # when it reaches since.level, while transitioning
 
 
-_UTC = timezone.utc
+_UTC = UTC
 
 
 def sun_times(day: date, zone: tzinfo, location: tuple[float, float] | None) -> tuple[datetime, datetime, bool]:

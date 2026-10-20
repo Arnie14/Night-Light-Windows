@@ -7,7 +7,7 @@ from PySide6.QtCore import QRect, Signal
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from nightlight import APP_NAME
-from nightlight.controller import NightLightController
+from nightlight.color.controller import NightLightController
 from nightlight.ui import icons
 from nightlight.ui.night_light_text import brightness_status, build_override_menu, is_night_light_on, night_light_status, paused_text
 

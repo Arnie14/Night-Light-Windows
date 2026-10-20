@@ -33,10 +33,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from nightlight.brightness.monitors import SCHEDULE, USER, MonitorManager, Status
 from nightlight.config import BrightnessScheduleConfig
 from nightlight.core.brightness_schedule import ScheduledLevel, scheduled_level
-from nightlight.monitors import SCHEDULE, USER, MonitorManager, Status
-from nightlight.files import write_atomic
+from nightlight.system.files import write_atomic
 
 log = logging.getLogger(__name__)
 

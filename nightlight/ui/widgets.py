@@ -30,8 +30,10 @@ CONTROL_CAPTIONS = {
     "sdr": ("HDR · SDR content brightness", "HDR is on, so this sets Windows' brightness for SDR content, like Settings > Display > HDR."),
     "software": (
         "Software dimming",
-        "This display has no brightness control Windows can reach, so its colors are dimmed instead. "
-        "Blacks stay black but the backlight stays on, so it saves no power.",
+        (
+            "This display has no brightness control Windows can reach, so its colors are dimmed instead. "
+            "Blacks stay black but the backlight stays on, so it saves no power."
+        ),
     ),
 }
 

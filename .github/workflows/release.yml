@@ -29,14 +29,29 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements*.txt
+          cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
-        run: python -m pip install -r requirements-dev.txt -r requirements-build.txt pytest-github-actions-annotate-failures
+        run: python -m pip install -e ".[dev,build]" pytest-github-actions-annotate-failures
+
+      - name: Lint
+        run: python -m ruff check .
 
       - name: Test
         # Failures also appear as annotations on the run, readable without logs.
-        run: python -m pytest -q --tb=short -ra
+        run: python -m pytest -q --tb=short -ra --junitxml=test-results.xml
+
+      - name: Test counts
+        # The documents don't quote test counts; each run reports its own here.
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path test-results.xml) {
+            [xml]$results = Get-Content test-results.xml
+            $suite = $results.testsuites.testsuite
+            $passed = [int]$suite.tests - [int]$suite.failures - [int]$suite.errors - [int]$suite.skipped
+            "### Tests: $passed passed, $($suite.failures) failed, $($suite.errors) errors, $($suite.skipped) skipped" >> $env:GITHUB_STEP_SUMMARY
+          }
 
       - name: Make sure Inno Setup is installed
         shell: pwsh

@@ -51,9 +51,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer
 
+from nightlight.brightness.monitors import RESTORE, MonitorManager
 from nightlight.hardware.brightness import MonitorInfo, legacy_key
-from nightlight.monitors import RESTORE, MonitorManager
-from nightlight.files import write_atomic
+from nightlight.system.files import write_atomic
 
 log = logging.getLogger(__name__)
 

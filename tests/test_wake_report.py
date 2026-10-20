@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 from PySide6.QtCore import QObject, Signal
 
+from nightlight.brightness.monitors import DisplayState, Status
+from nightlight.brightness.wake_report import RESCAN_AFTER_WAKE_S, WakeReport
 from nightlight.hardware.brightness import MonitorInfo
-from nightlight.monitors import DisplayState, Status
-from nightlight.wake_report import RESCAN_AFTER_WAKE_S, WakeReport
 
 DELL = MonitorInfo(0, "DELL", True, key="DEL41A2")
 LG = MonitorInfo(1, "LG", True, key="GSM5B7F")

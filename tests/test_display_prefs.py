@@ -11,10 +11,10 @@ import pytest
 from PySide6.QtTest import QTest
 
 from nightlight import app as app_module
-from nightlight import diagnostics
 from nightlight.config import AppConfig, DisplayPrefs
 from nightlight.hardware.brightness import FakeBrightnessBackend
 from nightlight.hardware.gamma import FakeGammaBackend
+from nightlight.support import diagnostics
 
 DELL, LG, TV = "DEL41A2:7XKJ9F3", "GSM5BBF:204NTAB1", "SAM7136"
 PREFS = {"displays": {DELL: {"name": "Left screen", "hidden": False}, TV: {"name": "", "hidden": True}}}

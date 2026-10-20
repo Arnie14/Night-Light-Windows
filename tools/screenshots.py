@@ -22,11 +22,11 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor, QPalette  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from nightlight.brightness.monitors import MonitorManager  # noqa: E402
+from nightlight.color.controller import NightLightController  # noqa: E402
 from nightlight.config import Anchor, AppConfig, BrightnessScheduleConfig, GeneralConfig, Mode, NightLightConfig, SchedulePoint  # noqa: E402
-from nightlight.controller import NightLightController  # noqa: E402
 from nightlight.hardware.brightness import FakeBrightnessBackend  # noqa: E402
 from nightlight.hardware.gamma import FakeGammaBackend  # noqa: E402
-from nightlight.monitors import MonitorManager  # noqa: E402
 from nightlight.ui import icons  # noqa: E402
 from nightlight.ui.flyout import Flyout  # noqa: E402
 from nightlight.ui.settings_window import SettingsWindow  # noqa: E402

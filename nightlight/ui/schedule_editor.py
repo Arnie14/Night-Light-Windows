@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTime, Qt, Signal
+from PySide6.QtCore import Qt, QTime, Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QSlider, QSpinBox, QTimeEdit, QToolButton, QVBoxLayout, QWidget
 
 from nightlight.config import MAX_SCHEDULE_POINTS, MAX_SUN_OFFSET_MINUTES, MAX_TRANSITION_MINUTES, Anchor, BrightnessScheduleConfig, SchedulePoint

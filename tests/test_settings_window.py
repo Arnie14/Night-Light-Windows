@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from PySide6.QtCore import QByteArray, QTime, QTimeZone
 from PySide6.QtWidgets import QDialogButtonBox
 
+from nightlight.color.controller import NightLightController
 from nightlight.config import Anchor, AppConfig, BrightnessScheduleConfig, GeneralConfig, Mode, NightLightConfig, SchedulePoint
-from nightlight.controller import NightLightController
 from nightlight.core import locations
 from nightlight.core.brightness_schedule import PRESETS
 from nightlight.ui.settings_window import CUSTOM_LOCATION, SettingsWindow
@@ -24,7 +24,7 @@ class FakeGamma:
 
 
 def make_window(night_light=KYIV, general=GeneralConfig(), can_autostart=True):
-    controller = NightLightController(FakeGamma(), night_light, lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), night_light, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     return SettingsWindow(controller, AppConfig(night_light, general), can_autostart), controller
 
 
@@ -213,7 +213,7 @@ def test_schedule_controls_are_disabled_while_it_is_off(window):
 def test_a_saved_schedule_loads_back():
     schedule = BrightnessScheduleConfig(enabled=True, preset="custom", points=(SchedulePoint(60, "09:15"), SchedulePoint(25, "21:45")),
                                         transition_minutes=15)
-    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     window = SettingsWindow(controller, AppConfig(KYIV, GeneralConfig(), schedule))
     assert window.current_config().brightness_schedule == schedule
     assert not apply_button(window).isEnabled()
@@ -221,11 +221,11 @@ def test_a_saved_schedule_loads_back():
 
 
 def test_the_displays_tab_lists_each_display_and_its_control():
-    from nightlight import compat
     from nightlight.hardware.brightness import FakeBrightnessBackend
+    from nightlight.support import compat
 
     monitors = FakeBrightnessBackend(latency=0).list_monitors()
-    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     window = SettingsWindow(controller, AppConfig(KYIV), compatibility=lambda: compat.entries(monitors), report=lambda: "REPORT")
     rows = window.display_rows
     assert [row.title.text() for row in rows] == ["DELL U2720Q", "LG 27GP950 (HDR)", "Living room TV", "Old projector"]
@@ -278,7 +278,7 @@ def test_display_names_and_hiding():
         monitorsChanged = Signal(list)
         monitors = [MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2"), MonitorInfo(1, "TV", True, key="SAM7136")]
 
-    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     monitors = Monitors()
     saved = (DisplayPrefs("DEL41A2", "Left"),)
     window = SettingsWindow(controller, AppConfig(KYIV, displays=saved), monitors=monitors)
@@ -337,7 +337,7 @@ def test_every_setting_has_its_place_on_a_page(window):
 
 
 def test_report_a_problem_from_the_about_card():
-    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     reports = []
     window = SettingsWindow(controller, AppConfig(KYIV), report_problem=lambda: reports.append(True))
     from PySide6.QtWidgets import QPushButton
@@ -360,7 +360,7 @@ def test_display_names_saved_under_an_older_key_show_on_their_display():
         monitorsChanged = Signal(list)
         monitors = [MonitorInfo(0, "DELL U2720Q", True, key="DEL41A2:7XKJ9F3")]
 
-    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     window = SettingsWindow(controller, AppConfig(KYIV, displays=(DisplayPrefs("DEL41A2", "Left", True),)), monitors=Monitors())
     assert list(window.displays._rows) == ["DEL41A2:7XKJ9F3"]  # one row, not a "not connected" one for the old key
     name, show = window.displays._rows["DEL41A2:7XKJ9F3"]
@@ -449,7 +449,7 @@ def test_a_schedule_saved_from_an_older_preset_shows_as_custom():
     """The presets changed in 0.2.0: a schedule saved from the old "Office
     hours" keeps its own points and is labelled Custom, not as the new preset."""
     old = BrightnessScheduleConfig(True, "office", (SchedulePoint(85, "08:00"), SchedulePoint(60, "18:00")), 0)
-    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     window = SettingsWindow(controller, AppConfig(KYIV, brightness_schedule=old))
     schedule = window.current_config().brightness_schedule
     assert window.schedule.preset.currentData() == "custom"

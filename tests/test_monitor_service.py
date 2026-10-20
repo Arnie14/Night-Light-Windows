@@ -13,10 +13,8 @@ import time
 
 import pytest
 
-from nightlight import monitors as monitors_module
-from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo
-from nightlight.hardware.calls import CallRunner, InlineRunner
-from nightlight.monitors import (
+from nightlight.brightness import monitors as monitors_module
+from nightlight.brightness.monitors import (
     RESTORE,
     SCHEDULE,
     USER,
@@ -30,6 +28,8 @@ from nightlight.monitors import (
     Observed,
     Write,
 )
+from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo
+from nightlight.hardware.calls import CallRunner, InlineRunner
 
 
 class ScriptedBackend:

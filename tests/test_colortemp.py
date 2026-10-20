@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
+import itertools
+
 import pytest
 
 from nightlight.core.colortemp import (
@@ -85,7 +87,7 @@ def test_dimming_stays_driver_safe_and_monotonic(percent):
     ramp = dimmed_ramp(percent)
     for channel in ramp:
         assert channel[-1] >= DRIVER_SAFE_PEAK * 65535 - 1  # Windows rejects darker peaks
-        assert all(b >= a for a, b in zip(channel, channel[1:]))
+        assert all(b >= a for a, b in itertools.pairwise(channel))
 
 
 def test_dimming_darkens_mid_tones_in_order():

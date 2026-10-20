@@ -2,7 +2,7 @@
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication
 
-from nightlight.watcher import DisplayWatcher
+from nightlight.system.watcher import DisplayWatcher
 
 
 class Clock:
@@ -211,7 +211,7 @@ def test_screen_signals_reach_methods_not_lambdas():
     and would call into a deleted object; methods are disconnected with it."""
     import inspect
 
-    from nightlight import watcher as module
+    from nightlight.system import watcher as module
 
     source = inspect.getsource(module.DisplayWatcher.__init__) + inspect.getsource(module.DisplayWatcher._watch)
     assert "connect(lambda" not in source

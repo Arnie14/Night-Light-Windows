@@ -26,13 +26,14 @@ Reliability rules, learnt from Monitorian's and Twinkle Tray's bug reports:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
@@ -47,7 +48,6 @@ from nightlight.core.colortemp import (
     ramps_match,
     whitepoint,
 )
-from nightlight.files import write_atomic
 from nightlight.hardware import win32
 from nightlight.hardware.brightness import (
     DisplayDetails,
@@ -60,19 +60,18 @@ from nightlight.hardware.brightness import (
     with_unique_keys,
 )
 from nightlight.hardware.calls import CallTimeout, start_side_call
-from nightlight.safe_mode import SKIPPED_REASON, SKIPPED_SHORT, SafeMode
+from nightlight.system.files import write_atomic
+from nightlight.system.safe_mode import SKIPPED_REASON, SKIPPED_SHORT, SafeMode
 
 log = logging.getLogger(__name__)
 
 if sys.platform == "win32":
-    try:
-        # The wmi package makes a COM object when first imported, on the
-        # importing thread. Import it here, on the main thread, whose COM
-        # lasts until exit; first imported on a worker thread, that object
-        # would outlive the thread's COM and fail when released at exit.
+    # The wmi package makes a COM object when first imported, on the
+    # importing thread. Import it here, on the main thread, whose COM lasts
+    # until exit; first imported on a worker thread, that object would
+    # outlive the thread's COM and fail when released at exit.
+    with contextlib.suppress(ImportError):
         import wmi  # noqa: F401
-    except ImportError:
-        pass
 
 # How long detection waits for the DDC/CI probes, which run side by side. A
 # healthy monitor answers within a second, even with retries.
@@ -382,16 +381,14 @@ class _Wmi:
         The wmi package's wrappers sit in reference cycles; they are broken
         here rather than collected, since a collection on this thread would
         free other garbage too, Qt objects included (gc_guard.py)."""
-        from nightlight.gc_guard import release_cycles
+        from nightlight.system.gc_guard import release_cycles
 
         conn, self._conn = self._conn, None
         if conn is not None:
             release_cycles(conn, ("wmi", "win32com"))
         del conn
-        try:
+        with suppress(Exception):
             self._pythoncom.CoUninitialize()
-        except Exception:
-            pass
 
     def panels(self) -> list[tuple[str, int, list[int]]]:
         """(instance name, current brightness, supported levels) per panel."""
@@ -1265,7 +1262,7 @@ class WindowsGammaBackend:
                 hdr, key = sources.get(target.gdi_name, (False, ""))
                 sources[target.gdi_name] = (hdr or target.hdr, key or target.key)
         else:
-            sources = {name: (False, "") for name in self._api.attached_display_names()}
+            sources = dict.fromkeys(self._api.attached_display_names(), (False, ""))
         displays = {}
         for name, (hdr, key) in sources.items():
             new = name not in self._displays

@@ -81,7 +81,10 @@ def _apply_accent() -> None:
         dark = _theme == "dark"
     else:
         scheme = QGuiApplication.styleHints().colorScheme()
-        dark = scheme == Qt.ColorScheme.Dark if scheme != Qt.ColorScheme.Unknown else             app.palette().color(QPalette.ColorRole.Window).lightnessF() < 0.5
+        if scheme != Qt.ColorScheme.Unknown:
+            dark = scheme == Qt.ColorScheme.Dark
+        else:
+            dark = app.palette().color(QPalette.ColorRole.Window).lightnessF() < 0.5
     color = accent_color(_accent, dark)
     current = app.palette()
     if color is None:

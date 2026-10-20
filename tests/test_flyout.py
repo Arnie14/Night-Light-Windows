@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from PySide6.QtCore import QObject, Signal
 
+from nightlight.brightness.monitors import STATUS_TEXT, DisplayState, Status
+from nightlight.color.controller import NightLightController
 from nightlight.config import NightLightConfig
-from nightlight.controller import NightLightController
 from nightlight.hardware.brightness import MonitorInfo
-from nightlight.monitors import STATUS_TEXT, DisplayState, Status
 from nightlight.ui.flyout import Flyout
 from nightlight.ui.widgets import MonitorBrightness
 
@@ -68,7 +68,7 @@ class FakeMonitors(QObject):
 
 @pytest.fixture
 def flyout():
-    controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     monitors = FakeMonitors()
     flyout = Flyout(monitors, controller, as_window=True)
     yield flyout, monitors
@@ -151,7 +151,7 @@ def test_popup_that_grows_while_open_stays_on_screen():
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtTest import QTest
 
-    controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     monitors = FakeMonitors([])
     popup = Flyout(monitors, controller, as_window=False)
     popup.show_near(None)
@@ -236,7 +236,7 @@ def test_a_paused_display_is_named_in_the_panel():
     from nightlight.hardware.gamma import FakeGammaBackend
 
     controller = NightLightController(FakeGammaBackend(), NightLightConfig(enabled=True, mode=Mode.ALWAYS),
-                                      lambda: datetime(2026, 6, 15, 22, tzinfo=timezone.utc))
+                                      lambda: datetime(2026, 6, 15, 22, tzinfo=UTC))
     try:
         flyout = Flyout(monitors, controller, as_window=True)
         flyout.set_display_prefs((DisplayPrefs("DEL", "Left screen"),))

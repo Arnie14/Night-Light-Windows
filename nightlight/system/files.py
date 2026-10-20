@@ -25,7 +25,7 @@ def write_atomic(path: Path, text: str) -> None:
     tmp.write_text(text, encoding="utf-8")
     for attempt in range(ATTEMPTS):
         try:
-            os.replace(tmp, path)
+            os.replace(tmp, path)  # noqa: PTH105 (the tests stand in for os.replace to simulate a locked file)
             return
         except PermissionError:
             if attempt == ATTEMPTS - 1:

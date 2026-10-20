@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import argparse
-import os
+import contextlib
 import logging
 import logging.handlers
+import os
 import signal
 import sys
 import threading
@@ -11,12 +12,13 @@ from pathlib import Path
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from nightlight import APP_NAME, cli, config
+from nightlight import APP_NAME, config
 from nightlight.app import NightLightApp
-from nightlight.gc_guard import MainThreadGarbageCollector
+from nightlight.cli import client as cli
 from nightlight.hardware import BACKENDS, create_backends
-from nightlight.privacy import ScrubbingFormatter
-from nightlight.single_instance import SingleInstance
+from nightlight.support.privacy import ScrubbingFormatter
+from nightlight.system.gc_guard import MainThreadGarbageCollector
+from nightlight.system.single_instance import SingleInstance
 from nightlight.ui import icons
 
 log = logging.getLogger("nightlight")
@@ -77,7 +79,7 @@ def main() -> int:
         # The command line: quick, no windows, and no log lines mixed into its output.
         from PySide6.QtCore import QCoreApplication
 
-        _app = QCoreApplication(sys.argv)  # noqa: F841 (sockets need one)
+        _app = QCoreApplication(sys.argv)
         if args.diagnostics:
             args.list, args.diagnostics_request = False, True
         return cli.run(args)
@@ -97,7 +99,7 @@ def main() -> int:
     MainThreadGarbageCollector(app)
 
     if args.probe:
-        from nightlight import probe
+        from nightlight.support import probe
 
         return probe.run(args.backend, log_folder())
     if args.report:
@@ -149,10 +151,8 @@ def quit_on_signals(app: QApplication) -> None:
 
     for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
         if (number := getattr(signal, name, None)) is not None:
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 signal.signal(number, request_quit)
-            except (OSError, ValueError):
-                pass
     timer = QTimer(app)
     timer.timeout.connect(lambda: None)
     timer.start(250)
@@ -160,8 +160,8 @@ def quit_on_signals(app: QApplication) -> None:
 
 def print_report(backend: str, out_dir: Path | None) -> int:
     """`--report`: detect the displays once, print the compatibility report and save it next to the log."""
-    from nightlight import compat
-    from nightlight.monitors import MonitorService
+    from nightlight.brightness.monitors import MonitorService
+    from nightlight.support import compat
 
     brightness, _gamma = create_backends(backend)
     service = MonitorService(brightness, lambda _event: None)

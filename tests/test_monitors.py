@@ -9,9 +9,9 @@ import time
 import pytest
 from PySide6.QtTest import QTest
 
-from nightlight import monitors as monitors_module
+from nightlight.brightness import monitors as monitors_module
+from nightlight.brightness.monitors import RESTORE, SCHEDULE, MonitorManager, Status
 from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo, nearest_level, to_percent, to_raw, valid_range
-from nightlight.monitors import RESTORE, SCHEDULE, MonitorManager, Status
 
 
 class SlowBackend:
@@ -286,7 +286,7 @@ def test_a_newer_change_cuts_a_fade_short(manager):
 
 
 def test_idle_dimming_is_not_a_choice_and_skips_displays_in_standby(manager):
-    from nightlight.monitors import IDLE
+    from nightlight.brightness.monitors import IDLE
 
     backend = SlowBackend(delay=0)
     monitors = manager(backend)

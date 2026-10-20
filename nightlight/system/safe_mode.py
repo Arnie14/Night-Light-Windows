@@ -30,7 +30,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from nightlight.files import write_atomic
+from nightlight.system.files import write_atomic
 
 log = logging.getLogger(__name__)
 

@@ -2,9 +2,10 @@
 """Layouts of the Windows API structures, and smoke tests that only run on Windows."""
 
 import ctypes
-import time
+import itertools
 import os
 import sys
+import time
 
 import pytest
 
@@ -107,7 +108,7 @@ def test_messages_to_one_monitor_are_spaced_out(monkeypatch):
     win32.forget_handle(99)
     for _ in range(3):
         win32.set_vcp(99, win32.VCP_LUMINANCE, 50)
-    gaps = [b - a for a, b in zip(times, times[1:])]
+    gaps = [b - a for a, b in itertools.pairwise(times)]
     assert all(gap >= win32.DDC_MIN_INTERVAL - 0.005 for gap in gaps), gaps
 
 

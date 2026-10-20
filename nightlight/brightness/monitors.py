@@ -581,7 +581,7 @@ class MonitorService:
             if info is None or not info.supported or self._hung_call(key):
                 continue
             try:
-                value = self._call(lambda: self._backend.get_brightness(info.index), READ_TIMEOUT_S, f"reading the brightness of {info.name}", key)
+                value = self._call(lambda index=info.index: self._backend.get_brightness(index), READ_TIMEOUT_S, f"reading the brightness of {info.name}", key)
             except CallTimeout as exc:
                 self._emit(Failed(key, str(exc), timeout=True))
                 continue  # the others are read regardless

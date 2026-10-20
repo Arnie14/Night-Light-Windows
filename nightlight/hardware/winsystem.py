@@ -442,11 +442,15 @@ class _Filter(QAbstractNativeEventFilter):
 # Windows keeps Night Light's state in a CloudStore blob; there is no API.
 # Its location moved over Windows versions, so both are tried.
 _NIGHT_LIGHT_KEYS = (
-    r"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current"
-    r"\default$windows.data.bluelightreduction.bluelightreductionstate"
-    r"\windows.data.bluelightreduction.bluelightreductionstate",
-    r"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\Cache\DefaultAccount"
-    r"\$$windows.data.bluelightreduction.bluelightreductionstate\Current",
+    (
+        r"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current"
+        r"\default$windows.data.bluelightreduction.bluelightreductionstate"
+        r"\windows.data.bluelightreduction.bluelightreductionstate"
+    ),
+    (
+        r"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\Cache\DefaultAccount"
+        r"\$$windows.data.bluelightreduction.bluelightreductionstate\Current"
+    ),
 )
 WINDOWS_NIGHT_LIGHT_SETTINGS = "ms-settings:nightlight"
 

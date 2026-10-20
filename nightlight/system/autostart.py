@@ -56,7 +56,7 @@ def launch_command() -> list[str]:
     windowless = python.with_name("pythonw.exe")
     if windowless.exists():
         python = windowless
-    main = Path(__file__).resolve().parent.parent / "main.py"
+    main = Path(__file__).resolve().parents[2] / "main.py"
     return [str(python), str(main)]
 
 

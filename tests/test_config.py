@@ -179,7 +179,7 @@ def test_beta_4_general_settings_load(tmp_path):
                                             "idle_dim": True, "idle_minutes": 0, "idle_level": 300}}))
     general = config.load(path).general
     assert (general.respect_fullscreen, general.follow_laptop_brightness, general.idle_dim) == (False, True, True)
-    assert 1 <= general.idle_minutes and 0 <= general.idle_level <= 100  # clamped into range
+    assert general.idle_minutes >= 1 and 0 <= general.idle_level <= 100  # clamped into range
 
 
 def test_an_unreadable_settings_file_is_kept_before_defaults_replace_it(tmp_path):

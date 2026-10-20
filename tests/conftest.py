@@ -6,7 +6,7 @@ import pytest
 # No windows are shown, so tests also run without a display (CI, SSH).
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -55,9 +55,9 @@ def flyout_position(size: QSize, screen: QRect, available: QRect, anchor: QRect 
     # Only trust the icon if it is on this screen and in the taskbar, i.e.
     # outside the work area (unless the taskbar auto-hides and takes none).
     icon = None
-    if anchor is not None and anchor.isValid() and screen.contains(anchor.center()):
-        if available == screen or not available.contains(anchor.center()):
-            icon = anchor
+    if (anchor is not None and anchor.isValid() and screen.contains(anchor.center())
+            and (available == screen or not available.contains(anchor.center()))):
+        icon = anchor
     w, h = size.width(), size.height()
 
     if edge in (Edge.BOTTOM, Edge.TOP):

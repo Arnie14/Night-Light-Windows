@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtTest import QTest
 
-from nightlight.single_instance import SingleInstance
+from nightlight.system.single_instance import SingleInstance
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -24,7 +24,7 @@ SECOND_LAUNCH = """
 import sys
 from PySide6.QtCore import QCoreApplication
 app = QCoreApplication([])
-from nightlight.single_instance import SingleInstance
+from nightlight.system.single_instance import SingleInstance
 name, command = sys.argv[1], sys.argv[2]
 instance = SingleInstance(name)
 found = instance.notify_running() if command == "launch" else instance.send(command.encode())
@@ -77,7 +77,7 @@ def test_quit_reaches_the_first(first):
 def test_several_launches_each_get_through(first):
     for n in range(1, 4):
         # Waiting runs the event loop, so the first copy keeps reading.
-        assert wait_for(lambda: first.received["show"] == n, second_launch(first._name, "launch")) == 0
+        assert wait_for(lambda n=n: first.received["show"] == n, second_launch(first._name, "launch")) == 0
     assert first.received == {"show": 3, "quit": 0}
 
 
