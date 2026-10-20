@@ -1,6 +1,10 @@
 # Winlight
 
-**Brightness, color and comfort for every display on Windows.** Winlight brings each screen you use into one native tray app: external monitors over DDC/CI, the laptop's own panel, HDR displays through Windows' SDR brightness, and TVs through software dimming. It adds a night light that warms each display on your schedule, brightness that follows the time of day, and sleep-friendly evenings. Gaming, watching video, calls and color work keep true colors on the display you're using. Winlight is built to be dependable: it survives sleep, hotplugging and misbehaving monitors, puts your colors back even after a crash, and keeps your personal details out of every log and report. It's inspired by KDE Plasma's display controls, and it's free and open source.
+A Windows tray app that manages night light and brightness for several displays from one place. Night light and brightness each run on their own schedule. Night light can be paused on a single display: for any fullscreen app, for apps on a list, or automatically for video, calls, games and color-critical apps. Displays can also be dimmed while the PC is idle, with exceptions for apps that need the screen on.
+
+Brightness is set over DDC/CI for external monitors, through WMI for laptop panels, through Windows' SDR content brightness for HDR displays, and with the gamma ramp for TVs and other displays without a brightness control. Night light uses the gamma ramp of each display.
+
+Winlight is for people who use more than one display, or who want night light and brightness to follow the time of day without fighting the apps they use. It is modelled on KDE Plasma's display settings, written in Python with Qt, and free software under the GPL-3.0. It is in beta: the laptop panel, night light, the schedules and the app are tested on Windows; external DDC/CI monitors, TVs and HDR displays are being tested now ([status of each feature](#features)).
 
 <p align="center">
   <img src="docs/screenshots/flyout-light.png" alt="The Winlight panel in light mode: a slider per display and Night Light" width="340">
@@ -8,13 +12,29 @@
   <img src="docs/screenshots/flyout-dark.png" alt="The Winlight panel in dark mode" width="340">
 </p>
 
-- **One slider for every display.** DDC/CI for external monitors, Windows' own control for the laptop panel, SDR content brightness for HDR displays, and software dimming for TVs and anything else. Each display says how it's controlled, and why when it can't be.
-- **A night light that fits your evening.** Custom times, or sunset to sunrise at your city, with twilight-length or chosen transitions, a color temperature from neutral to as warm as Windows allows, and a one-click sleep schedule built from your bedtime and wake-up time.
-- **True colors when they matter.** Night light pauses on the display showing a fullscreen app, an app you choose, or, automatically, video, calls, games and photo, video and design apps. Your other displays stay warm.
-- **Brightness that follows your day.** Six gradual presets or your own times (clock, sunrise or sunset), dimming while you're away, and each display's level remembered across restarts, sleep and reconnecting.
-- **Dependable on real hardware.** Nothing is sent to sleeping displays. A monitor that hangs is set aside without freezing the others. Colors are restored after a crash, and Winlight backs off rather than fight another color tool.
-- **Private by design.** Logs and the one-click problem report leave out your name, computer name, location and the apps you list; the report file deletes itself after a week.
-- **Native and scriptable.** A tray icon, a Windows 11 style panel and settings, light, dark or Windows' own theme with a choice of accent colors, and a command line for AutoHotkey, Task Scheduler or a Stream Deck.
+## What it manages
+
+| | What Winlight does |
+|---|---|
+| **Night light** | A color temperature from 6500 K (neutral) to as warm as Windows allows. Schedule by custom times, or sunset to sunrise at a city or coordinates. Transitions follow twilight, or last a length you choose. |
+| **Night light pausing** | Per display, with three independent switches: any fullscreen app; a list of apps (in front, fullscreen or not); and an automatic mode for video playback, calls, exclusive-fullscreen games and known photo, video and design apps. The other displays keep night light. |
+| **Brightness** | A slider for every display, whatever its control (DDC/CI, WMI, SDR level or software dimming), each remembered across restarts, sleep and reconnecting. |
+| **Brightness schedule** | Its own schedule, separate from night light: six presets with gradual transitions, or your own times by clock, sunrise or sunset. |
+| **Dimming when idle** | After a set time without input, to a set level. Held while an app keeps the screen on, a game runs exclusive fullscreen, or an app from its own list is in front. |
+| **Sleep recommendation** | Warm light (around 2700 K) for the two to three hours before bed, filled in from a bedtime and wake-up time, or as the warmth alone. |
+| **Displays** | Rename or hide displays, see how each is controlled and why, and save a compatibility report. |
+| **Command line** | `winlight-cli` to list displays, set brightness and switch night light from scripts. |
+
+## What sets it apart
+
+Brightness tools for Windows, such as Twinkle Tray and Monitorian, manage monitor brightness and in some cases a brightness schedule. Color tools, such as f.lux and Windows Night Light, manage color temperature. Winlight manages both, for several displays, from one panel: night light and brightness each with their own schedule, dimming when idle, and night light paused on just the display that needs true colors, by list, by fullscreen or automatically. We haven't found another Windows app that combines these. [Why Winlight?](docs/why-winlight.md) compares it with the alternatives, says when one of them may suit you better, and explains how to switch.
+
+## How it behaves
+
+- Nothing is sent to displays while the PC sleeps or the screens are off. Every monitor call has a time limit, and a monitor that hangs is set aside without stopping the others.
+- A journal of each display's colors means a crash or a killed process can't leave a tint behind. Quitting and signing out restore normal colors.
+- When another program keeps changing a display's colors, Winlight backs off from that display instead of fighting over it.
+- Logs and the "Report a Problem…" file leave out your user name, computer name, location and the names of apps you list. The report file is deleted after 7 days.
 
 > **Winlight replaces Windows Night Light; it doesn't add to it.** If both are on, the screen is tinted twice and looks far too orange. Winlight shows a notice with a button to Windows' setting when it finds Windows Night Light on: turn that off and let Winlight do it.
 
@@ -22,7 +42,7 @@
   <img src="docs/screenshots/settings-light.png" alt="Winlight settings: pages in a navigation pane, with the Night Light schedule, temperatures, sleep recommendation and pausing for apps" width="520">
 </p>
 
-**[Download the latest release](https://github.com/Arnie14/Night-Light-Windows/releases/latest)** · Windows 10 and 11, 64-bit · [Why Winlight?](docs/why-winlight.md) How it compares with Windows' own controls and similar apps, and how to switch.
+**[Download the latest release](https://github.com/Arnie14/Night-Light-Windows/releases/latest)** · Windows 10 and 11, 64-bit · [Why Winlight?](docs/why-winlight.md)
 
 ## Features
 
@@ -76,19 +96,19 @@
 
 ## Goals
 
-- **Every display, one place.** Control the brightness and color of every screen on a Windows PC, laptop panel, external monitors, HDR displays and TVs alike, from one tray panel, the way KDE Plasma does on Linux.
-- **Healthier screens, without thinking about it.** Warm evenings, gentle transitions and sleep-friendly schedules that run on their own, grounded in what sleep research recommends.
-- **Never in the way.** True colors for games, video, calls and color work; no windows popping up over a fullscreen game; no fighting other software over the screen.
-- **Safe for your hardware.** No DDC/CI to sleeping monitors, conservative probing, time limits on every monitor call, never a black screen, and colors always put back.
-- **Dependable.** Sleep, waking, hotplugging, docks, driver hiccups and crashes are handled, logged clearly and recovered from, without a restart.
-- **Respectful of your privacy.** Nothing personal in logs or reports, nothing sent anywhere.
-- **Open and scriptable.** Free software under the GPL, with a command line for automation, and an honest status for every feature.
+- Manage night light and brightness for every display on a Windows PC (laptop panel, external monitors, HDR displays and TVs) from one tray panel, as KDE Plasma does on Linux.
+- Run night light, brightness and idle dimming on schedules of their own, with transitions, and settings based on sleep research for the evening.
+- Keep true colors where they're needed: pause night light per display for fullscreen apps, listed apps, or automatically for media, games and color work; never open windows over a fullscreen game.
+- Protect the hardware: no DDC/CI to sleeping monitors, conservative probing, time limits on every monitor call, no fully black screen, and colors always put back.
+- Recover from sleep, waking, hotplugging, docks, driver errors and crashes without a restart, and log enough to diagnose a problem.
+- Keep personal details out of logs and reports, and send nothing anywhere.
+- Stay open and scriptable: free software under the GPL, a command line for automation, and a stated test status for every feature.
 
 ## The Problem on Windows
 
 - **Brightness:** Windows' brightness slider mainly covers laptop panels. Most external monitors connected over HDMI, DisplayPort or USB-C still need their own buttons and on-screen menu, one monitor at a time. TVs and displays without DDC/CI have no brightness control at all, and there's no way to schedule brightness by time of day.
 - **Night light:** Windows' built-in Night Light offers one schedule and one strength for every display, and can't step aside for a game, a video or a photo editor. It's unreliable in some setups, such as certain docking stations (e.g. DisplayLink) and some Arm-based laptops.
-- **Together:** brightness, color and schedules live in different places, and nothing ties them to how you actually use your screens through the day.
+- **Together:** brightness, night light and their schedules live in different places, and nothing pauses night light per display for a game, a video or a photo editor.
 
 Winlight fills those gaps with DDC/CI for hardware brightness, Windows' SDR brightness for HDR displays, and the gamma ramp for night light and for dimming displays that have no brightness control, all from one app. See [Why Winlight?](docs/why-winlight.md) for how it compares with Windows' own controls and with similar apps.
 
@@ -138,7 +158,7 @@ Most of these were learned from [Monitorian](https://github.com/emoacht/Monitori
 
 ## Related Projects
 
-Winlight stands on the shoulders of these projects; each is excellent at what it sets out to do. [Why Winlight?](docs/why-winlight.md) compares them in more detail and explains how to switch.
+Winlight builds on what these projects learned; the acknowledgements below list what came from each. [Why Winlight?](docs/why-winlight.md) compares them in more detail and explains how to switch.
 
 - **[Monitorian](https://github.com/emoacht/Monitorian):** a Windows tray app for adjusting the brightness of multiple monitors over DDC/CI and WMI. Its handling of monitor detection, fallbacks and flyout placement shaped this project's Windows backend.
 - **[Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray):** a Windows tray app for monitor brightness with a Windows-style flyout, scheduling and DDC/CI features. Its notes on DDC/CI reliability and gamma ramps shaped the night light and error handling here.
@@ -147,7 +167,7 @@ Winlight stands on the shoulders of these projects; each is excellent at what it
 
 ## Why This Project?
 
-Windows leaves display comfort scattered: brightness for some screens, a night light for all of them at once, and nothing that adapts to what you're doing. Winlight aims to be the one dependable place for it, on every display, through the whole day.
+On Windows, brightness, night light and their schedules are spread across the system settings, monitor menus and separate apps, and none of them adjust per display to what is on the screen. Winlight brings them into one app for setups with several displays.
 
 It is also built in the open as a learning project, to:
 
