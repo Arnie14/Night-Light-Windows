@@ -1,14 +1,15 @@
 # Testing Winlight with the installer
 
-For testers using the installer from [Releases](https://github.com/Arnie14/Night-Light-Windows/releases). No Python or source code needed. It takes about 20 minutes; skip anything that doesn't apply to your hardware. The full developer checklist is [windows-testing.md](windows-testing.md).
+For testers using the installer from [Releases](https://github.com/Arnie14/WinLight/releases), on Windows 11. No Python or source code needed. It takes about 20 minutes; skip anything that doesn't apply to your hardware. The full developer checklist is [windows-testing.md](windows-testing.md).
 
-**Found a problem?** Right-click the tray icon → **Report a Problem…**. Winlight saves a zip to your Desktop and copies a summary. [Open an issue](https://github.com/Arnie14/Night-Light-Windows/issues), paste the summary, attach the zip, and say which step below went wrong.
+**Found a problem?** Right-click the tray icon → **Report a Problem…**. Winlight saves a zip to its Reports folder (**Show File** opens it) and copies a summary. [Open an issue](https://github.com/Arnie14/WinLight/issues), paste the summary, attach the zip, and say which step below went wrong.
 
 Tell us your setup in the issue: Windows version, laptop or desktop, and each display's model and how it's connected (HDMI, DisplayPort, USB-C, dock, adapter).
 
 ## 1. Install
 
 - [ ] Run `Winlight-<version>-setup.exe`. If SmartScreen says "Windows protected your PC", choose **More info → Run anyway** (the beta isn't code-signed yet).
+- [ ] The first page explains the beta, what clashes with Winlight and what to turn off; read it.
 - [ ] No administrator prompt appears. "Start Winlight when I sign in" is ticked; optionally tick "Add winlight-cli to PATH".
 - [ ] At the end, "Launch Winlight" starts it: a sun or moon icon appears in the tray (check the ^ overflow area), and no console window opens.
 
@@ -26,8 +27,8 @@ Tell us your setup in the issue: Windows version, laptop or desktop, and each di
 
 In the panel, click ⚙ (Settings):
 
-- [ ] Switching times **Always on**, Apply: every display fades warm over about 2 seconds.
-- [ ] Drag the night light temperature: the screen previews it while you drag.
+- [ ] Schedule **Always on**, Apply: every display fades warm over about 2 seconds.
+- [ ] Drag the night light temperature: the screen previews it while you drag. Drag it fully warm: if Windows limits how warm a display can go, the Night row names the display and its limit (for example "3300 K (Windows limit)").
 - [ ] **Lock** the PC (Win+L) and unlock it: night light is back at once, without a visible flash of normal colors.
 - [ ] **Sleep** the PC and wake it: same.
 - [ ] Open Settings from the tray menu and from the panel, in dark mode: no white flash. Maximize the window, then click the same button again: it goes back to its smaller size.
@@ -44,7 +45,7 @@ In the panel, click ⚙ (Settings):
 - [ ] Settings → Brightness → **Remember each display's brightness** is on. Set distinctive levels (e.g. 23% and 61%), quit Winlight (tray → Quit) and start it from the Start menu: the levels come back.
 - [ ] Turn a monitor off with its power button and on again, or unplug and replug it: its level comes back within a few seconds.
 - [ ] Turn on **Change all displays together**, Apply: one slider moves them all.
-- [ ] Settings → Brightness: turn on **Change brightness by time of day**, choose each preset in turn and check the times listed make sense, then **Add a time** a minute or two from now with a distinct level, Apply: at that time every display fades to it. Move a slider afterwards: your level stays until the next time. If you used a schedule in beta 3 or 4, check it was carried over as a Custom one.
+- [ ] Settings → Brightness: turn on **Change brightness by time of day**, choose each preset in turn and check the times listed make sense, then **Add a time** a minute or two from now with a distinct level, Apply: at that time every display fades to it. Move a slider afterwards: your level stays until the next time. A schedule set in an earlier version is kept; one made from an earlier preset shows as Custom.
 - [ ] Settings → Displays → turn on **Keep each display's color calibration**, Apply (on a display with a calibration loaded). Let the screen turn off and wake it: the calibration is back at once (with night light on top), rather than flat colors until you sign in again.
 - [ ] Settings → **Displays**: each display is listed with how its brightness is controlled; **Copy report** puts the compatibility report on the clipboard. Under **Names and visibility**, rename one, untick "Show in panel" for another, Apply. The panel uses the new name and leaves out the hidden one.
 - [ ] Laptop with an external monitor: turn on **Follow the laptop's brightness keys**, Apply, and press the brightness keys: the external monitor follows within about 2 seconds.
@@ -65,8 +66,9 @@ In a new terminal (or use the full path `%LOCALAPPDATA%\Programs\Winlight\winlig
 - [ ] Settings → General → **Start Winlight when I sign in** is on. Sign out and in: Winlight starts in the tray only. Turn it off, Apply: Task Manager → Startup apps shows Winlight as Disabled. Microsoft Defender doesn't flag or quarantine Winlight (Windows Security → Protection history).
 - [ ] Settings → General → **Theme**: Light and Dark change Winlight's windows at once; Match Windows goes back to Windows' choice. **Accent color**: each preset recolors switches, sliders and the Apply button in both themes, and the text on Apply stays readable.
 - [ ] In light mode, the panel's percentages and captions are easy to read.
-- [ ] With night light on, run the installer again: Winlight closes itself, colors go back to normal, and your settings are kept after it starts again.
-- [ ] Uninstall (Settings → Apps → Winlight): Winlight closes first and colors return to normal. It's gone from the Start menu, and from Task Manager → Startup apps.
+- [ ] With night light on, run the installer again: Winlight closes itself, colors go back to normal, and your settings are kept after it starts again. Upgrading from 0.2.0 or earlier: the settings folder `%LOCALAPPDATA%\night-light` is renamed to `%LOCALAPPDATA%\WinLight`, with everything in it.
+- [ ] Settings → General → About → **View notices** opens the third-party notices.
+- [ ] Uninstall (Settings → Apps → Winlight): Winlight closes first and colors return to normal. It's gone from the Start menu, from Task Manager → Startup apps, and from PATH if you added it. Your settings in `%LOCALAPPDATA%\WinLight` stay.
 
 ## 7. Send it back
 

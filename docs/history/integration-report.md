@@ -1,5 +1,7 @@
 # Integration report: 0.1.0 Beta 5 and 0.2.0 Beta
 
+> **Archived.** This report records the integration, hardening and audit work of 0.1.0 Beta 5 and 0.2.0 Beta as it was at the time, including that time's test counts and file paths (modules have since moved into subpackages). Current behavior is described in [windows-notes.md](../windows-notes.md), changes in the [changelog](../../CHANGELOG.md), and each CI run reports its own test counts.
+
 Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability, scheduling, identity and UI work, built on a version from before beta 3) into `main` at beta 4 (`863dbe6`). This report summarizes the changes, design decisions, test results, unverified areas and deferred work.
 
 ## Summary
@@ -11,8 +13,8 @@ Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability,
 - **Real Windows checks:** 113 of 113 passed. They exercised the real APIs: ctypes display configuration, DDC/CI error paths, WMI, gamma ramps, safe mode, the journal, and winsystem's queries. The app was also run end to end through the command line.
 - **Bugs found and fixed while integrating:** 9, several of them present in beta 4 as well (see [Bugs found while integrating](#bugs-found-while-integrating)).
 - **Release round:** HDR brightness-lock detection with SDR fallback and a reason for every display's control; the CLI compared with Twinkle Tray's and Monitorian's (`--panel` and partial ids added); per-display pausing clearer and fixed for minimized apps; rename/hide end-to-end tests; a watcher audit (3 stuck states fixed); installer notes, author and GitHub link; roomier settings and Windows 11 style buttons (see [Release round](#release-round-010-beta-5)).
-- **Final round:** an option to keep display calibrations; the command line, installer and GUI checked again; 6 more bugs fixed, including a crash that garbage collection on a monitor thread could cause (see [Final round before release](#final-round-before-release)).
-- **Hardening pass:** 13 more bugs fixed, in concurrency, sleep, clashes with other software, files, logging and the CLI (see [Hardening pass](#hardening-pass)).
+- **Final round:** an option to keep display calibrations; the command line, installer and GUI checked again; 6 more bugs fixed, including a crash that garbage collection on a monitor thread could cause (see [Final round before release](#keeping-color-calibrations-new-option)).
+- **Hardening pass:** 13 more bugs fixed, in concurrency, sleep, clashes with other software, files, logging and the CLI (see [Hardening pass](#hardening)).
 - **0.2.0 Beta:** the Defender quarantine (the app no longer writes its start-up entry at start), dimming when a window is fullscreen, sunrise and sunset transition lengths, three pause switches including an automatic one, gradual brightness presets, brightness in the tray tooltip, restore on small screens, no white flash on opening, a sleep schedule, theme and accent choices, clearer settings text, and Report a Problem clean-up; 635 tests and an audit of the watcher, the Win32 and ctypes calls, garbage collection, reliability and the safety features, with 12 more bugs fixed (see [0.2.0 Beta](#020-beta)).
 
 ## What changed, by area
@@ -101,7 +103,7 @@ Test laptop: Windows 11 Pro 26200, one built-in panel (AUO 24ED, WMI, a calibrat
 
 ## Hardening
 
-A second pass before release, about finding and fixing bugs rather than adding features: concurrency and idempotency, sleep and hibernation, DDC/CI and ctypes, clashes with other software, dependencies, and logging. 
+A second pass before release, about finding and fixing bugs rather than adding features: concurrency and idempotency, sleep and hibernation, DDC/CI and ctypes, clashes with other software, dependencies, and logging.
 
 ### The original goals, checked
 
