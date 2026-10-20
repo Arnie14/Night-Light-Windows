@@ -89,3 +89,68 @@ def test_with_nothing_running():
 def test_commands(first, data, signal):
     first._on_command(data)
     assert first.received[signal] == 1
+
+
+# --- From the 0.2.0 audit -------------------------------------------------------
+
+
+class PieceSocket:
+    """Delivers what it was given in the pieces it was given."""
+
+    def __init__(self, *pieces):
+        self.pieces = list(pieces)
+        self.written = b""
+
+    def bytesAvailable(self):
+        return len(self.pieces[0]) if self.pieces else 0
+
+    def readAll(self):
+        from PySide6.QtCore import QByteArray
+
+        return QByteArray(self.pieces.pop(0))
+
+    def state(self):
+        from PySide6.QtNetwork import QLocalSocket
+
+        return QLocalSocket.LocalSocketState.ConnectedState
+
+    def write(self, data):
+        self.written += data
+
+    def flush(self):
+        pass
+
+
+def test_a_request_split_across_reads_is_put_back_together(first):
+    requests = []
+    first.requestReceived.connect(lambda payload, reply: requests.append(payload))
+    socket = PieceSocket(b'{"command": "li', b'st", "json": true}\n')
+    first._read(socket)
+    assert requests == []  # half a request: wait for the rest
+    first._read(socket)
+    assert requests == [{"command": "list", "json": True}]
+
+
+def test_a_broken_request_gets_an_empty_one_and_other_lines_are_commands(first):
+    requests = []
+    first.requestReceived.connect(lambda payload, reply: requests.append(payload))
+    first._read(PieceSocket(b"{not json" + bytes([10])))
+    assert requests == [{}]  # answered with an error, not a crash
+    first._read(PieceSocket(b"[1, 2, 3]" + bytes([10])))
+    assert first.received["show"] == 1  # not a request: the panel is shown, as for any launch
+
+
+def test_answering_after_the_command_line_hung_up_is_harmless(first):
+    replies = []
+    first.requestReceived.connect(lambda payload, reply: replies.append(reply))
+    first._read(PieceSocket(b'{"command": "list"}\n'))
+
+    class Gone(PieceSocket):
+        def state(self):
+            raise RuntimeError("Internal C++ object (PySide6.QtNetwork.QLocalSocket) already deleted.")
+
+    gone = Gone(b'{"command": "list"}\n')
+    first._read(gone)
+    replies[-1]({"ok": True})  # no exception
+    assert gone.written == b""
+

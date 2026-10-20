@@ -1,4 +1,4 @@
-# Integration report: 0.1.0 beta 5 and beta 6
+# Integration report: 0.1.0 Beta 5 and 0.2.0 Beta
 
 Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability, scheduling, identity and UI work, built on a version from before beta 3) into `main` at beta 4 (`863dbe6`). This report summarizes the changes, design decisions, test results, unverified areas and deferred work.
 
@@ -13,7 +13,7 @@ Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability,
 - **Release round:** HDR brightness-lock detection with SDR fallback and a reason for every display's control; the CLI compared with Twinkle Tray's and Monitorian's (`--panel` and partial ids added); per-display pausing clearer and fixed for minimized apps; rename/hide end-to-end tests; a watcher audit (3 stuck states fixed); installer notes, author and GitHub link; roomier settings and Windows 11 style buttons (see [Release round](#release-round-010-beta-5)).
 - **Final round:** an option to keep display calibrations; the command line, installer and GUI checked again; 6 more bugs fixed, including a crash that garbage collection on a monitor thread could cause (see [Final round before release](#final-round-before-release)).
 - **Hardening pass:** 13 more bugs fixed, in concurrency, sleep, clashes with other software, files, logging and the CLI (see [Hardening pass](#hardening-pass)).
-- **Beta 6 round:** the Defender quarantine (the app no longer writes its start-up entry at start), dimming when a window is fullscreen, sunrise and sunset transition lengths, three pause switches including an automatic one, gradual brightness presets, brightness in the tray tooltip, restore on small screens, no white flash on opening, a sleep schedule, theme and accent choices, clearer settings text, and Report a Problem clean-up; 635 tests (see [Beta 6 round](#beta-6-round-010-beta-6)).
+- **0.2.0 Beta:** the Defender quarantine (the app no longer writes its start-up entry at start), dimming when a window is fullscreen, sunrise and sunset transition lengths, three pause switches including an automatic one, gradual brightness presets, brightness in the tray tooltip, restore on small screens, no white flash on opening, a sleep schedule, theme and accent choices, clearer settings text, and Report a Problem clean-up; 635 tests and an audit of the watcher, the Win32 and ctypes calls, garbage collection, reliability and the safety features, with 12 more bugs fixed (see [0.2.0 Beta](#020-beta)).
 
 ## What changed, by area
 
@@ -292,9 +292,9 @@ A new end-to-end test file (`test_display_prefs.py`, 8 tests) runs the whole app
   - The bottom bar is redrawn in the Windows 11 style: an accent Apply, a quiet bordered Reset, and a text-only Restore defaults on the left. It is painted from the palette in both themes.
   - The window opens a little larger (960×760).
 
-## Beta 6 round (0.1.0 Beta 6)
+## 0.2.0 Beta
 
-Beta 6 fixes the problems found while testing beta 5 on a single-display laptop, and adds the options that testing called for.
+0.2.0 Beta fixes the problems found while testing 0.1.0 Beta 5 on a single-display laptop, and adds the options that testing called for.
 
 ### Microsoft Defender quarantined the app
 
@@ -309,7 +309,7 @@ Defender recorded two detections on the test laptop: `Behavior:Win32/Persistence
   - The uninstaller removes both values. An upgrade with the task unticked removes them too.
 - **Verified:**
   - Against the real registry, under a throwaway name: 9 of 9 checks pass, including that turning on an entry that's already on writes nothing, and that Task Manager's own values read correctly.
-  - The installed beta 6 started without changing either key (compared by the keys' last-write times).
+  - The installed build started without changing either key (compared by the keys' last-write times).
   - No new detection appeared.
 - **Not fixed by this:** `Bearfoos.A!ml` is a machine-learning verdict on the file itself, common for unsigned PyInstaller programs. Only code signing, or reputation built through false-positive submissions to Microsoft, settles it. The README, installer notes and release page now say how to submit one.
 
@@ -357,10 +357,10 @@ The tooltip stays under Windows' 127-character limit.
 - **Message:** shorter, and says what to do next and what happens to the file.
 - **Privacy:** the new idle app list is left out of reports (only how many apps), like the pause list.
 
-### Feedback on the beta 6 build
+### Feedback on the first 0.2.0 build
 
 - **Pausing automatically:** a third switch, "Video, calls, games and color work", next to "Fullscreen apps" and "Selected apps". It pauses night light on the display in front while Windows reports an app keeping the screen on (video playback, calls, presentations) or a game in exclusive fullscreen, and for a list of well-known photo, video and design apps (Photoshop, Lightroom, DaVinci Resolve, Affinity, GIMP, Krita and others). The setting says plainly that Winlight decides from what Windows reports, which doesn't name the app or display. On real Windows, another process keeping the display on paused the display in front and released it when it stopped (4 of 4).
-- **Brightness presets:** beta 6's presets mostly changed at once. Each now has a transition (30 to 90 minutes) that fits between its times, and levels and times that match its name: Office hours follows a working day, Night owl dims past midnight and after 02:00, and Dark room stays low all day. A schedule saved from an earlier version of a preset keeps its own times and is shown as Custom.
+- **Brightness presets:** the earlier presets mostly changed at once. Each now has a transition (30 to 90 minutes) that fits between its times, and levels and times that match its name: Office hours follows a working day, Night owl dims past midnight and after 02:00, and Dark room stays low all day. A schedule saved from an earlier version of a preset keeps its own times and is shown as Custom.
 - **Sleep recommendation:** two choices. "Use sleep schedule" builds custom times from a bedtime and wake-up time (warming from 3 hours before bed, fully warm 2 hours before, day light back by the wake-up time, 2700 K). "Use warmth only" sets 2700 K and keeps the current schedule.
 - **Brightness tooltip:** arrows throughout ("70% → 40% at 20:00", "55% → 40%, changing until 20:30"), and the schedule summary reads "100% at 07:00, 50% at 20:00".
 - **Readability:** secondary text in light mode is darker, close to Windows 11's own secondary text, so the panel's percentages and captions read easily.
@@ -384,6 +384,55 @@ The tooltip stays under Windows' 127-character limit.
 - clean-up and the clipboard
 
 Real-API checks: 113 of 113, plus the autostart (9), idle-hold (8) and automatic-pause (4) checks above.
+
+### Audit before release
+
+A review of the display watcher, every Win32 and ctypes call, garbage collection, reliability and the safety features. Each fix has a test that fails without it.
+
+**Display watcher**
+
+- **Displays wrongly taken as on:** after Windows reported the displays off, any input in the last 5 seconds counted as "back on", including the key or click that turned them off. The app then resumed DDC/CI writes to monitors that were asleep. Now only input at least 2 seconds after the "off" counts.
+- **Detection postponed indefinitely:** each display change restarted a one-second settle timer, so a display that kept changing (a loose cable, a monitor cycling its inputs) postponed detection indefinitely. The watcher now acts at least every 5 seconds.
+- **Callbacks that could outlive the watcher:** the application's screen signals were connected to lambdas, which would call into a deleted watcher. They now go to the watcher's own methods, which Qt disconnects with it, and the watcher can be stopped.
+
+**Win32 and ctypes**
+
+- Every native function declares its argument and return types (checked by a script over all calls), structure sizes are checked against the SDK at start, device contexts and process handles are always released, and callbacks can't raise.
+- **Fixed:** if opening the physical monitors failed partway, the handles already opened leaked; they are now closed.
+- **Fixed:** the window enumeration behind "Add an app" had no exception guard, so one failing window ended the list early.
+
+**Garbage collection**
+
+- Collection runs only on the main thread, as designed in the hardening pass. The rules are now written down in `gc_guard.py` and enforced by a test: nothing else calls `gc.collect()`.
+- **Fixed:** releasing the WMI connection called `gc.collect()` on the monitor thread, at quit or when a stuck thread was replaced. That collects every cycle in the process, Qt objects included: the crash the guard exists to prevent. The WMI wrappers' cycles (51 objects, COM objects among them, measured on the test laptop) are now broken by hand with `release_cycles()`. Reference counting then frees them on their own thread, and nothing else is touched. Measured on the test laptop: nothing is left for the main thread afterwards, and a new connection still works. Everyday WMI reads and writes leave no cycles at all (measured: 0).
+- Worker threads create no Qt objects and send plain Python objects to the main thread through a queued signal.
+
+**Reliability and stability**
+
+- **Shutdown during sign-out:** Windows keeps the event loop running for a moment after the app has shut down.
+  - A late display change could re-tint the screen after colors were reset, without a crash-journal entry. The night light controller now never touches the displays after shutdown.
+  - The idle dimmer restarted its check when it woke the displays on quitting, so it could dim them again. It now stops for good.
+  - The display watcher, the laptop-key follower and the clean-up timer are now stopped as well.
+- **Command line pipe:**
+  - A request delivered in two pieces was parsed half-read and failed; requests are now read as whole lines.
+  - An answer to a command line that had already hung up raised an error on the deleted socket; it is now ignored.
+  - A malformed request is answered with an error instead of reaching the handler.
+- **Settings file:** an unreadable settings file was replaced by defaults at the next save, losing the user's settings. A copy is now kept as `settings.json.damaged`.
+
+**Safety features, checked**
+
+- **Never black:**
+  - software dimming stops at 20%;
+  - the laptop panel stops at 1%;
+  - HDR displays keep Windows' minimum SDR level;
+  - dimming when away never brightens a display and never writes DDC/CI to external monitors.
+- **Crash recovery:** the gamma journal restores the colors after a crash or a killed process, and safe mode skips a display whose DDC/CI crashed or hung the app.
+- **Monitor protection:** nothing is sent to displays while the PC sleeps or the screens are off. DDC/CI messages are spaced, retried only for transient errors, and given up on after a time limit, per display.
+- **Clean exits:** quitting, signing out, Ctrl+C and the installer's `--quit` all put the colors back.
+- **Files:** settings and state are written atomically.
+- **Start-up entry:** only the installer, or the user's own change, writes it.
+
+**Tests:** **651** pass.
 
 ## Not verified (needs hardware or CI)
 

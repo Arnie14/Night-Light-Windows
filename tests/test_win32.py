@@ -147,3 +147,32 @@ def test_an_invalid_handle_is_reported_as_a_vanished_monitor():
     with pytest.raises(win32.DdcError) as raised:
         win32.get_vcp(0x7FFF1234, win32.VCP_LUMINANCE)
     assert raised.value.monitor_gone
+
+
+def test_monitor_handles_are_closed_if_opening_the_rest_fails(monkeypatch):
+    """physical_monitors() hands its handles to the caller only on success;
+    a failure partway through would have leaked the ones already open."""
+
+    class User32:
+        @staticmethod
+        def EnumDisplayMonitors(_hdc, _rect, callback, _data):
+            for hmonitor in (1, 2):
+                callback(hmonitor, None, None, 0)
+            return True
+
+    opened = {1: [win32.PhysicalMonitor(r"\\.\DISPLAY1", 101, "first")]}
+
+    def physical_monitors_of(hmonitor):
+        if hmonitor in opened:
+            return opened[hmonitor]
+        raise OSError("the driver failed")
+
+    closed = []
+    monkeypatch.setattr(win32, "ddc_available", lambda: True)
+    monkeypatch.setattr(win32, "_user32", User32, raising=False)
+    monkeypatch.setattr(win32, "_MONITORENUMPROC", lambda function: function, raising=False)
+    monkeypatch.setattr(win32, "_physical_monitors_of", physical_monitors_of)
+    monkeypatch.setattr(win32, "destroy_physical_monitor", closed.append)
+    with pytest.raises(OSError):
+        win32.physical_monitors()
+    assert closed == [101]

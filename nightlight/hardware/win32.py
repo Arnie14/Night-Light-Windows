@@ -658,8 +658,14 @@ def physical_monitors() -> list[PhysicalMonitor]:
     if not _user32.EnumDisplayMonitors(None, None, callback, 0):
         log.warning("EnumDisplayMonitors failed: %s", describe_error(ctypes.get_last_error()))
     monitors: list[PhysicalMonitor] = []
-    for hmonitor in hmonitors:
-        monitors += _physical_monitors_of(hmonitor)
+    try:
+        for hmonitor in hmonitors:
+            monitors += _physical_monitors_of(hmonitor)
+    except BaseException:
+        # The caller never sees these handles, so it can't close them: close them here.
+        for monitor in monitors:
+            destroy_physical_monitor(monitor.handle)
+        raise
     return monitors
 
 

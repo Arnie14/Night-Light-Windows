@@ -192,3 +192,38 @@ def test_a_paused_display_stays_neutral_when_night_light_starts():
     QTest.qWait(1200)
     assert gamma.applied[-1] == 4500 and gamma.overrides["DISPLAY2"] == 6500
     controller.shutdown()
+
+
+# --- From the 0.2.0 audit -------------------------------------------------------
+
+
+def test_nothing_touches_the_displays_after_shutdown():
+    """Signing out keeps the event loop running after the app shut down: a
+    late display change re-tinted the screen through verify()."""
+
+    class Gamma:
+        def __init__(self):
+            self.calls = []
+
+        def apply(self, kelvin):
+            self.calls.append(("apply", kelvin))
+
+        def reset(self):
+            self.calls.append(("reset",))
+
+        def verify(self):
+            self.calls.append(("verify",))
+
+        def set_override(self, display, kelvin):
+            self.calls.append(("override", display))
+
+    gamma = Gamma()
+    controller = NightLightController(gamma, NightLightConfig(enabled=True, mode=Mode.ALWAYS, night_temperature=3400),
+                                      lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    controller.shutdown()
+    gamma.calls.clear()
+    controller.verify()
+    controller.update()
+    controller.preview(2500)
+    controller.set_paused({"DISPLAY1": "game.exe, fullscreen"})
+    assert gamma.calls == []

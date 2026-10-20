@@ -151,3 +151,67 @@ def test_input_while_the_displays_are_reported_off_means_they_are_on():
     clock.now += 5
     w.check_clock()
     assert seen == ["displaysOff", "displaysOn"]  # once
+
+
+# --- From the 0.2.0 audit -------------------------------------------------------
+
+
+def test_the_input_that_turned_the_displays_off_does_not_turn_them_on():
+    """A hotkey or a click on "turn off display" is input just before the
+    "off": it used to read as the displays being back on at the next check,
+    and the app sent DDC/CI to monitors that were asleep."""
+    events = FakeEvents()
+    idle = {"s": 0.5}
+    clock = Clock()
+    w = DisplayWatcher(QApplication.instance(), clock=clock, events=events, idle_seconds=lambda: idle["s"])
+    seen = []
+    w.displaysOn.connect(lambda: seen.append("on"))
+    events.displayOff.emit()  # half a second after the key that did it
+    clock.now += 5
+    idle["s"] += 5
+    w.check_clock()
+    assert seen == []
+    idle["s"] = 0.3  # a real key press, well after the displays went off
+    clock.now += 5
+    w.check_clock()
+    assert seen == ["on"]
+
+
+def test_a_display_that_keeps_changing_is_still_acted_on():
+    """A loose cable sends a change every second: the settle timer kept
+    restarting, so detection never ran."""
+    w, clock, _seen = watcher()
+    changed = []
+    w.displaysChanged.connect(lambda: changed.append(True))
+    for _ in range(5):
+        w._changed("flapping")
+        clock.now += 1
+        assert not changed
+    w._changed("flapping")  # 5 s since the first change
+    assert changed == [True]
+    w._changed("flapping again")
+    assert changed == [True] and w._settle.isActive()  # a new burst starts over
+
+
+def test_a_stopped_watcher_signals_nothing():
+    events = FakeEvents()
+    w, clock, seen = watcher(events)
+    changed = []
+    w.displaysChanged.connect(lambda: changed.append(True))
+    w.stop()
+    events.displayChanged.emit()
+    clock.now += 600
+    w.check_clock()
+    w._settle.timeout.emit()
+    assert not w._settle.isActive() and changed == [] and seen == []
+
+
+def test_screen_signals_reach_methods_not_lambdas():
+    """Lambdas connected to the application's signals outlive the watcher
+    and would call into a deleted object; methods are disconnected with it."""
+    import inspect
+
+    from nightlight import watcher as module
+
+    source = inspect.getsource(module.DisplayWatcher.__init__) + inspect.getsource(module.DisplayWatcher._watch)
+    assert "connect(lambda" not in source

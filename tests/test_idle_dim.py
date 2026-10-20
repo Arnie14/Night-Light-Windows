@@ -194,3 +194,18 @@ def test_turning_it_off_while_dimmed_brings_the_displays_back(dimmer):
     dimmer.configure(False, 5, 30)
     settle()
     assert monitors.sent == [("BOE0812", 60), ("LGE0001", 50)] and gamma.idle[-1] == {} and memory.held[-1] is False
+
+
+def test_releasing_stops_watching_for_good(dimmer):
+    """Quitting woke the displays and wake() started the idle check again;
+    while signing out the event loop runs on, so it could dim them anew."""
+    dimmer, monitors, memory, gamma, state = dimmer
+    state["idle"] = 5 * 60
+    dimmer.check()
+    settle()
+    dimmer.release()
+    assert not dimmer.dimmed and not dimmer._timer.isActive()
+    sent = list(monitors.sent)
+    state["idle"] = 60 * 60
+    dimmer.check()
+    assert monitors.sent == sent  # nothing dims after quitting

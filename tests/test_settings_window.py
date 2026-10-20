@@ -446,7 +446,7 @@ def test_automatic_pausing_is_a_third_separate_switch(window):
 
 
 def test_a_schedule_saved_from_an_older_preset_shows_as_custom():
-    """The presets changed in beta 6: a schedule saved from the old "Office
+    """The presets changed in 0.2.0: a schedule saved from the old "Office
     hours" keeps its own points and is labelled Custom, not as the new preset."""
     old = BrightnessScheduleConfig(True, "office", (SchedulePoint(85, "08:00"), SchedulePoint(60, "18:00")), 0)
     controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))

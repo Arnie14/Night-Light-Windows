@@ -378,11 +378,16 @@ class _Wmi:
 
     def release(self) -> None:
         """Drop the COM objects on the thread that made them (at exit they
-        would be released from another thread, which COM complains about)."""
-        self._conn = None
-        import gc
+        would be released from another thread, which COM complains about).
+        The wmi package's wrappers sit in reference cycles; they are broken
+        here rather than collected, since a collection on this thread would
+        free other garbage too, Qt objects included (gc_guard.py)."""
+        from nightlight.gc_guard import release_cycles
 
-        gc.collect()  # the wmi package's wrappers sit in reference cycles
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            release_cycles(conn, ("wmi", "win32com"))
+        del conn
         try:
             self._pythoncom.CoUninitialize()
         except Exception:

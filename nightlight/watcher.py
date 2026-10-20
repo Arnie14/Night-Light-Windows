@@ -41,9 +41,13 @@ NATIVE_RESUME_WINDOW_S = 120.0
 # normally this long after: it didn't (a sleep that failed or was cancelled
 # sends no resume). Without this, displays stayed "asleep" for the session.
 STALE_SUSPEND_S = 90.0
-# Input this recent while the displays are reported off means they're on:
-# Windows' "display on" notification was missed.
-INPUT_MEANS_ON_S = CLOCK_CHECK_MS / 1000
+# Input after the displays were reported off means they're on: Windows'
+# "display on" notification was missed. Only input this long after the "off"
+# counts; the key or click that turned them off comes just before it.
+INPUT_AFTER_OFF_S = 2.0
+# A display that keeps changing (a loose cable, a monitor cycling its inputs)
+# would postpone the settled signal for ever; it fires at least this often.
+SETTLE_MAX_WAIT_S = 5.0
 
 
 class DisplayWatcher(QObject):
@@ -58,18 +62,23 @@ class DisplayWatcher(QObject):
                  idle_seconds: Callable[[], float | None] | None = None) -> None:
         super().__init__(parent)
         self._clock = clock
+        self._stopped = False
         self._idle_seconds = idle_seconds  # seconds since the last keyboard or mouse input (winsystem.idle_seconds)
         self._last_check = clock()
         self._native_resume_at: float | None = None
         self._suspended = False
         self._suspended_at = 0.0
         self._displays_off = False
+        self._displays_off_at = 0.0
+        self._pending_since: float | None = None  # first change not yet signalled
 
         self._settle = QTimer(self, singleShot=True, interval=SETTLE_MS)
         self._settle.timeout.connect(self._emit_changed)
+        # Methods, not lambdas: Qt disconnects them when the watcher goes, so
+        # the application's signals never call into a deleted object.
         app.screenAdded.connect(self._on_screen_added)
-        app.screenRemoved.connect(lambda screen: self._changed(f"screen removed: {screen.name()}"))
-        app.primaryScreenChanged.connect(lambda screen: self._changed(f"primary screen is now {screen.name()}"))
+        app.screenRemoved.connect(self._on_screen_removed)
+        app.primaryScreenChanged.connect(self._on_primary_changed)
         for screen in app.screens():
             self._watch(screen)
 
@@ -82,10 +91,18 @@ class DisplayWatcher(QObject):
             events.resumed.connect(self._on_native_resume)
             events.displayOff.connect(self._on_displays_off)
             events.displayOn.connect(self._on_displays_on)
-            events.displayChanged.connect(lambda: self._changed("Windows reported a display change"))
+            events.displayChanged.connect(self._on_windows_display_change)
             events.clockChanged.connect(self._on_clock_changed)
 
+    def stop(self) -> None:
+        """Quitting: no more signals (signing out keeps the event loop running a while)."""
+        self._clock_timer.stop()
+        self._settle.stop()
+        self._stopped = True
+
     def check_clock(self) -> None:
+        if self._stopped:
+            return
         now = self._clock()
         gap = now - self._last_check
         self._last_check = now
@@ -101,7 +118,7 @@ class DisplayWatcher(QObject):
             self._resume()
         if self._displays_off and self._idle_seconds is not None:
             idle = self._idle_seconds()
-            if idle is not None and idle < INPUT_MEANS_ON_S:
+            if idle is not None and now - idle > self._displays_off_at + INPUT_AFTER_OFF_S:
                 log.info("Input while the displays were reported off: they're on (Windows didn't say so)")
                 self._on_displays_on()
 
@@ -112,6 +129,7 @@ class DisplayWatcher(QObject):
 
     def _on_displays_off(self) -> None:
         self._displays_off = True
+        self._displays_off_at = self._clock()
         self.displaysOff.emit()
 
     def _on_displays_on(self) -> None:
@@ -138,15 +156,40 @@ class DisplayWatcher(QObject):
         self._watch(screen)
         self._changed(f"screen added: {screen.name()}")
 
+    def _on_screen_removed(self, screen: QScreen) -> None:
+        self._changed(f"screen removed: {screen.name()}")
+
+    def _on_primary_changed(self, screen: QScreen) -> None:
+        self._changed(f"primary screen is now {screen.name() if screen is not None else 'none'}")
+
+    def _on_windows_display_change(self) -> None:
+        self._changed("Windows reported a display change")
+
+    def _on_geometry_changed(self, _rect) -> None:
+        screen = self.sender()
+        self._changed(f"{screen.name() if isinstance(screen, QScreen) else 'a screen'} changed resolution or position")
+
     def _watch(self, screen: QScreen) -> None:
-        screen.geometryChanged.connect(lambda _rect: self._changed(f"{screen.name()} changed resolution or position"))
+        screen.geometryChanged.connect(self._on_geometry_changed)
 
     def _changed(self, why: str) -> None:
+        if self._stopped:
+            return
         if self._suspended:
             log.debug("Ignoring a display change while suspending (%s)", why)
             return
         log.info("Display change (%s)", why)
+        now = self._clock()
+        if self._pending_since is None:
+            self._pending_since = now
+        if now - self._pending_since >= SETTLE_MAX_WAIT_S:
+            log.info("Displays still changing after %.0f s; acting on it now", now - self._pending_since)
+            self._settle.stop()
+            self._emit_changed()
+            return
         self._settle.start()
 
     def _emit_changed(self) -> None:
-        self.displaysChanged.emit()
+        self._pending_since = None
+        if not self._stopped:
+            self.displaysChanged.emit()

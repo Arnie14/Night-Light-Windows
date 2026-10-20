@@ -218,9 +218,11 @@ def load(path: Path) -> AppConfig:
         return AppConfig()
     except (OSError, ValueError):
         log.warning("Could not read %s, using default settings", path, exc_info=True)
+        _keep_damaged(path)
         return AppConfig()
     if not isinstance(raw, dict):
         log.warning("Ignoring malformed settings file %s", path)
+        _keep_damaged(path)
         return AppConfig()
     return AppConfig(
         night_light=_from_dict(NightLightConfig, "night_light", raw.get("night_light")).normalized(),
@@ -228,6 +230,18 @@ def load(path: Path) -> AppConfig:
         brightness_schedule=_schedule_from(raw.get("brightness_schedule")),
         displays=_displays_from(raw.get("displays")),
     )
+
+
+def _keep_damaged(path: Path) -> None:
+    """Copy an unreadable settings file aside before defaults are saved over
+    it, so the user's settings can still be recovered by hand."""
+    backup = path.with_name(path.name + ".damaged")
+    try:
+        if path.is_file():
+            backup.write_bytes(path.read_bytes())
+            log.warning("Kept a copy of the unreadable settings as %s", backup.name)
+    except OSError:
+        log.warning("Could not keep a copy of the unreadable settings", exc_info=True)
 
 
 def save(config: AppConfig, path: Path) -> None:

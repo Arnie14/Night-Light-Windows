@@ -11,11 +11,23 @@ about one run in two; pyqtgraph hit the same and solved it the same way.
 Automatic collection is turned off, and a timer on the main thread collects
 instead: the youngest generation when enough allocations have piled up, as
 Python would, and everything now and then.
+
+The rules that keep it safe, checked in the 0.2.0 audit:
+
+- Nothing calls gc.collect() off the main thread: a collection there frees
+  every cycle in the process, Qt objects included.
+- Worker threads create no Qt objects; they pass plain Python objects to
+  the main thread through a queued signal (monitors._Bridge).
+- Objects tied to a worker thread (COM objects from WMI must be released in
+  the apartment that made them) are not left to the collector: their
+  cycles are broken on that thread with release_cycles(), so reference
+  counting frees them there and then.
 """
 
 from __future__ import annotations
 
 import gc
+from collections.abc import Iterable
 
 from PySide6.QtCore import QObject, QTimer
 
@@ -46,3 +58,30 @@ class MainThreadGarbageCollector(QObject):
         self._timer.stop()
         gc.enable()
         gc.collect()
+
+
+def release_cycles(root: object, modules: Iterable[str]) -> int:
+    """Break the reference cycles among the objects reachable from `root`
+    whose classes come from `modules` (e.g. "wmi", "win32com"), by clearing
+    their attributes, so they are freed now, on this thread, without a
+    collection. Containers on the way are followed; classes, modules and
+    functions aren't, so nothing outside `root`'s own objects is touched.
+    Returns how many objects were cleared."""
+    prefixes = tuple(modules)
+    seen: set[int] = set()
+    stack, owners = [root], []
+    while stack:
+        obj = stack.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, (dict, list, tuple, set, frozenset)):
+            stack.extend(gc.get_referents(obj))
+        elif not isinstance(obj, type) and (type(obj).__module__ or "").startswith(prefixes):
+            owners.append(obj)
+            stack.extend(gc.get_referents(obj))
+    for obj in owners:
+        attributes = getattr(obj, "__dict__", None)
+        if isinstance(attributes, dict):
+            attributes.clear()
+    return len(owners)

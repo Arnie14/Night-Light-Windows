@@ -31,6 +31,8 @@ REPLY_TIMEOUT_MS = 10_000
 # The running copy reads the command from its event loop, which may be busy
 # for a moment (detecting monitors, starting up), so allow it some time.
 WRITE_TIMEOUT_MS = 3000
+# A request is a short JSON line; anything far longer is not one.
+MAX_REQUEST_BYTES = 64 * 1024
 
 
 def default_name() -> str:
@@ -51,6 +53,7 @@ class SingleInstance(QObject):
         super().__init__(parent)
         self._name = name or default_name()
         self._server: QLocalServer | None = None
+        self._buffers: dict[int, bytes] = {}  # id(socket) -> received but not yet a whole line
 
     def notify_running(self) -> bool:
         """If another copy is running, ask it to show itself and return True.
@@ -112,6 +115,7 @@ class SingleInstance(QObject):
             # so nothing needs reading at hang-up, when Qt is tearing the
             # socket down (touching it then crashed on Windows).
             socket.readyRead.connect(lambda socket=socket: self._read(socket))
+            socket.disconnected.connect(lambda key=id(socket): self._buffers.pop(key, None))
             socket.disconnected.connect(socket.deleteLater)
             self._read(socket)
 
@@ -127,25 +131,40 @@ class SingleInstance(QObject):
     def _read(self, socket: QLocalSocket) -> None:
         if socket.bytesAvailable() <= 0:
             return
-        data = bytes(socket.readAll().data())
-        if data.lstrip().startswith(b"{"):
-            self._on_request(data, socket)
-        else:
-            self._on_command(data)
+        # A pipe may deliver one message in pieces: act on whole lines only.
+        data = self._buffers.pop(id(socket), b"") + bytes(socket.readAll().data())
+        *lines, rest = data.split(b"\n")
+        if rest:
+            if len(rest) > MAX_REQUEST_BYTES:
+                log.warning("Ignoring an oversized message from another launch")
+            else:
+                self._buffers[id(socket)] = rest
+        for line in lines:
+            if not line.strip():
+                continue
+            if line.lstrip().startswith(b"{"):
+                self._on_request(line, socket)
+            else:
+                self._on_command(line)
 
     def _on_request(self, data: bytes, socket: QLocalSocket) -> None:
         try:
             payload = json.loads(data)
         except ValueError:
             payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
 
         def reply(answer: dict) -> None:
-            if socket.state() == QLocalSocket.LocalSocketState.ConnectedState:
-                socket.write(json.dumps(answer).encode() + b"\n")
-                socket.flush()
+            try:
+                if socket.state() == QLocalSocket.LocalSocketState.ConnectedState:
+                    socket.write(json.dumps(answer).encode() + b"\n")
+                    socket.flush()
+            except RuntimeError:
+                log.debug("The command line hung up before the answer")  # Qt already deleted the socket
 
         # The command only: its arguments can hold the user's own display names.
-        log.info("Command line: %s", payload.get("command") if isinstance(payload, dict) else "?")
+        log.info("Command line: %s", payload.get("command") or "?")
         self.requestReceived.emit(payload, reply)
 
     def _on_command(self, data: bytes) -> None:

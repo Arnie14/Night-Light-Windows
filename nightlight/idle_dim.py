@@ -125,7 +125,7 @@ class IdleDimmer(QObject):
         if self.dimmed:
             if idle < self._after_s:
                 self.wake()
-        elif idle >= self._after_s and not self._keeps_display_on():
+        elif self._enabled and idle >= self._after_s and not self._keeps_display_on():
             self._dim(idle)
 
     def wake(self) -> None:
@@ -148,11 +148,14 @@ class IdleDimmer(QObject):
             self._timer.start(CHECK_MS)
 
     def release(self) -> None:
-        """Quitting: undo at once, without fading."""
+        """Quitting: undo at once, without fading, and stop watching (wake()
+        starts the idle check again, which could dim after signing out began)."""
         self._fade_timer.stop()
         self._fade = []
         if self.dimmed:
             self.wake()
+        self._enabled = False
+        self._timer.stop()
         self._fade_timer.stop()
         if self._gamma is not None:
             self._gamma.set_idle_dim({})

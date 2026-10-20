@@ -60,7 +60,7 @@ def test_quieter_text_is_darker_in_light_mode_than_before():
     app.setPalette(light)
     try:
         quiet = SecondaryLabel("70%").palette().color(QPalette.ColorRole.WindowText)
-        # Beta 6 faded it to about #6f6f6f (lightness 0.44); now near Windows' #5f5f5f.
+        # 0.1.0 Beta 5 faded it to about #6f6f6f (lightness 0.44); now near Windows' #5f5f5f.
         assert 0.2 < quiet.lightnessF() < 0.4
     finally:
         app.setPalette(QPalette())

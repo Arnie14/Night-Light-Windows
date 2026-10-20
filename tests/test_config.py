@@ -180,3 +180,13 @@ def test_beta_4_general_settings_load(tmp_path):
     general = config.load(path).general
     assert (general.respect_fullscreen, general.follow_laptop_brightness, general.idle_dim) == (False, True, True)
     assert 1 <= general.idle_minutes and 0 <= general.idle_level <= 100  # clamped into range
+
+
+def test_an_unreadable_settings_file_is_kept_before_defaults_replace_it(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text('{"general": {"idle_dim": tru')  # cut short
+    assert config.load(path) == AppConfig()
+    assert (tmp_path / "settings.json.damaged").read_text() == '{"general": {"idle_dim": tru'
+    path.write_text("[1, 2]")
+    config.load(path)
+    assert (tmp_path / "settings.json.damaged").read_text() == "[1, 2]"

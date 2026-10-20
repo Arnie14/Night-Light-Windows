@@ -192,6 +192,15 @@ def running_apps() -> list[str]:
     _user32.EnumWindows.argtypes = [enum_proc, wintypes.LPARAM]
 
     def visit(hwnd, _lparam):
+        # Nothing may escape a ctypes callback: ctypes would print it and
+        # return 0, ending the enumeration with half the apps missing.
+        try:
+            _add_app(hwnd)
+        except Exception:
+            log.debug("Skipping a window while listing apps", exc_info=True)
+        return True
+
+    def _add_app(hwnd) -> None:
         if _user32.IsWindowVisible(hwnd) and _user32.GetWindowTextLengthW(hwnd) > 0:
             pid = wintypes.DWORD()
             _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
@@ -204,9 +213,9 @@ def running_apps() -> list[str]:
                         names.add(PureWindowsPath(path.value).name.lower())
                 finally:
                     _kernel32.CloseHandle(process)
-        return True
 
-    _user32.EnumWindows(enum_proc(visit), 0)
+    callback = enum_proc(visit)  # referenced until EnumWindows returns
+    _user32.EnumWindows(callback, 0)
     return sorted(names - {"explorer.exe", "applicationframehost.exe", "textinputhost.exe", "winlight.exe"})
 
 

@@ -73,6 +73,7 @@ class NightLightController(QObject):
         self._animation_target: int | None = None
         self._paused: dict[str, str] = {}  # display -> why night light is paused there
         self._overrides: dict[str, int] = {}  # display -> its own temperature while pausing/resuming
+        self._stopped = False  # shut down: the displays are never touched again
         self.state: NightLightState = compute_state(config, clock(), zone=zone)
 
         self._animation = QTimer(self)
@@ -114,7 +115,7 @@ class NightLightController(QObject):
 
     def set_paused(self, paused: Mapping[str, str]) -> None:
         """Pause night light on these displays (fading), resume it on the others."""
-        if dict(paused) == self._paused or not hasattr(self._gamma, "set_override"):
+        if self._stopped or dict(paused) == self._paused or not hasattr(self._gamma, "set_override"):
             return
         if paused:
             # Which display, not which app: app names stay out of logs (privacy.py).
@@ -128,6 +129,8 @@ class NightLightController(QObject):
 
     def verify(self) -> None:
         """Re-apply our ramps where Windows reset them."""
+        if self._stopped:
+            return  # signing out keeps the event loop running: a late check must not tint again
         if verify := getattr(self._gamma, "verify", None):
             try:
                 verify()
@@ -167,6 +170,7 @@ class NightLightController(QObject):
         self.changed.emit()
 
     def shutdown(self) -> None:
+        self._stopped = True
         self._timer.stop()
         self._animation.stop()
         self._pause_timer.stop()
@@ -236,6 +240,8 @@ class NightLightController(QObject):
             self._animation.stop()
 
     def _set(self, kelvin: int, reapply: bool = False) -> bool:
+        if self._stopped:
+            return False
         if kelvin == self._current and not reapply:
             return True
         if self._paused or self._overrides:

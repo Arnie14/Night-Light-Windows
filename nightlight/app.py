@@ -429,6 +429,9 @@ class NightLightApp:
         self._shut_down = True
         self._night_light_check.stop()
         self._zone_check.stop()
+        self._cleanup.stop()
+        self._watcher.stop()  # signing out keeps the event loop running: no late display events
+        self.brightness_keys.set_enabled(False)
         self._exemptions.stop()
         self.idle_dimmer.release()  # quitting while dimmed: levels back first (queued before the monitor thread stops)
         self.scheduler.shutdown()

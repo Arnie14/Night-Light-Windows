@@ -170,7 +170,7 @@ Get the latest build from [Releases](https://github.com/Arnie14/Night-Light-Wind
 - **`Winlight-<version>-setup.exe`**: installs for your user only (no administrator rights), with a Start menu entry and an uninstaller.
 - **`Winlight-<version>-portable.zip`**: unzip anywhere and run `Winlight.exe`.
 
-Builds are beta and not yet code-signed, so Windows SmartScreen may show "Windows protected your PC". Choose **More info → Run anyway**. Microsoft Defender flagged beta 5 (`Behavior:Win32/Persistence.A!ml`) because it rewrote its start-up entry at every start; beta 6 doesn't. If Defender flags a build, please [submit it to Microsoft as a false positive](https://www.microsoft.com/wdsi/filesubmission) and open an issue. External monitors need DDC/CI switched on in their own on-screen menu.
+Builds are beta and not yet code-signed, so Windows SmartScreen may show "Windows protected your PC". Choose **More info → Run anyway**. Microsoft Defender flagged beta 5 (`Behavior:Win32/Persistence.A!ml`) because it rewrote its start-up entry at every start; 0.2.0 doesn't. If Defender flags a build, please [submit it to Microsoft as a false positive](https://www.microsoft.com/wdsi/filesubmission) and open an issue. External monitors need DDC/CI switched on in their own on-screen menu.
 
 ## Getting Started (from source)
 
