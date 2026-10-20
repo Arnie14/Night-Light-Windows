@@ -1082,3 +1082,17 @@ def test_every_way_in_says_why(monkeypatch):
     assert windows._why(MonitorInfo(0, "x", True, channel="sdr", hdr=True), False) == windows.WHY_HDR_SDR
     assert windows._why(MonitorInfo(0, "x", True, channel="ddc"), False) == windows.WHY_DDC
     assert windows._why(MonitorInfo(0, "x", False, channel=""), False) == ""
+
+
+def test_a_calibration_to_a_warm_white_point_is_kept_not_reset(monkeypatch):
+    """Blue below 90% used to read as a leftover tint: the calibration was
+    replaced by a neutral ramp until Windows loaded it again at sign-in. A
+    curved ramp is a calibration; only a straight one is a tint."""
+    warm_white = [[min(65535, round(65535 * (i / 255) ** g * peak)) for i in range(256)] for g, peak in ((1.05, 1.0), (1.0, 0.95), (0.95, 0.8))]
+    gdi = FakeGdi({D1: [list(c) for c in warm_white]}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "Calibrated to D50")])
+    backend = windows.WindowsGammaBackend()
+    backend.apply(4000)
+    assert gdi.ramps[D1] == gamma_ramp(whitepoint(4000), base=warm_white)
+    backend.reset()
+    assert gdi.ramps[D1] == warm_white

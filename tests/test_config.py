@@ -190,3 +190,56 @@ def test_an_unreadable_settings_file_is_kept_before_defaults_replace_it(tmp_path
     path.write_text("[1, 2]")
     config.load(path)
     assert (tmp_path / "settings.json.damaged").read_text() == "[1, 2]"
+
+
+# --- The data folder's new name (0.3.0) -------------------------------------------
+
+
+def test_the_old_data_folder_is_renamed_with_everything_in_it(tmp_path):
+    old, new = tmp_path / "night-light", tmp_path / "WinLight"
+    (old / "Logs").mkdir(parents=True)
+    (old / "settings.json").write_text('{"general": {"idle_dim": true}}')
+    (old / "gamma.json").write_text("{}")
+    (old / "Logs" / "night-light.log").write_text("a line\n")
+    assert config._migrated(new, old) == new
+    assert not old.exists()
+    assert (new / "settings.json").read_text() == '{"general": {"idle_dim": true}}'
+    assert (new / "gamma.json").exists() and (new / "Logs" / "night-light.log").read_text() == "a line\n"
+    assert config.load(new / "settings.json").general.idle_dim
+
+
+def test_an_existing_new_folder_is_never_replaced(tmp_path):
+    old, new = tmp_path / "night-light", tmp_path / "WinLight"
+    old.mkdir()
+    new.mkdir()
+    (new / "settings.json").write_text("{}")
+    assert config._migrated(new, old) == new
+    assert old.exists() and (new / "settings.json").read_text() == "{}"
+
+
+def test_no_old_folder_means_the_new_one(tmp_path):
+    assert config._migrated(tmp_path / "WinLight", tmp_path / "night-light") == tmp_path / "WinLight"
+
+
+def test_a_folder_that_cant_be_renamed_stays_in_use(tmp_path, monkeypatch):
+    """An older copy still running keeps files open in it: Windows refuses the rename."""
+    old, new = tmp_path / "night-light", tmp_path / "WinLight"
+    old.mkdir()
+
+    def refuse(self, target):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(type(old), "rename", refuse)
+    assert config._migrated(new, old) == old
+    assert old.exists() and not new.exists()
+
+
+def test_settings_and_logs_live_in_the_winlight_folder(monkeypatch, tmp_path):
+    import sys
+
+    monkeypatch.setattr(config, "_data_dir", None)
+    monkeypatch.setattr(config.platformdirs, "user_config_dir", lambda name, appauthor=False: str(tmp_path / name))
+    assert config.default_path() == tmp_path / "WinLight" / "settings.json"
+    if sys.platform == "win32":
+        assert config.log_dir() == tmp_path / "WinLight" / "Logs"
+    monkeypatch.setattr(config, "_data_dir", None)

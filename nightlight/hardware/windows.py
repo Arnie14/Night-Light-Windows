@@ -41,6 +41,7 @@ from typing import Protocol
 from nightlight.core.colortemp import (
     NEUTRAL_KELVIN,
     SOFTWARE_DIM_MIN,
+    achievable_kelvin,
     dimmed_ramp,
     gamma_ramp,
     identity_ramp,
@@ -1198,7 +1199,7 @@ class WindowsGammaBackend:
             )
             return
         own = display.kelvin_override if display.kelvin_override is not None else self._kelvin
-        kelvin = max(own, display.warmest)
+        kelvin = achievable_kelvin(own, display.warmest)
         dim = max(display.effective_dim, display.dim_floor)
         if self._try(display, kelvin, dim) or (kelvin >= NEUTRAL_KELVIN and dim >= 100):
             return
@@ -1331,8 +1332,10 @@ class WindowsGammaBackend:
             self._foreign_change(display)
         display.last_set = None
         key = display.key or display.name
-        if not plausible_base(current):
-            recovered = self._journal.recognises(key, current)
+        # The journal first: it knows Winlight's own tints exactly, including
+        # one over a curved calibration, which the shape test would keep.
+        recovered = self._journal.recognises(key, current)
+        if recovered is not None or not plausible_base(current):
             display.base = None if recovered is None or ramps_match(recovered, identity_ramp(win32.RAMP_SIZE)) else recovered
             display.leftover = True
             if recovered is not None:

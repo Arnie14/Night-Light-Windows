@@ -51,7 +51,11 @@ def test_large_change_is_animated_in_steps():
     controller = make(gamma)
     controller.set_config(NightLightConfig(enabled=True, mode=Mode.ALWAYS, night_temperature=4500))
     assert gamma.applied == []  # nothing yet: the animation runs on a timer
-    QTest.qWait(600)
+    # Until it ends, with a deadline: a fixed wait failed on a busy machine.
+    for _ in range(300):
+        if gamma.applied and gamma.applied[-1] == 4500:
+            break
+        QTest.qWait(10)
     assert gamma.applied[0] == 6450
     assert gamma.applied[-1] == 4500
     assert len(gamma.applied) == 40  # (6500 - 4500) / 50

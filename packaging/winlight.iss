@@ -20,9 +20,9 @@ AppPublisher=Anurag Jha
 AppCopyright=Copyright (C) 2026 Anurag Jha. Free software under the GNU GPL v3.0.
 VersionInfoCompany=Anurag Jha
 VersionInfoDescription=Winlight setup: brightness and night light for every display
-AppPublisherURL=https://github.com/Arnie14/Night-Light-Windows
-AppSupportURL=https://github.com/Arnie14/Night-Light-Windows/issues
-AppUpdatesURL=https://github.com/Arnie14/Night-Light-Windows/releases
+AppPublisherURL=https://github.com/Arnie14/WinLight
+AppSupportURL=https://github.com/Arnie14/WinLight/issues
+AppUpdatesURL=https://github.com/Arnie14/WinLight/releases
 DefaultDirName={localappdata}\Programs\Winlight
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -51,8 +51,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "addtopath"; Description: "Add winlight-cli to PATH, to control Winlight from scripts and the command line"; GroupDescription: "Command line:"; Flags: unchecked
 
 [Files]
+; The app folder, with LICENSE.txt and THIRD_PARTY_NOTICES.txt (packaging/build.py puts them there).
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Winlight"; Filename: "{app}\Winlight.exe"; AppUserModelID: "Winlight.Winlight"
@@ -141,7 +141,7 @@ begin
     QuitRunningCopy(ExpandConstant('{app}\Winlight.exe'));
   { Don't leave a start-up entry pointing at a deleted program, nor its
     on/off switch (the app may have written both, for the portable zip or
-    an older version). Settings in %LOCALAPPDATA%\night-light are kept, as
+    an older version). Settings in %LOCALAPPDATA%\WinLight are kept, as
     most apps do. }
   if CurUninstallStep = usPostUninstall then
   begin

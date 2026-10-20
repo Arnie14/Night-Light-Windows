@@ -53,6 +53,7 @@ from nightlight.config import (
 )
 from nightlight.core import locations
 from nightlight.core.brightness_schedule import describe as describe_schedule
+from nightlight.core.colortemp import limited_displays
 from nightlight.core.schedule import OverrideKind
 from nightlight.ui import icons
 from nightlight.ui import theme as theme_module
@@ -101,8 +102,10 @@ SLEEP_TRANSITION_MINUTES = 60  # so it is fully warm 2 hours before bed, and day
 SLEEP_ADVICE = (
     "Bright, blue-rich light in the evening can delay melatonin, the hormone that helps you fall asleep. Sleep "
     f"researchers recommend dim, warm light (around {SLEEP_KELVIN} K, like an incandescent bulb) for the two to three "
-    "hours before bed. This is general guidance, not medical advice"
+        "hours before bed. Windows may limit how warm a display can go; Winlight then uses the warmest setting each display "
+    "accepts. This is general guidance, not medical advice"
 )
+NIGHT_DESCRIPTION = "Lower values are warmer. Drag to preview"
 
 
 class SettingsWindow(QWidget):
@@ -119,9 +122,15 @@ class SettingsWindow(QWidget):
         report: Callable[[], str] | None = None,
         running_apps: Callable[[], list[str]] = list,
         report_problem: Callable[[], None] | None = None,
+        warmest: Callable[[], dict[str, int]] | None = None,
+        display_name: Callable[[str], str] | None = None,
     ) -> None:
         super().__init__()
         self._controller = controller
+        # GDI name -> the warmest Windows accepted there (gamma backend), and
+        # a display's name from its GDI name, for the Windows limit note.
+        self._warmest = warmest or dict
+        self._display_name = display_name or (lambda gdi_name: gdi_name)
         self._monitors = monitors
         self._scheduler = scheduler
         self._compatibility = compatibility
@@ -229,6 +238,8 @@ class SettingsWindow(QWidget):
         for slider in (self.day_temperature, self.night_temperature):
             self._connect_preview(slider)
         controller.changed.connect(self._update_status)
+        controller.changed.connect(self._update_windows_limit)  # a limit is learnt when Windows refuses a ramp
+        self.night_temperature.valueChanged.connect(self._update_windows_limit)
         controller.changed.connect(self._update_header_icon)
         if scheduler is not None:
             scheduler.changed.connect(self._update_schedule_status)
@@ -243,6 +254,7 @@ class SettingsWindow(QWidget):
 
         self._update_header_icon()
         self._load(self._saved)
+        self._update_windows_limit()
         self._update_displays()
 
     # Pages ------------------------------------------------------------------
@@ -407,7 +419,7 @@ class SettingsWindow(QWidget):
         self._temperature_card = Card()
         self._field_rows[self.day_temperature] = self._temperature_card.add(SettingRow("Day", "6500 K is neutral, with no filter",
                                                                                          self.day_temperature))
-        self._temperature_card.add(SettingRow("Night", "Lower values are warmer. Drag to preview", self.night_temperature))
+        self._night_row = self._temperature_card.add(SettingRow("Night", NIGHT_DESCRIPTION, self.night_temperature))
         layout.addWidget(self._temperature_card)
         self.schedule_info.setContentsMargins(4, 10, 4, 0)
         layout.addWidget(self.schedule_info)
@@ -532,9 +544,15 @@ class SettingsWindow(QWidget):
         about.add(SettingRow(f"Created by {AUTHOR}", "Source code, releases and issue tracker", self.github))
         if self._report_problem is not None:
             report = QPushButton("Report a Problem…")
-            report.setToolTip("Saves logs and settings to a zip file on the Desktop, without personal details")
+            report.setToolTip("Saves logs and settings to a zip file in Winlight's Reports folder, without personal details")
             report.clicked.connect(self._report_problem)
             about.add(SettingRow("Report a problem", "Saves the information a bug report needs to one zip file", report))
+        notices = third_party_notices()
+        if notices is not None:
+            view = QPushButton("View notices")
+            view.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(notices))))
+            about.add(SettingRow("Third-party software", "Qt, Python and the other components Winlight includes, and their licenses",
+                                 view))
         logs = QPushButton("Open folder")
         logs.clicked.connect(_open_log_folder)
         about.add(SettingRow("Log files", "The log and diagnostic files Winlight keeps", logs))
@@ -690,6 +708,15 @@ class SettingsWindow(QWidget):
             field.setEnabled(self.idle_dim.isChecked())
         self._update_status()
         self._update_schedule_status()
+
+    def _update_windows_limit(self, *_args) -> None:
+        """Under Night: the displays where Windows holds night light warmer
+        than asked, e.g. "Built-in display: 3300 K (Windows limit)". Only
+        while a limit is in the way and known; it changes when Windows
+        refuses a ramp again (after dimming changes, say)."""
+        limited = limited_displays(self.night_temperature.value(), self._warmest())
+        notes = [f"{self._display_name(name)}: {kelvin} K (Windows limit)" for name, kelvin in sorted(limited.items())]
+        self._night_row.set_description(NIGHT_DESCRIPTION + (". " + "; ".join(notes) if notes else ""))
 
     def _use_sleep_warmth(self) -> None:
         """Night light at SLEEP_KELVIN or warmer (a warmer choice stays), on if
@@ -878,10 +905,20 @@ def _scrollbar_width() -> int:
     return QApplication.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
 
 
-def _open_log_folder() -> None:
-    import platformdirs
+def third_party_notices() -> Path | None:
+    """THIRD_PARTY_NOTICES.txt next to the installed app; None when running from source."""
+    import sys
 
-    folder = Path(platformdirs.user_log_dir("night-light", appauthor=False))
+    if not getattr(sys, "frozen", False):
+        return None
+    path = Path(sys.executable).with_name("THIRD_PARTY_NOTICES.txt")
+    return path if path.is_file() else None
+
+
+def _open_log_folder() -> None:
+    from nightlight import config
+
+    folder = config.log_dir()
     folder.mkdir(parents=True, exist_ok=True)
     QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 

@@ -168,3 +168,29 @@ def test_bundle_names_match_what_cleanup_deletes(tmp_path):
     assert diagnostics.BUNDLE_NAME.fullmatch(path.name)
     assert diagnostics.remove_old_bundles(tmp_path / "out", days=-1) == [path]  # anything counts as old
     controller.shutdown()
+
+
+def test_reports_are_saved_in_the_app_folder_not_the_desktop(monkeypatch, tmp_path):
+    """The Desktop is often synced to OneDrive; local app data isn't."""
+    monkeypatch.setattr(diagnostics.config, "data_dir", lambda: tmp_path / "WinLight")
+    assert diagnostics.default_folder() == tmp_path / "WinLight" / "Reports"
+    src, controller = sources(tmp_path)
+    path, _ = diagnostics.write_bundle(src)
+    assert path.parent == tmp_path / "WinLight" / "Reports"
+    controller.shutdown()
+
+
+def test_cleanup_covers_the_reports_folder_and_where_older_versions_saved(monkeypatch, tmp_path):
+    import os
+
+    reports, desktop = tmp_path / "Reports", tmp_path / "Desktop"
+    monkeypatch.setattr(diagnostics, "default_folder", lambda: reports)
+    monkeypatch.setattr(diagnostics, "legacy_folders", lambda: [desktop])
+    old = []
+    for folder in (reports, desktop):
+        folder.mkdir()
+        path = folder / "Winlight-diagnostics-20260101-120000.zip"
+        path.write_bytes(b"zip")
+        os.utime(path, (1_000_000_000, 1_000_000_000))
+        old.append(path)
+    assert sorted(diagnostics.remove_old_bundles()) == sorted(old)

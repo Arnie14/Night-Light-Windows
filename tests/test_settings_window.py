@@ -502,3 +502,20 @@ def test_the_window_fits_a_small_screen(window, monkeypatch):
     window._fit_to_screen()
     assert window.width() == 960 and window.height() + 40 <= 672 - 16
     assert window.y() >= 0 and window.x() == (1280 - 960) // 2
+
+
+def test_the_windows_limit_shows_only_while_it_is_in_the_way():
+    """2700 K asked for, but Windows refused anything warmer than 3300 K on
+    the built-in display: the Night row says so, and stops saying so once the
+    request is within the limit."""
+    limits = {r"\.\DISPLAY1": 3300}
+    controller = NightLightController(FakeGamma(), replace(KYIV, night_temperature=2700), lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
+    window = SettingsWindow(controller, AppConfig(replace(KYIV, night_temperature=2700)), warmest=lambda: dict(limits),
+                            display_name=lambda name: "Built-in display")
+    assert window._night_row.description.text().endswith("Built-in display: 3300 K (Windows limit)")
+    window.night_temperature.setValue(4000)
+    assert "Windows limit" not in window._night_row.description.text()
+    limits.clear()  # forgotten after dimming changed: nothing to show until Windows refuses again
+    window.night_temperature.setValue(2700)
+    assert "Windows limit" not in window._night_row.description.text()
+    controller.shutdown()

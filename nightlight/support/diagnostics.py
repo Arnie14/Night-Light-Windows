@@ -3,7 +3,8 @@
 
 Monitorian's FAQ asks for its probe and operation logs; collecting them by
 hand is where reports stall. This gathers what a report needs into one zip
-on the Desktop, and a short summary for the clipboard to paste into an issue:
+in the Reports folder of Winlight's own data folder, and a short summary for
+the clipboard to paste into an issue:
 the app and Windows versions, each display and how it's controlled, night
 light's state, and the logs and settings.
 
@@ -47,7 +48,7 @@ from nightlight.support.privacy import scrub
 
 log = logging.getLogger(__name__)
 
-ISSUES_URL = "https://github.com/Arnie14/Night-Light-Windows/issues/new"
+ISSUES_URL = "https://github.com/Arnie14/WinLight/issues/new"
 KEEP_DAYS = 7
 CLIPBOARD_MINUTES = 10
 # The names write_bundle gives, and only those, are cleaned up.
@@ -149,16 +150,31 @@ def redacted_settings(app_config: config.AppConfig) -> dict:
 
 
 def default_folder() -> Path:
+    r"""Where reports are saved: Reports in Winlight's data folder
+    (%LOCALAPPDATA%\WinLight\Reports). Not the Desktop, which OneDrive's
+    folder backup often syncs to the cloud; nothing syncs local app data.
+    "Report a Problem…" shows the file in Explorer, to attach from there."""
+    return config.data_dir() / "Reports"
+
+
+def legacy_folders() -> list[Path]:
+    """Where versions before 0.3.0 saved reports, still cleaned up."""
+    folders = []
     for location in (QStandardPaths.StandardLocation.DesktopLocation, QStandardPaths.StandardLocation.DownloadLocation):
         if folder := QStandardPaths.writableLocation(location):
-            return Path(folder)
-    return Path.home()
+            folders.append(Path(folder))
+    return folders
 
 
 def remove_old_bundles(folder: Path | None = None, now: float | None = None, days: int = KEEP_DAYS) -> list[Path]:
-    """Delete diagnostics zips older than `days` from `folder` (the Desktop);
-    returns what was deleted. Never raises."""
-    folder = folder or default_folder()
+    """Delete diagnostics zips older than `days` from `folder`, or by default
+    from the Reports folder and where older versions saved them (the
+    Desktop, Downloads); returns what was deleted. Never raises."""
+    if folder is None:
+        removed = []
+        for each in [default_folder(), *legacy_folders()]:
+            removed += remove_old_bundles(each, now, days)
+        return removed
     cutoff = (time.time() if now is None else now) - days * 86400
     removed = []
     try:

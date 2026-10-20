@@ -6,9 +6,12 @@ import pytest
 from nightlight.core.colortemp import (
     DRIVER_SAFE_PEAK,
     NEUTRAL_KELVIN,
+    achievable_kelvin,
     dimmed_ramp,
     gamma_ramp,
     identity_ramp,
+    limited_displays,
+    looks_like_tint,
     plausible_base,
     ramps_match,
     whitepoint,
@@ -97,3 +100,59 @@ def test_dimming_darkens_mid_tones_in_order():
 
 def test_dimming_below_the_minimum_is_clamped():
     assert dimmed_ramp(0) == dimmed_ramp(20)
+
+
+def _calibration(peaks, curve=1.1):
+    """A calibration-like ramp: a gamma correction per channel, each to its own peak."""
+    return [[min(65535, round(65535 * (i / 255) ** (1 / curve) * peak)) for i in range(256)] for peak in peaks]
+
+
+@pytest.mark.parametrize("kelvin", [6000, 5000, 4500, 3400, 2700, 1900])
+def test_every_night_light_tint_is_recognised_as_one(kelvin):
+    ramp = gamma_ramp(whitepoint(kelvin))
+    assert looks_like_tint(ramp)
+    if kelvin <= 5500:  # warm enough to pull blue below the plausible peak
+        assert not plausible_base(ramp)
+
+
+def test_a_calibration_to_a_warm_white_point_is_kept():
+    """Before 0.3.0 any ramp with a channel below 90% was taken for a tint and
+    reset to neutral, discarding a D50-style calibration (blue at about 80%)
+    until Windows loaded it again at the next sign-in."""
+    calibration = _calibration((1.0, 0.97, 0.82))
+    assert not looks_like_tint(calibration)
+    assert plausible_base(calibration)
+
+
+def test_a_tint_over_a_straight_ramp_is_still_rejected():
+    tinted = gamma_ramp(whitepoint(3400), base=identity_ramp())
+    assert not plausible_base(tinted)
+
+
+def test_ramps_that_cant_be_a_base():
+    assert not plausible_base([])
+    assert not plausible_base([[0] * 256, [0] * 256])
+    falling = identity_ramp()
+    falling[1] = list(reversed(falling[1]))
+    assert not plausible_base(falling)
+
+
+# --- Windows' limit on warm ramps --------------------------------------------------
+
+
+@pytest.mark.parametrize(("requested", "warmest", "shown"), [
+    (2700, None, 2700),  # no limit known
+    (2700, 0, 2700),
+    (2700, 3300, 3300),  # warmer than allowed: the warmest it accepts
+    (3300, 3300, 3300),
+    (4500, 3300, 4500),  # within the limit: as asked
+])
+def test_achievable_kelvin(requested, warmest, shown):
+    assert achievable_kelvin(requested, warmest) == shown
+
+
+def test_only_displays_whose_limit_is_in_the_way_are_listed():
+    limits = {r"\.\DISPLAY1": 3300, r"\.\DISPLAY2": 2400}
+    assert limited_displays(2700, limits) == {r"\.\DISPLAY1": 3300}
+    assert limited_displays(4000, limits) == {}
+    assert limited_displays(2700, {}) == {}

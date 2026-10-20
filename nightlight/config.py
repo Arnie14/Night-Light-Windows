@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, time
 from enum import StrEnum
@@ -202,13 +203,49 @@ def parse_hhmm(text: str) -> time:
     return datetime.strptime(text, "%H:%M").time()
 
 
+# The folder for settings, state and logs (%LOCALAPPDATA%\WinLight on
+# Windows). Versions before 0.3.0 used "night-light"; the first start of a
+# newer version renames that folder, so nothing inside it changes.
+DATA_FOLDER = "WinLight"
+OLD_DATA_FOLDER = "night-light"
+_data_dir: Path | None = None
+
+
+def data_dir() -> Path:
+    """The settings folder, moved from its old name the first time."""
+    global _data_dir
+    if _data_dir is None:
+        _data_dir = _migrated(Path(platformdirs.user_config_dir(DATA_FOLDER, appauthor=False)),
+                              Path(platformdirs.user_config_dir(OLD_DATA_FOLDER, appauthor=False)))
+    return _data_dir
+
+
+def _migrated(new: Path, old: Path) -> Path:
+    """Rename `old` to `new` if only `old` exists. If it can't be renamed
+    (an older copy still has files open in it), `old` stays in use this
+    time and the rename is tried again at the next start."""
+    if new.exists() or not old.is_dir():
+        return new
+    try:
+        old.rename(new)
+    except OSError as exc:
+        log.warning("Could not rename the settings folder %s to %s (%s); using it as it is for now", old.name, new.name, exc)
+        return old
+    log.info("Renamed the settings folder %s to %s", old.name, new.name)
+    return new
+
+
 def default_path() -> Path:
-    return Path(platformdirs.user_config_dir("night-light", appauthor=False)) / "settings.json"
+    return data_dir() / "settings.json"
 
 
 def log_dir() -> Path:
-    """Where night-light.log, probe.txt and compatibility.txt go."""
-    return Path(platformdirs.user_log_dir("night-light", appauthor=False))
+    """Where night-light.log, probe.txt and compatibility.txt go: Logs in
+    the settings folder on Windows (so they move with it), the usual log
+    folder elsewhere."""
+    if sys.platform == "win32":
+        return data_dir() / "Logs"
+    return Path(platformdirs.user_log_dir(DATA_FOLDER, appauthor=False))
 
 
 def load(path: Path) -> AppConfig:

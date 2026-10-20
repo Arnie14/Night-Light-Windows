@@ -172,7 +172,7 @@ class NightLightApp:
         self._zone_check = QTimer(interval=ZONE_CHECK_MS)
         self._zone_check.timeout.connect(self._check_zone)
         self._zone_check.start()
-        # Old Report a Problem zips go from the Desktop: at start, then daily.
+        # Old Report a Problem zips are deleted: at start, then daily.
         self._cleanup = QTimer(interval=CLEANUP_INTERVAL_MS)
         self._cleanup.timeout.connect(diagnostics.remove_old_bundles)
         self._cleanup.start()
@@ -221,6 +221,8 @@ class NightLightApp:
                 report=self.compatibility_report,
                 running_apps=winsystem.running_apps,
                 report_problem=self.report_problem,
+                warmest=getattr(self._gamma, "warmest_accepted", dict),
+                display_name=self.flyout.display_name_of,
             )
             self._settings.applied.connect(self._apply_settings)
         self._settings.set_windows_night_light(self._windows_night_light)
@@ -236,7 +238,7 @@ class NightLightApp:
         return compat.render(self.compatibility(), compat.system_summary())
 
     def report_problem(self) -> None:
-        """Save a diagnostics zip to the Desktop, copy a summary, and say where it is."""
+        """Save a diagnostics zip to the Reports folder, copy a summary, and say where it is."""
         try:
             path, text = diagnostics.write_bundle(self._diagnostics_sources())
         except OSError as exc:
@@ -247,11 +249,12 @@ class NightLightApp:
         # Cleared later if it's still ours: nothing lingers on the clipboard.
         QTimer.singleShot(diagnostics.CLIPBOARD_MINUTES * 60_000, lambda: clipboard.text() == text and clipboard.clear())
         box = QMessageBox(QMessageBox.Icon.Information, f"{APP_NAME}: Report a Problem", "")
-        box.setText(f"<b>Diagnostics saved</b><br>{path.name}, in your {path.parent.name} folder. A summary is on the clipboard.")
+        box.setText(f"<b>Diagnostics saved</b><br>{path.name}, in {APP_NAME}'s Reports folder. A summary is on the clipboard.")
         box.setInformativeText(
-            "To report the problem, open an issue on GitHub: describe what happened, paste the summary and attach the file.\n\n"
-            "Nothing personal is included (no names or location). The file is deleted after "
-            f"{diagnostics.KEEP_DAYS} days and the clipboard is cleared after {diagnostics.CLIPBOARD_MINUTES} minutes."
+            "To report the problem, open an issue on GitHub: describe what happened, paste the summary and attach the file "
+            "(Show File opens its folder).\n\n"
+            "Nothing personal is included (no names or location), and the folder isn't synced to the cloud. The file is "
+            f"deleted after {diagnostics.KEEP_DAYS} days and the clipboard is cleared after {diagnostics.CLIPBOARD_MINUTES} minutes."
         )
         show = box.addButton("Show File", QMessageBox.ButtonRole.ActionRole)
         issue = box.addButton("Open GitHub Issues", QMessageBox.ButtonRole.ActionRole)

@@ -5,10 +5,17 @@ cross-compile):
 
     pip install -e ".[build]"
     python packaging/build.py                      # version from nightlight/__init__.py
-    python packaging/build.py --version 0.1.0-beta.1
+    python packaging/build.py --version 0.3.0-beta.1
 
 Output goes to dist/: Winlight/ (the app), Winlight-<version>-portable.zip
 and Winlight-<version>-setup.exe.
+
+Versions are MAJOR.MINOR.PATCH, optionally followed by -alpha.N, -beta.N,
+-rc.N or -dev. Windows' version resources take four numbers; the fourth
+orders pre-releases before the release they lead to, so the file version
+always increases: alpha.N is 1000 + N, beta.N 2000 + N, rc.N 3000 + N, the
+release itself 9000 and a dev build 0. 0.3.0-beta.1 is file version
+0.3.0.2001; the product version keeps the readable form.
 """
 
 from __future__ import annotations
@@ -38,7 +45,7 @@ VSVersionInfo(
     StringFileInfo([StringTable('040904B0', [
       StringStruct('CompanyName', 'Anurag Jha'),
       StringStruct('FileDescription', 'Winlight: brightness and night light for every display'),
-      StringStruct('FileVersion', '{version}'),
+      StringStruct('FileVersion', '{file_version}'),
       StringStruct('InternalName', 'Winlight'),
       StringStruct('LegalCopyright', 'Copyright (C) 2026 Anurag Jha. GPL-3.0-only'),
       StringStruct('OriginalFilename', 'Winlight.exe'),
@@ -55,10 +62,21 @@ def app_version() -> str:
     return re.search(r'__version__ = "([^"]+)"', text).group(1)
 
 
+VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc|dev)(?:\.(\d+))?)?")
+STAGE_BASE = {"alpha": 1000, "beta": 2000, "rc": 3000, "dev": 0, None: 9000}
+
+
 def numeric(version: str) -> tuple[int, int, int, int]:
-    """"0.1.0-beta.1" -> (0, 1, 0, 0): Windows version resources take four numbers."""
-    parts = [int(p) for p in re.match(r"(\d+)\.(\d+)\.(\d+)", version).groups()]
-    return (*parts, 0)
+    """"0.3.0-beta.1" -> (0, 3, 0, 2001): see the module docstring."""
+    match = VERSION.fullmatch(version)
+    if match is None:
+        raise ValueError(f"not a Winlight version: {version!r} (expected e.g. 0.3.0 or 0.3.0-beta.1)")
+    major, minor, patch, stage, number = match.groups()
+    if stage == "dev" and number:
+        raise ValueError("dev builds take no number")
+    if number is not None and not 1 <= int(number) < 1000:
+        raise ValueError(f"pre-release numbers run from 1 to 999: {version!r}")
+    return int(major), int(minor), int(patch), STAGE_BASE[stage] + int(number or 0)
 
 
 def run(*command: str, **kwargs) -> None:
@@ -80,18 +98,25 @@ def main() -> int:
     if not version.startswith(base):
         print(f"Version {version} doesn't match nightlight.__version__ ({base}); update one of them.", file=sys.stderr)
         return 1
-    numbers = numeric(version)
+    try:
+        numbers = numeric(version)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
 
     shutil.rmtree(BUILD, ignore_errors=True)
     shutil.rmtree(DIST, ignore_errors=True)
     BUILD.mkdir()
     run(sys.executable, str(ROOT / "packaging" / "make_icon.py"), str(BUILD / "winlight.ico"))
-    (BUILD / "version_info.txt").write_text(VERSION_INFO.format(numbers=numbers, version=version), encoding="utf-8")
+    (BUILD / "version_info.txt").write_text(VERSION_INFO.format(numbers=numbers, version=version, file_version=".".join(map(str, numbers))), encoding="utf-8")
 
     env = {**os.environ, "WINLIGHT_BUILD_DIR": str(BUILD)}
     run(sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--distpath", str(DIST), "--workpath", str(BUILD / "pyinstaller"),
         str(ROOT / "packaging" / "winlight.spec"), env=env)
     app = DIST / "Winlight"
+    # Licenses travel with the app, in the installer and the portable zip alike.
+    shutil.copyfile(ROOT / "LICENSE", app / "LICENSE.txt")
+    run(sys.executable, str(ROOT / "tools" / "third_party_notices.py"), str(app / "THIRD_PARTY_NOTICES.txt"))
     check(app)
 
     # Smoke test: the frozen app starts, finds its modules and Qt, and exits.
@@ -120,6 +145,8 @@ def check(app: Path) -> None:
     internal = app / "_internal"
     needed = {
         "command line": app / "winlight-cli.exe",
+        "license": app / "LICENSE.txt",
+        "third-party notices": app / "THIRD_PARTY_NOTICES.txt",
         "time zone table": internal / "nightlight" / "data" / "timezones.csv",
         "Qt's Windows platform plugin": next(internal.rglob("qwindows.dll"), None),
     }

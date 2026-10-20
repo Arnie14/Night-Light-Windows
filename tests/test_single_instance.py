@@ -154,3 +154,31 @@ def test_answering_after_the_command_line_hung_up_is_harmless(first):
     replies[-1]({"ok": True})  # no exception
     assert gone.written == b""
 
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="named pipe ownership is a Windows question")
+def test_our_own_pipe_is_recognised_as_this_users(first):
+    from PySide6.QtNetwork import QLocalSocket
+
+    from nightlight.hardware import winsystem
+
+    socket = QLocalSocket()
+    socket.connectToServer(first._name)
+    assert socket.waitForConnected(2000)
+    assert winsystem.pipe_server_is_same_user(int(socket.socketDescriptor())) is True
+    socket.abort()
+
+
+def test_nothing_is_sent_to_a_pipe_another_user_holds(first, monkeypatch):
+    """The name is predictable; another user's program could create it first."""
+    from nightlight.hardware import winsystem
+
+    monkeypatch.setattr(winsystem, "pipe_server_is_same_user", lambda handle: False)
+    received = []
+    first.requestReceived.connect(lambda payload, reply: received.append(payload))
+    sender = SingleInstance(first._name)
+    assert sender.send(b"show") is True  # taken: don't start a second copy
+    answer = sender.request({"command": "list"}, timeout_ms=500)
+    assert answer["ok"] is False and "Another user's program" in answer["output"]
+    QTest.qWait(100)
+    assert received == [] and first.received["show"] == 0

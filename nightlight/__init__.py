@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Night Light for Windows: per-monitor brightness and night light control."""
 
-__version__ = "0.2.0-beta"
+__version__ = "0.3.0-beta.1"
 
-APP_NAME = "Winlight"  # shown to users; files and folders keep the original "night-light" names
+APP_NAME = "Winlight"  # shown to users; the data folder is "WinLight" (config.py); internal names keep "night-light"
 AUTHOR = "Anurag Jha"
-REPO_URL = "https://github.com/Arnie14/Night-Light-Windows"
+REPO_URL = "https://github.com/Arnie14/WinLight"
 
 
 def display_version(version: str = __version__) -> str:

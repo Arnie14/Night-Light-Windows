@@ -145,6 +145,31 @@ def identity_ramp(size: int = 256) -> list[list[int]]:
 # to be a calibration (or the identity), not a leftover tint from a night
 # light: warming always pulls the blue channel's top well below full.
 PLAUSIBLE_BASE_PEAK = 0.9
+# Below that peak, the shape decides. A night light tint scales each channel
+# along a straight line (gamma_ramp: exactly straight); a calibration bends
+# its channels to correct the display's response. A calibration to a warm
+# white point (D50, say) also pulls blue below 90%, so a low peak alone would
+# throw such a calibration away: one that bends by more than this share of
+# full output is kept. Measured: Winlight's tints deviate 0%, a D50-style
+# calibration about 3%.
+TINT_STRAIGHTNESS = 0.01
+
+
+def achievable_kelvin(requested: int, warmest: int | None) -> int:
+    """The temperature a display shows when `requested` is asked for, given
+    the warmest Windows has accepted there (None or 0: no limit known).
+
+    Windows refuses gamma ramps far from neutral unless GdiIcmGammaRange is
+    raised; the limit depends on the display and on any dimming, and is only
+    learnt when a ramp is refused. A request warmer than the limit gets the
+    limit: the warmest the display accepts."""
+    return max(requested, warmest) if warmest else requested
+
+
+def limited_displays(requested: int, limits: dict[str, int]) -> dict[str, int]:
+    """The displays where `requested` is warmer than Windows allows, with the
+    temperature each one shows instead; empty when no limit is in the way."""
+    return {name: limit for name, limit in limits.items() if achievable_kelvin(requested, limit) != requested}
 
 
 def plausible_base(ramp: list[list[int]]) -> bool:
@@ -152,14 +177,31 @@ def plausible_base(ramp: list[list[int]]) -> bool:
 
     Gamma ramps outlive the app, so the ramp found at startup may be our own
     tint from a crashed session, or another tool's (f.lux, Windows Night
-    Light); tinting that again would compound it.
+    Light); tinting that again would compound it. But it may also be a
+    calibration, and discarding one loses it until Windows loads it again
+    (usually at the next sign-in). So only a ramp shaped like a tint (every
+    channel straight, at least one well below full) is rejected; anything
+    curved is kept. A ramp that isn't three rising channels is never a base.
     """
     if len(ramp) != 3:
         return False
     for channel in ramp:
-        if not channel or channel[-1] < PLAUSIBLE_BASE_PEAK * 65535:
+        if not channel or any(b < a for a, b in itertools.pairwise(channel)):
             return False
-        if any(b < a for a, b in itertools.pairwise(channel)):
+    if all(channel[-1] >= PLAUSIBLE_BASE_PEAK * 65535 for channel in ramp):
+        return True
+    return not looks_like_tint(ramp)
+
+
+def looks_like_tint(ramp: list[list[int]]) -> bool:
+    """Whether every channel runs in a straight line from 0 to its peak, as a
+    night light tint does (a calibration curves)."""
+    for channel in ramp:
+        steps = len(channel) - 1
+        if steps <= 0:
+            return False
+        peak = channel[-1]
+        if max(abs(value - peak * i / steps) for i, value in enumerate(channel)) > TINT_STRAIGHTNESS * 65535:
             return False
     return True
 

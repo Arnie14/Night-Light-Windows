@@ -13,6 +13,12 @@ running copy has read it. The sender therefore waits for the write to finish
 before hanging up. Both ends must be separate processes (as they always are
 in use, and in the tests): in one thread, the sender's wait would stop the
 receiver from ever reading.
+
+Access: on Windows the pipe's access list (UserAccessOption) admits only
+this user, so other users can't send commands. Its name is predictable,
+though, so before sending anything the sender checks that the process
+serving the pipe runs as the same user (winsystem.pipe_server_is_same_user):
+another user's program holding the name gets nothing.
 """
 
 from __future__ import annotations
@@ -69,6 +75,8 @@ class SingleInstance(QObject):
         socket.connectToServer(self._name)
         if not socket.waitForConnected(CONNECT_TIMEOUT_MS):
             return False
+        if not self._is_ours(socket):
+            return True  # the name is taken, by someone else: don't start a second copy either
         socket.write(command + b"\n")
         # Don't hang up before the running copy has read it: on Windows the
         # unbuffered pipe drops unread data when the sender disconnects.
@@ -86,6 +94,8 @@ class SingleInstance(QObject):
         socket.connectToServer(self._name)
         if not socket.waitForConnected(CONNECT_TIMEOUT_MS):
             return None
+        if not self._is_ours(socket):
+            return {"ok": False, "output": "Another user's program is using Winlight's command channel; nothing was sent."}
         socket.write(json.dumps(payload).encode() + b"\n")
         socket.waitForBytesWritten(WRITE_TIMEOUT_MS)
         reply = b""
@@ -96,6 +106,17 @@ class SingleInstance(QObject):
             return json.loads(reply)
         except ValueError:
             return {"ok": False, "output": "Winlight didn't answer in time."}
+
+    @staticmethod
+    def _is_ours(socket: QLocalSocket) -> bool:
+        """Whether the connected pipe is served by this user's process."""
+        from nightlight.hardware import winsystem
+
+        same = winsystem.pipe_server_is_same_user(int(socket.socketDescriptor()))
+        if same is False:
+            log.warning("The command pipe is held by another user's program; not sending anything to it")
+            socket.abort()
+        return same is not False
 
     def _listen(self) -> bool:
         # Nobody answered. On Linux a crashed copy can leave its socket file behind.

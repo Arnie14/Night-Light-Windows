@@ -481,6 +481,72 @@ def windows_night_light_on() -> bool | None:
     return None
 
 
+# --- The command pipe's other end ---------------------------------------------
+
+TOKEN_QUERY = 0x0008
+TOKEN_USER = 1
+
+
+def pipe_server_is_same_user(pipe_handle: int) -> bool | None:
+    """Whether the process serving a named pipe runs as this user.
+
+    The pipe's own access list already keeps other users from connecting to
+    Winlight. This covers the other direction: its name is predictable, so
+    another user could create it first and receive what winlight-cli or a
+    second launch sends. True: same user; False: another user (or a process
+    this user may not inspect); None: Windows couldn't say (not on Windows,
+    or an API missing), and the caller carries on as before."""
+    if sys.platform != "win32" or not pipe_handle:
+        return None
+    from ctypes import wintypes
+
+    pid = wintypes.ULONG()
+    if not _kernel32.GetNamedPipeServerProcessId(pipe_handle, ctypes.byref(pid)):
+        return None
+    process = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not process:
+        return False  # another user's process can't be opened without administrator rights
+    try:
+        theirs = _token_user(process)
+        if theirs is None:
+            # Not inspectable (e.g. elevated): fall back to the session, which
+            # another signed-in user never shares.
+            session = wintypes.ULONG()
+            ours = wintypes.DWORD()
+            if not _kernel32.GetNamedPipeServerSessionId(pipe_handle, ctypes.byref(session)):
+                return None
+            if not _kernel32.ProcessIdToSessionId(_kernel32.GetCurrentProcessId(), ctypes.byref(ours)):
+                return None
+            return session.value == ours.value
+        mine = _token_user(_kernel32.GetCurrentProcess())
+        return mine is not None and theirs == mine
+    finally:
+        _kernel32.CloseHandle(process)
+
+
+def _token_user(process) -> bytes | None:
+    """The SID of the user a process runs as, as bytes; None if unreadable."""
+    from ctypes import wintypes
+
+    token = wintypes.HANDLE()
+    if not _advapi32.OpenProcessToken(process, TOKEN_QUERY, ctypes.byref(token)):
+        return None
+    try:
+        size = wintypes.DWORD()
+        _advapi32.GetTokenInformation(token, TOKEN_USER, None, 0, ctypes.byref(size))
+        if not size.value:
+            return None
+        buffer = ctypes.create_string_buffer(size.value)
+        if not _advapi32.GetTokenInformation(token, TOKEN_USER, buffer, size, ctypes.byref(size)):
+            return None
+        sid = ctypes.c_void_p.from_buffer(buffer).value  # TOKEN_USER starts with the SID's address
+        if not sid or not _advapi32.IsValidSid(sid):
+            return None
+        return ctypes.string_at(sid, _advapi32.GetLengthSid(sid))
+    finally:
+        _kernel32.CloseHandle(token)
+
+
 # --- Bindings -----------------------------------------------------------------
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -512,6 +578,25 @@ if sys.platform == "win32":
     _wtsapi32 = ctypes.WinDLL("wtsapi32", use_last_error=True)
     _shell32 = ctypes.WinDLL("shell32")
     _powrprof = ctypes.WinDLL("powrprof")
+    _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    _kernel32.GetNamedPipeServerProcessId.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.ULONG)]
+    _kernel32.GetNamedPipeServerProcessId.restype = wintypes.BOOL
+    _kernel32.GetNamedPipeServerSessionId.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.ULONG)]
+    _kernel32.GetNamedPipeServerSessionId.restype = wintypes.BOOL
+    _kernel32.ProcessIdToSessionId.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    _kernel32.ProcessIdToSessionId.restype = wintypes.BOOL
+    _kernel32.GetCurrentProcessId.argtypes = []
+    _kernel32.GetCurrentProcessId.restype = wintypes.DWORD
+    _kernel32.GetCurrentProcess.argtypes = []
+    _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    _advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    _advapi32.OpenProcessToken.restype = wintypes.BOOL
+    _advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    _advapi32.GetTokenInformation.restype = wintypes.BOOL
+    _advapi32.IsValidSid.argtypes = [ctypes.c_void_p]
+    _advapi32.IsValidSid.restype = wintypes.BOOL
+    _advapi32.GetLengthSid.argtypes = [ctypes.c_void_p]
+    _advapi32.GetLengthSid.restype = wintypes.DWORD
     _powrprof.CallNtPowerInformation.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong]
     _powrprof.CallNtPowerInformation.restype = ctypes.c_long
     _user32.GetLastInputInfo.argtypes = [ctypes.c_void_p]
