@@ -13,6 +13,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 def notices_module():
     spec = importlib.util.spec_from_file_location("third_party_notices", ROOT / "tools" / "third_party_notices.py")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
