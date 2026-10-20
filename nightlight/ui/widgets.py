@@ -21,6 +21,9 @@ from nightlight.hardware.brightness import MonitorInfo
 # so the monitor follows the drag (as in Monitorian and Twinkle Tray) without
 # flooding a slow DDC/CI link. The final position is always sent.
 BRIGHTNESS_THROTTLE_MS = 100
+# How far quieter text is faded from the text colour towards the background.
+SECONDARY_FADE_LIGHT = 0.28
+SECONDARY_FADE_DARK = 0.38
 NOT_SUPPORTED = "No brightness control"
 # Said under the name when brightness isn't the display's own backlight.
 CONTROL_CAPTIONS = {
@@ -71,7 +74,11 @@ class SecondaryLabel(QLabel):
     def _recolor(self) -> None:
         app = QApplication.palette()
         palette = self.palette()
-        faded = blend(app.color(QPalette.ColorRole.WindowText), app.color(QPalette.ColorRole.Window), 0.38)
+        window = app.color(QPalette.ColorRole.Window)
+        # Light mode fades less: near Windows 11's secondary text (#5f5f5f on
+        # #f3f3f3), so captions and percentages stay easy to read.
+        amount = SECONDARY_FADE_LIGHT if window.lightnessF() >= 0.5 else SECONDARY_FADE_DARK
+        faded = blend(app.color(QPalette.ColorRole.WindowText), window, amount)
         palette.setColor(QPalette.ColorRole.WindowText, faded)
         self.setPalette(palette)
 

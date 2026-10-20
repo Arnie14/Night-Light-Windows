@@ -31,9 +31,11 @@ In the panel, click ⚙ (Settings):
 - [ ] **Lock** the PC (Win+L) and unlock it: night light is back at once, without a visible flash of normal colors.
 - [ ] **Sleep** the PC and wake it: same.
 - [ ] Open Settings from the tray menu and from the panel, in dark mode: no white flash. Maximize the window, then click the same button again: it goes back to its smaller size.
-- [ ] With **Sunrise and sunset at location**, change **Transition duration** (twilight, none, or 5 to 120 minutes), Apply: the times listed under the temperatures change to match.
-- [ ] Settings → Night Light → under **Pause night light**, turn on **Pause for any fullscreen app**, Apply. Play a video fullscreen or start a game: that display fades to normal colors, the others stay warm. Leave fullscreen: it fades back.
-- [ ] Turn that off, turn on **Pause for chosen apps**, add an app (e.g. your photo editor), Apply, and switch to it: the same happens while it's in front, fullscreen or not; other fullscreen apps keep night light.
+- [ ] With **Sunset to sunrise**, change **Transition** (twilight, none, or 5 to 120 minutes), Apply: the times listed under the temperatures change to match.
+- [ ] Under **Sleep**, set a bedtime and wake-up time and click **Use sleep schedule**: the schedule changes to custom times starting 3 hours before bedtime, with a 60-minute transition and 2700 K. Click **Reset** to undo it, then **Use warmth only**: only the night temperature changes.
+- [ ] Settings → Night Light → under **Pause night light**, turn on **Fullscreen apps**, Apply. Play a video fullscreen or start a game: that display fades to normal colors, the others stay warm. Leave fullscreen: it fades back.
+- [ ] Turn that off, turn on **Selected apps**, add an app (e.g. your photo editor), Apply, and switch to it: the same happens while it's in front, fullscreen or not; other fullscreen apps keep night light.
+- [ ] Turn that off, turn on **Video, calls, games and color work**, Apply. Play a video in a window (not fullscreen), join a video call, or open Photoshop or Lightroom: the display in front fades to normal colors, and back when the video stops or you switch away. Note anything it misses.
 - [ ] With a game or video fullscreen, start Winlight again from the Start menu: nothing pops up over it, and the game keeps focus.
 - [ ] Switch back to your usual schedule (custom times or sunset/sunrise).
 
@@ -61,7 +63,8 @@ In a new terminal (or use the full path `%LOCALAPPDATA%\Programs\Winlight\winlig
 ## 6. Startup, upgrade, uninstall
 
 - [ ] Settings → General → **Start Winlight when I sign in** is on. Sign out and in: Winlight starts in the tray only. Turn it off, Apply: Task Manager → Startup apps shows Winlight as Disabled. Microsoft Defender doesn't flag or quarantine Winlight (Windows Security → Protection history).
-- [ ] Settings → General → **Theme**: Light and Dark change Winlight's windows at once; Follow Windows goes back to Windows' choice.
+- [ ] Settings → General → **Theme**: Light and Dark change Winlight's windows at once; Match Windows goes back to Windows' choice. **Accent color**: each preset recolors switches, sliders and the Apply button in both themes, and the text on Apply stays readable.
+- [ ] In light mode, the panel's percentages and captions are easy to read.
 - [ ] With night light on, run the installer again: Winlight closes itself, colors go back to normal, and your settings are kept after it starts again.
 - [ ] Uninstall (Settings → Apps → Winlight): Winlight closes first and colors return to normal. It's gone from the Start menu, and from Task Manager → Startup apps.
 

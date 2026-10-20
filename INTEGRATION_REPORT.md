@@ -13,7 +13,7 @@ Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability,
 - **Release round:** HDR brightness-lock detection with SDR fallback and a reason for every display's control; the CLI compared with Twinkle Tray's and Monitorian's (`--panel` and partial ids added); per-display pausing clearer and fixed for minimized apps; rename/hide end-to-end tests; a watcher audit (3 stuck states fixed); installer notes, author and GitHub link; roomier settings and Windows 11 style buttons (see [Release round](#release-round-010-beta-5)).
 - **Final round:** an option to keep display calibrations; the command line, installer and GUI checked again; 6 more bugs fixed, including a crash that garbage collection on a monitor thread could cause (see [Final round before release](#final-round-before-release)).
 - **Hardening pass:** 13 more bugs fixed, in concurrency, sleep, clashes with other software, files, logging and the CLI (see [Hardening pass](#hardening-pass)).
-- **Beta 6 round:** the Defender quarantine (the app no longer writes its start-up entry at start), dimming when a window is fullscreen, sunrise and sunset transition lengths, separate pause switches, brightness in the tray tooltip, restore on small screens, no white flash on opening, sleep-friendly values, a theme choice, and Report a Problem clean-up; 614 tests (see [Beta 6 round](#beta-6-round-010-beta-6)).
+- **Beta 6 round:** the Defender quarantine (the app no longer writes its start-up entry at start), dimming when a window is fullscreen, sunrise and sunset transition lengths, three pause switches including an automatic one, gradual brightness presets, brightness in the tray tooltip, restore on small screens, no white flash on opening, a sleep schedule, theme and accent choices, clearer settings text, and Report a Problem clean-up; 635 tests (see [Beta 6 round](#beta-6-round-010-beta-6)).
 
 ## What changed, by area
 
@@ -357,10 +357,21 @@ The tooltip stays under Windows' 127-character limit.
 - **Message:** shorter, and says what to do next and what happens to the file.
 - **Privacy:** the new idle app list is left out of reports (only how many apps), like the pause list.
 
+### Feedback on the beta 6 build
+
+- **Pausing automatically:** a third switch, "Video, calls, games and color work", next to "Fullscreen apps" and "Selected apps". It pauses night light on the display in front while Windows reports an app keeping the screen on (video playback, calls, presentations) or a game in exclusive fullscreen, and for a list of well-known photo, video and design apps (Photoshop, Lightroom, DaVinci Resolve, Affinity, GIMP, Krita and others). The setting says plainly that Winlight decides from what Windows reports, which doesn't name the app or display. On real Windows, another process keeping the display on paused the display in front and released it when it stopped (4 of 4).
+- **Brightness presets:** beta 6's presets mostly changed at once. Each now has a transition (30 to 90 minutes) that fits between its times, and levels and times that match its name: Office hours follows a working day, Night owl dims past midnight and after 02:00, and Dark room stays low all day. A schedule saved from an earlier version of a preset keeps its own times and is shown as Custom.
+- **Sleep recommendation:** two choices. "Use sleep schedule" builds custom times from a bedtime and wake-up time (warming from 3 hours before bed, fully warm 2 hours before, day light back by the wake-up time, 2700 K). "Use warmth only" sets 2700 K and keeps the current schedule.
+- **Brightness tooltip:** arrows throughout ("70% → 40% at 20:00", "55% → 40%, changing until 20:30"), and the schedule summary reads "100% at 07:00, 50% at 20:00".
+- **Readability:** secondary text in light mode is darker, close to Windows 11's own secondary text, so the panel's percentages and captions read easily.
+- **Accent colors:** Windows' accent or one of six presets (Amber, Blue, Teal, Green, Purple, Rose). Only the palette's accent role changes, so the risk is low. Each preset has a deep shade for light mode and a light one for dark mode, with at least 4.5:1 contrast for text. The Apply button now chooses black or white text by contrast instead of lightness.
+- **Wording:** the settings window's titles and descriptions were rewritten to be shorter, consistent and specific, for example "Schedule", "Turn on at", "Transition", "Fullscreen apps", "Selected apps" and "Log files".
+
 ### Tests
 
-**614** pass. New:
+**635** pass. New:
 
+- automatic pausing, the presets' transitions, the sleep schedule, accent colors and contrast, and secondary text in light mode
 - autostart: the registry rules, plus the app only reading at start and writing only on a change
 - what holds idle dimming
 - solar transition lengths, and twilight in four time zones
@@ -372,7 +383,7 @@ The tooltip stays under Windows' 127-character limit.
 - the theme
 - clean-up and the clipboard
 
-Real-API checks: 113 of 113, plus the autostart (9) and idle-hold (8) checks above.
+Real-API checks: 113 of 113, plus the autostart (9), idle-hold (8) and automatic-pause (4) checks above.
 
 ## Not verified (needs hardware or CI)
 

@@ -18,7 +18,8 @@ from nightlight.monitors import SCHEDULE, USER, DisplayState, Status
 
 UTC = timezone.utc
 NEW_YORK = ZoneInfo("America/New_York")
-DAY_NIGHT = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00")))
+# The point logic without a transition (the default has one, as its preset does).
+DAY_NIGHT = BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00")), transition_minutes=0)
 
 
 def at(day, hour, minute=0, zone=UTC, month=6, fold=0):
@@ -103,8 +104,9 @@ def test_a_transition_never_runs_into_the_next_point():
 
 
 def test_describe():
-    assert describe(DAY_NIGHT) == "07:00 100% · 20:00 50%"
-    assert describe(BrightnessScheduleConfig(points=(SchedulePoint(40, anchor=Anchor.SUNSET, offset_minutes=-30),))) == "sunset - 30 min 40%"
+    assert describe(DAY_NIGHT) == "100% at 07:00, 50% at 20:00"
+    assert describe(BrightnessScheduleConfig(points=(SchedulePoint(40, anchor=Anchor.SUNSET, offset_minutes=-30),))) == "40% at 30 min before sunset"
+    assert describe(BrightnessScheduleConfig(points=(SchedulePoint(100, anchor=Anchor.SUNRISE),))) == "100% at sunrise"
 
 
 # --- Daylight saving time (America/New_York: 8 March and 1 November 2026) ---
@@ -452,3 +454,28 @@ def test_a_level_set_outside_the_app_stands_until_the_next_point(scheduler):
     clock.now = at(15, 20, 1)
     sched.evaluate("timer")
     assert monitors.sent[-1] == ("DEL", 50, SCHEDULE)
+
+
+def test_every_preset_changes_gradually_and_fits_between_its_times():
+    """Beta 5's presets mostly jumped at once; each now has a transition that
+    a day's gaps between its clock times leave room for."""
+    for key, preset in PRESETS.items():
+        assert preset.transition_minutes >= 30, key
+        clock = sorted(p.at for p in preset.points if p.anchor is Anchor.CLOCK)
+        minutes = [int(t[:2]) * 60 + int(t[3:]) for t in clock]
+        gaps = [b - a for a, b in zip(minutes, minutes[1:])] + ([minutes[0] + 1440 - minutes[-1]] if minutes else [])
+        assert all(gap >= preset.transition_minutes for gap in gaps), (key, gaps)
+
+
+def test_the_default_schedule_is_the_day_and_night_preset():
+    default = BrightnessScheduleConfig()
+    preset = PRESETS[default.preset]
+    assert (default.points, default.transition_minutes) == (preset.points, preset.transition_minutes)
+
+
+def test_a_preset_reaches_its_level_after_its_transition():
+    preset = PRESETS["office"]
+    config = BrightnessScheduleConfig(True, "office", preset.points, preset.transition_minutes)
+    halfway = scheduled_level(config, at(15, 17, 22))
+    assert halfway.transitioning and 70 < halfway.level < 100
+    assert scheduled_level(config, at(15, 17, 45)).level == 70

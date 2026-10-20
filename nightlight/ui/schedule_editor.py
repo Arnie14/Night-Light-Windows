@@ -11,7 +11,7 @@ from nightlight.core.brightness_schedule import CUSTOM, PRESETS
 from nightlight.ui.settings_parts import Card, SettingRow, ToggleSwitch
 from nightlight.ui.widgets import SecondaryLabel
 
-ANCHOR_LABELS = {Anchor.CLOCK: "At a time", Anchor.SUNRISE: "Sunrise", Anchor.SUNSET: "Sunset"}
+ANCHOR_LABELS = {Anchor.CLOCK: "Time of day", Anchor.SUNRISE: "Sunrise", Anchor.SUNSET: "Sunset"}
 CONTROL_WIDTH = 230  # the right-hand controls of the card end on one line
 
 
@@ -98,7 +98,7 @@ class ScheduleEditor(Card):
         self.preset.addItem("Custom", CUSTOM)
         self.preset.setFixedWidth(CONTROL_WIDTH)
         self.transition = QSpinBox(minimum=0, maximum=MAX_TRANSITION_MINUTES, singleStep=5, suffix=" min")
-        self.transition.setSpecialValueText("At once")
+        self.transition.setSpecialValueText("None")
         self.transition.setFixedWidth(120)
         self.add_button = QPushButton("Add a time")
         self.add_button.clicked.connect(self._add_point)
@@ -109,10 +109,11 @@ class ScheduleEditor(Card):
         self._rows_layout.setContentsMargins(0, 2, 0, 0)
         self._rows_layout.setSpacing(6)
 
-        self.add(SettingRow("Change brightness by time of day", "Set every display's brightness by a schedule", self.enabled))
+        self.add(SettingRow("Change brightness by time of day", "Adjusts every display's brightness on a schedule", self.enabled))
         self._preset_row = self.add(SettingRow("Preset", "", self.preset))
-        self._times_row = self.add(SettingRow("Times", "From each time on, displays are set to its brightness", self.add_button, below=times))
-        self._transition_row = self.add(SettingRow("Change over", "Gradually after each time, instead of at once", self.transition))
+        self._times_row = self.add(SettingRow("Times", "At each time, displays change to its brightness", self.add_button, below=times))
+        self._transition_row = self.add(SettingRow("Transition", "How long each change takes, starting at its time",
+                                                   self.transition))
         self.status = SecondaryLabel(scale=0.92)
         self.status.setWordWrap(True)
         status_holder = QWidget()
@@ -139,6 +140,9 @@ class ScheduleEditor(Card):
             widget.blockSignals(True)
         self.enabled.setChecked(config.enabled)
         index = self.preset.findData(config.preset)
+        preset = PRESETS.get(config.preset)
+        if preset is not None and (config.points, config.transition_minutes) != (preset.points, preset.transition_minutes):
+            index = -1  # saved from an earlier version of the preset: shown as the custom schedule it now is
         self.preset.setCurrentIndex(index if index >= 0 else self.preset.findData(CUSTOM))
         self.transition.setValue(config.transition_minutes)
         for widget in (self.enabled, self.preset, self.transition):
@@ -221,4 +225,4 @@ class ScheduleEditor(Card):
 
     def _describe(self) -> None:
         key = self.preset.currentData()
-        self._preset_row.set_description(PRESETS[key].description if key in PRESETS else "Your own times and levels")
+        self._preset_row.set_description(PRESETS[key].description if key in PRESETS else "Your own times and brightness levels")

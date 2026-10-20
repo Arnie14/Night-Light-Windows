@@ -430,29 +430,64 @@ def test_theme_choice(window):
     assert window.current_config().general.theme == "dark"
 
 
-def test_sleep_friendly_values_fill_in_without_applying():
+def test_accent_choice(window):
+    assert window.accent.currentData() == "windows"
+    assert window.accent.count() == 7
+    window.accent.setCurrentIndex(window.accent.findData("teal"))
+    assert window.current_config().general.accent == "teal"
+    assert apply_button(window).isEnabled()
+
+
+def test_automatic_pausing_is_a_third_separate_switch(window):
+    assert not window.pause_automatically.isChecked()
+    window.pause_automatically.setChecked(True)
+    night_light = window.current_config().night_light
+    assert night_light.pause_automatically and not night_light.exempt_fullscreen and night_light.pause_for_apps
+
+
+def test_a_schedule_saved_from_an_older_preset_shows_as_custom():
+    """The presets changed in beta 6: a schedule saved from the old "Office
+    hours" keeps its own points and is labelled Custom, not as the new preset."""
+    old = BrightnessScheduleConfig(True, "office", (SchedulePoint(85, "08:00"), SchedulePoint(60, "18:00")), 0)
+    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
+    window = SettingsWindow(controller, AppConfig(KYIV, brightness_schedule=old))
+    schedule = window.current_config().brightness_schedule
+    assert window.schedule.preset.currentData() == "custom"
+    assert schedule.points == old.points and schedule.transition_minutes == 0
+    controller.shutdown()
+
+
+def test_sleep_warmth_only_keeps_the_schedule_and_fills_in_without_applying():
     window, controller = make_window(night_light=replace(KYIV, night_temperature=4500))
-    window.use_sleep_settings.click()
-    assert window.night_temperature.value() == 2700
-    assert window.current_config().night_light.mode is Mode.LOCATION  # sunrise and sunset stay
+    window.use_sleep_warmth.click()
+    night_light = window.current_config().night_light
+    assert night_light.night_temperature == 2700
+    assert night_light.mode is Mode.LOCATION and night_light.solar_transition_minutes == KYIV.solar_transition_minutes
     assert apply_button(window).isEnabled() and controller.config.night_temperature == 4500  # not applied yet
     controller.shutdown()
 
 
-def test_sleep_friendly_values_keep_a_warmer_choice_and_start_before_bedtime():
-    window, controller = make_window(night_light=NightLightConfig(enabled=True, mode=Mode.TIMES, night_temperature=2200))
-    assert not window._bedtime_row.isHidden()
-    window.bedtime.setTime(QTime(22, 30))
-    window.use_sleep_settings.click()
-    assert window.night_temperature.value() == 2200
-    assert window.current_config().night_light.night_start == "19:30"
+def test_sleep_warmth_keeps_a_warmer_choice_and_turns_night_light_on():
+    window, controller = make_window(night_light=replace(KYIV, enabled=False, night_temperature=2200))
+    window.use_sleep_warmth.click()
+    night_light = window.current_config().night_light
+    assert night_light.enabled and night_light.night_temperature == 2200
     controller.shutdown()
 
 
-def test_sleep_friendly_values_turn_night_light_on():
-    window, controller = make_window(night_light=replace(KYIV, enabled=False))
-    window.use_sleep_settings.click()
-    assert window.current_config().night_light.enabled
+def test_the_sleep_schedule_is_built_from_bedtime_and_wake_up_time():
+    window, controller = make_window(night_light=replace(KYIV, night_temperature=4500))
+    assert not window._bedtime_row.isHidden() and not window._wake_row.isHidden()  # whatever the schedule
+    window.bedtime.setTime(QTime(22, 30))
+    window.wake_time.setTime(QTime(6, 45))
+    window.use_sleep_schedule.click()
+    night_light = window.current_config().night_light
+    assert night_light.enabled and night_light.mode is Mode.TIMES
+    assert night_light.night_start == "19:30"  # warming from 3 hours before bed, fully warm 2 hours before
+    assert night_light.transition_minutes == 60
+    assert night_light.day_start == "05:45"  # day light back by the wake-up time
+    assert night_light.night_temperature == 2700
+    assert controller.config.mode is Mode.LOCATION  # not applied yet
     controller.shutdown()
 
 

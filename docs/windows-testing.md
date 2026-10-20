@@ -153,7 +153,7 @@ In Configure Night Light, choose "Always on":
 Schedule:
 
 - [ ] Custom times a few minutes ahead: the transition starts and ends on time, and the tray icon and status follow.
-- [ ] Sunrise and sunset at location, picked by city: in Location, type part of your city (e.g. "lond"). A list of matches drops down; pick yours. No latitude/longitude fields are shown, and after Apply the times shown match a sunrise/sunset table for that city.
+- [ ] Sunset to sunrise, picked by city: in Location, type part of your city (e.g. "lond"). A list of matches drops down; pick yours. No latitude/longitude fields are shown, and after Apply the times shown match a sunrise/sunset table for that city.
 - [ ] Click **Detect**: the city of your Windows time zone is picked (Settings > Time & language > Date & time). If it says the time zone isn't in the list, note the zone it names.
 - [ ] Type nonsense in Location and press Tab: the box goes back to the previous city.
 - [ ] Choose **Custom location** (top of the list): Latitude and Longitude appear, filled with the last city's coordinates. Change them, Apply: the times follow your coordinates.
@@ -170,7 +170,7 @@ In Settings > Brightness, tick **Change brightness by time of day**:
 - [ ] Quit and start again within the same point: the levels you set come back (remembered), the schedule doesn't reset them.
 - [ ] Sleep through a point (or two), wake: only the latest point applies, once.
 - [ ] A sunrise or sunset point with a Night Light location: the time shown matches a sunrise/sunset table. Without a location, the line says 06:00 and 18:00 are used.
-- [ ] "Change over" (gradual): the displays step towards the new level over that time.
+- [ ] "Transition" (gradual): the displays step towards the new level over that time. Each preset has its own transition (30 to 90 minutes).
 - [ ] A monitor asleep or not answering at a point gets the level once it answers.
 
 ## 6. Startup
@@ -226,7 +226,7 @@ Brightness options, in Settings > Brightness:
 
 Pausing night light (Settings > Night Light > Pause night light):
 
-- [ ] Turn on "Pause for any fullscreen app": a fullscreen video (browser F11, or a player) and a game, borderless and exclusive fullscreen, each fade their display to normal colors within about half a second; the other displays stay warm. Leaving fullscreen fades it back. Note any game that isn't detected.
+- [ ] Turn on "Fullscreen apps": a fullscreen video (browser F11, or a player) and a game, borderless and exclusive fullscreen, each fade their display to normal colors within about half a second; the other displays stay warm. Leaving fullscreen fades it back. Note any game that isn't detected.
 - [ ] Add an app with "Add an app" (it lists running apps) and with "Browse for an app…": switching to it pauses night light on its display; switching away resumes it.
 - [ ] The panel and the tray tooltip say "Paused for …" meanwhile.
 - [ ] Nothing flashes or jumps: starting the app at night fades in, Quit fades out quickly, pausing and resuming fade.

@@ -49,24 +49,30 @@ def paused_text(controller: NightLightController, display_name: Callable[[str], 
     name = display_name or display_label
     parts = []
     for display, reason in sorted(controller.paused.items()):
-        app, _, fullscreen = reason.partition(", ")
-        what = f"a fullscreen {app}" if fullscreen and app not in ("", "an app") else ("a fullscreen app" if fullscreen else app)
+        app, _, kind = reason.partition(", ")
+        known = app not in ("", "an app")
+        if kind == "fullscreen":
+            what = f"a fullscreen {app}" if known else "a fullscreen app"
+        elif kind == "automatic":
+            what = f"{app} (automatic)" if known else "an app (automatic)"
+        else:
+            what = app
         parts.append(f"{name(display)} for {what}")
     return "Paused on " + "; ".join(parts)
 
 
 def brightness_status(scheduler) -> str:
-    """The brightness schedule now, like night light's status: "55% → 40% by
-    20:30" while changing, "70% · 40% at 20:00" otherwise; "" while it is off.
-    `scheduler` is a BrightnessScheduler, or None."""
+    """The brightness schedule now, like night light's status: "70% → 40% at
+    20:00" (the next change), "55% → 40%, changing until 20:30" during one;
+    "" while it is off. `scheduler` is a BrightnessScheduler, or None."""
     state = getattr(scheduler, "state", None)
     if state is None or not scheduler.config.enabled:
         return ""
     if state.transitioning and state.level != state.since.level:
-        end = f" by {_hhmm(state.transition_end)}" if state.transition_end is not None else ""
+        end = f", changing until {_hhmm(state.transition_end)}" if state.transition_end is not None else ", changing"
         return f"{state.level}% → {state.since.level}%{end}"
     if state.next is not None and state.next.level != state.level:
-        return f"{state.level}% · {state.next.level}% at {_hhmm(state.next.at)}"
+        return f"{state.level}% → {state.next.level}% at {_hhmm(state.next.at)}"
     return f"{state.level}%"
 
 
@@ -77,7 +83,7 @@ def display_label(gdi_name: str) -> str:
 
 
 def schedule_description(controller: NightLightController) -> str:
-    """When the next changes happen, worded like KDE's Night Light page."""
+    """When the next changes happen, as KDE's Night Light page says it."""
     config, now = controller.config, controller.now()
     if not config.enabled or config.mode is Mode.ALWAYS:
         return ""
@@ -85,9 +91,11 @@ def schedule_description(controller: NightLightController) -> str:
     evening = next_transition(config, now, to_night=True, zone=controller.zone)
     morning = next_transition(config, now, to_night=False, zone=controller.zone)
     if evening:
-        lines.append(f"Color temperature begins changing to night time at {_hhmm(evening.start)} and is fully changed by {_hhmm(evening.end)}")
+        lines.append(f"Night light turns on at {_hhmm(evening.start)}." if evening.start == evening.end else
+                     f"Night light starts warming at {_hhmm(evening.start)} and is fully on by {_hhmm(evening.end)}.")
     if morning:
-        lines.append(f"Color temperature begins changing to day time at {_hhmm(morning.start)} and is fully changed by {_hhmm(morning.end)}")
+        lines.append(f"Night light turns off at {_hhmm(morning.start)}." if morning.start == morning.end else
+                     f"Day light starts returning at {_hhmm(morning.start)} and is fully back by {_hhmm(morning.end)}.")
     return "\n".join(lines)
 
 

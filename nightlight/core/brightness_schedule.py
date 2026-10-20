@@ -24,7 +24,14 @@ from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from astral import Observer
 from astral.sun import sun
 
-from nightlight.config import Anchor, BrightnessScheduleConfig, SchedulePoint, parse_hhmm
+from nightlight.config import (
+    DEFAULT_SCHEDULE_POINTS,
+    DEFAULT_SCHEDULE_TRANSITION,
+    Anchor,
+    BrightnessScheduleConfig,
+    SchedulePoint,
+    parse_hhmm,
+)
 from nightlight.core.clock import days_around, fixed, local, wall_time
 
 log = logging.getLogger(__name__)
@@ -45,38 +52,45 @@ class Preset:
 
 
 CUSTOM = "custom"
+# Each preset changes gradually, over its transition_minutes from each time
+# (never running into the next time), so none of them jumps.
 PRESETS: dict[str, Preset] = {
     "day_night": Preset(
         "Day and night",
-        "Full brightness by day, half from 20:00",
-        (SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00")),
+        "100% from 07:00 and 50% from 20:00, each change taking 30 minutes",
+        DEFAULT_SCHEDULE_POINTS,
+        transition_minutes=DEFAULT_SCHEDULE_TRANSITION,
     ),
     "follow_sun": Preset(
         "Follow the sun",
-        "Bright from sunrise, dimmer after sunset (uses the Night Light location)",
+        "Rises to 100% in the hour after sunrise, lowers to 70% after sunset and to 40% later in the evening. "
+        "Uses the location set for Night Light",
         (SchedulePoint(100, anchor=Anchor.SUNRISE), SchedulePoint(70, anchor=Anchor.SUNSET), SchedulePoint(40, anchor=Anchor.SUNSET, offset_minutes=90)),
-        transition_minutes=30,
+        transition_minutes=60,
     ),
     "office": Preset(
         "Office hours",
-        "Bright for the working day, easing off in the evening",
-        (SchedulePoint(85, "08:00"), SchedulePoint(60, "18:00"), SchedulePoint(35, "22:00")),
+        "100% for the working day from 08:00, 70% from 17:00 and 40% from 21:00, each change taking 45 minutes",
+        (SchedulePoint(100, "08:00"), SchedulePoint(70, "17:00"), SchedulePoint(40, "21:00")),
+        transition_minutes=45,
     ),
     "wind_down": Preset(
         "Evening wind-down",
-        "Steps down through the evening, gradually",
-        (SchedulePoint(100, "07:00"), SchedulePoint(80, "18:00"), SchedulePoint(60, "20:00"), SchedulePoint(40, "22:00")),
-        transition_minutes=30,
+        "100% by day, then lower in steps from 18:00 to 22:00, each spread over 90 minutes for a slow, steady fade",
+        (SchedulePoint(100, "07:00"), SchedulePoint(80, "18:00"), SchedulePoint(60, "20:00"), SchedulePoint(35, "22:00")),
+        transition_minutes=90,
     ),
     "night_owl": Preset(
         "Night owl",
-        "A late start, and dim after midnight",
-        (SchedulePoint(90, "10:00"), SchedulePoint(70, "20:00"), SchedulePoint(40, "00:30")),
+        "For late hours: 90% from 10:00, then lower from 20:00, past midnight and after 02:00, each change taking an hour",
+        (SchedulePoint(90, "10:00"), SchedulePoint(75, "20:00"), SchedulePoint(50, "00:00"), SchedulePoint(30, "02:00")),
+        transition_minutes=60,
     ),
     "dark_room": Preset(
         "Dark room",
-        "Low levels for a dim room or to spare an OLED",
-        (SchedulePoint(70, "08:00"), SchedulePoint(40, "19:00"), SchedulePoint(20, "23:00")),
+        "Low levels all day for a dim room or an OLED display: 60% from 08:00, 35% from 19:00 and 15% from 23:00",
+        (SchedulePoint(60, "08:00"), SchedulePoint(35, "19:00"), SchedulePoint(15, "23:00")),
+        transition_minutes=60,
     ),
 }
 
@@ -168,13 +182,15 @@ def scheduled_level(config: BrightnessScheduleConfig, now: datetime, zone: tzinf
 
 
 def describe(config: BrightnessScheduleConfig) -> str:
-    """The points in words: "07:00 100% · 20:00 50%"."""
+    """The points in words: "100% at 07:00, 50% at 20:00"."""
     parts = []
     for point in config.points:
         if point.anchor is Anchor.CLOCK:
             when = point.at
+        elif point.offset_minutes:
+            side = "after" if point.offset_minutes > 0 else "before"
+            when = f"{abs(point.offset_minutes)} min {side} {point.anchor.value}"
         else:
-            offset = f" {'+' if point.offset_minutes > 0 else '-'} {abs(point.offset_minutes)} min" if point.offset_minutes else ""
-            when = f"{point.anchor.value}{offset}"
-        parts.append(f"{when} {point.level}%")
-    return " · ".join(parts)
+            when = point.anchor.value
+        parts.append(f"{point.level}% at {when}")
+    return ", ".join(parts)

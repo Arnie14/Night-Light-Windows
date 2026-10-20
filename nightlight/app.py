@@ -120,7 +120,8 @@ class NightLightApp:
         self.flyout.configureRequested.connect(self.show_settings)
         self.flyout.set_scheduler(self.scheduler)
 
-        self._exemptions = ForegroundWatcher(winsystem.foreground_app, self._config.night_light)
+        self._exemptions = ForegroundWatcher(winsystem.foreground_app, self._config.night_light,
+                                             media=lambda: winsystem.display_required() or winsystem.exclusive_fullscreen())
         self._exemptions.pausedChanged.connect(self.controller.set_paused)
         # Its first check ran before this connection: an exempt or fullscreen
         # app already in front at start pauses night light too.
@@ -346,7 +347,7 @@ class NightLightApp:
         self.brightness_memory.set_hidden(settings.hidden)
         self.scheduler.set_hidden(settings.hidden)
         self._exemptions.set_config(settings.night_light)
-        theme.apply(general.theme)
+        theme.apply(general.theme, general.accent)
 
     # --- Events ---------------------------------------------------------------
 

@@ -55,6 +55,7 @@ from nightlight.core import locations
 from nightlight.core.brightness_schedule import describe as describe_schedule
 from nightlight.core.schedule import OverrideKind
 from nightlight.ui import icons
+from nightlight.ui import theme as theme_module
 from nightlight.ui.night_light_text import is_night_light_on, night_light_status, schedule_description
 from nightlight.ui.schedule_editor import ScheduleEditor
 from nightlight.ui.settings_parts import ActionBar, Card, NavButton, PageTitle, SectionLabel, SettingRow, StatusBadge, ToggleSwitch
@@ -69,7 +70,7 @@ ALWAYS_OFF = "off"
 SWITCHING_TIMES = {
     ALWAYS_OFF: "Always off",
     Mode.ALWAYS: "Always on",
-    Mode.LOCATION: "Sunrise and sunset at location",
+    Mode.LOCATION: "Sunset to sunrise",
     Mode.TIMES: "Custom times",
 }
 # The location choice for typing in latitude and longitude.
@@ -89,17 +90,18 @@ PREFERRED_SIZE = (960, 760)
 SCREEN_MARGIN = 16
 FRAME_HEIGHT = 40
 PAGES = ("Night Light", "Brightness", "Displays", "General")
-THEME_CHOICES = {"system": "Follow Windows", "light": "Light", "dark": "Dark"}
+THEME_CHOICES = {"system": "Match Windows", "light": "Light", "dark": "Dark"}
 # Sleep-friendly night light, from what sleep researchers advise: dim, warm
 # light for the 2-3 hours before bed (Harvard Health, "Blue light has a dark
 # side"; Chang et al., PNAS 2015, on screens delaying melatonin). 2700 K is
 # an incandescent bulb's color, f.lux's default at night.
 SLEEP_KELVIN = 2700
-SLEEP_LEAD_HOURS = 3
+SLEEP_LEAD_HOURS = 3  # night light starts warming this long before bedtime
+SLEEP_TRANSITION_MINUTES = 60  # so it is fully warm 2 hours before bed, and day light is back by the wake-up time
 SLEEP_ADVICE = (
-    "Bright, blue-rich light in the evening delays melatonin, the hormone that makes you sleepy. Sleep researchers "
-    f"suggest dim, warm light, about {SLEEP_KELVIN} K (an incandescent bulb) or warmer, for the 2 to 3 hours before bed, "
-    "and less screen time near bedtime. General guidance, not medical advice"
+    "Bright, blue-rich light in the evening can delay melatonin, the hormone that helps you fall asleep. Sleep "
+    f"researchers recommend dim, warm light (around {SLEEP_KELVIN} K, like an incandescent bulb) for the two to three "
+    "hours before bed. This is general guidance, not medical advice"
 )
 
 
@@ -202,6 +204,8 @@ class SettingsWindow(QWidget):
             self.transition.valueChanged,
             self.solar_transition.currentIndexChanged,
             self.theme.currentIndexChanged,
+            self.accent.currentIndexChanged,
+            self.pause_automatically.toggled,
             self.start_with_windows.toggled,
             self.start_minimized.toggled,
             self.remember_brightness.toggled,
@@ -296,7 +300,7 @@ class SettingsWindow(QWidget):
         for key, label in SWITCHING_TIMES.items():
             self.mode.addItem(label, key)
         self.location = _location_combo()
-        self.use_system_zone = QPushButton("Detect", toolTip="Use the place of this PC's time zone")
+        self.use_system_zone = QPushButton("Detect", toolTip="Use the city of your PC's time zone")
         self.use_system_zone.clicked.connect(self._pick_system_zone)
         self._location_row = QWidget()
         location_layout = QHBoxLayout(self._location_row)
@@ -311,29 +315,36 @@ class SettingsWindow(QWidget):
         self.transition = QSpinBox(minimum=1, maximum=MAX_TRANSITION_MINUTES, suffix=" min")
         # Sunrise and sunset: twilight's own length, none, or a chosen length.
         self.solar_transition = QComboBox()
-        self.solar_transition.addItem("Follow twilight (about 30 min)", -1)
-        self.solar_transition.addItem("None (switch at once)", 0)
+        self.solar_transition.addItem("Twilight (about 30 min)", -1)
+        self.solar_transition.addItem("None", 0)
         for minutes in range(5, MAX_SOLAR_TRANSITION_MINUTES + 1, 5):
             self.solar_transition.addItem(f"{minutes} min", minutes)
         self.solar_transition.setMaxVisibleItems(12)
         self.bedtime = QTimeEdit(displayFormat="HH:mm")
         self.bedtime.setTime(QTime(23, 0))
-        self.use_sleep_settings = QPushButton("Use these")
-        self.use_sleep_settings.setToolTip(f"Night light at {SLEEP_KELVIN} K or warmer; with custom times, "
-                                           f"starting {SLEEP_LEAD_HOURS} hours before your bedtime. Apply to keep it")
-        self.use_sleep_settings.clicked.connect(self._use_sleep_settings)
+        self.wake_time = QTimeEdit(displayFormat="HH:mm")
+        self.wake_time.setTime(QTime(7, 0))
+        self.use_sleep_schedule = QPushButton("Use sleep schedule")
+        self.use_sleep_schedule.setToolTip(f"Custom times from your bedtime and wake-up time, {SLEEP_KELVIN} K or warmer, "
+                                           f"and a {SLEEP_TRANSITION_MINUTES}-minute transition. Click Apply to keep them")
+        self.use_sleep_schedule.clicked.connect(self._use_sleep_schedule)
+        self.use_sleep_warmth = QPushButton("Use warmth only")
+        self.use_sleep_warmth.setToolTip(f"Sets night light to {SLEEP_KELVIN} K or warmer and keeps your schedule. "
+                                         "Click Apply to keep it")
+        self.use_sleep_warmth.clicked.connect(self._use_sleep_warmth)
         self.day_temperature = TemperatureSlider()
         self.night_temperature = TemperatureSlider()
         for field in (self.mode, self._location_row, self.solar_transition):
             field.setFixedWidth(WIDE_FIELD)
         for slider in (self.day_temperature, self.night_temperature):
             slider.setFixedWidth(WIDE_FIELD + 40)
-        for field in (self.latitude, self.longitude, self.night_start, self.day_start, self.transition, self.bedtime):
+        for field in (self.latitude, self.longitude, self.night_start, self.day_start, self.transition, self.bedtime, self.wake_time):
             field.setFixedWidth(NARROW_FIELD)
         self.schedule_info = SecondaryLabel(scale=0.92)
         self.schedule_info.setWordWrap(True)
-        self.exempt_fullscreen = ToggleSwitch("Pause night light for any fullscreen app")
-        self.pause_for_apps = ToggleSwitch("Pause night light for chosen apps")
+        self.exempt_fullscreen = ToggleSwitch("Pause night light for fullscreen apps")
+        self.pause_for_apps = ToggleSwitch("Pause night light for selected apps")
+        self.pause_automatically = ToggleSwitch("Pause night light automatically for video, calls, games and color work")
         self.exempt_apps = AppList(self._running_apps)
 
         # Brightness
@@ -356,7 +367,11 @@ class SettingsWindow(QWidget):
         self.theme = QComboBox()
         for key, label in THEME_CHOICES.items():
             self.theme.addItem(label, key)
-        self.theme.setFixedWidth(NARROW_FIELD + 60)
+        self.theme.setFixedWidth(NARROW_FIELD + 80)
+        self.accent = QComboBox()
+        for key, label in theme_module.ACCENT_NAMES.items():
+            self.accent.addItem(label, key)
+        self.accent.setFixedWidth(NARROW_FIELD + 80)
         if not can_autostart:
             self.start_with_windows.setEnabled(False)
             self.start_with_windows.setToolTip("Not available on this system")
@@ -372,76 +387,94 @@ class SettingsWindow(QWidget):
         self.save_report.clicked.connect(self._save_report)
 
     def _night_light_page(self) -> QWidget:
-        page, layout = _page("Night Light", "The blue light filter makes the colors on the screen warmer.")
+        page, layout = _page("Night Light", "Warmer colors in the evening reduce the blue light from your displays.")
         self._night_card = Card()
         self._field_rows: dict[QWidget, QWidget] = {}
         for field, title, description in (
-            (self.mode, "Switching times", "When night light comes on"),
-            (self._location_row, "Location", "Where sunrise and sunset are taken from"),
-            (self.latitude, "Latitude", ""),
-            (self.longitude, "Longitude", ""),
-            (self.night_start, "Begin night light at", ""),
-            (self.day_start, "Begin day light at", ""),
-            (self.transition, "Transition duration", "How long the change from day to night takes"),
-            (self.solar_transition, "Transition duration", "Night light starts warming at sunset, and is back to day light "
-             "by sunrise. Twilight's length depends on the place and the season"),
+            (self.mode, "Schedule", "When night light is on"),
+            (self._location_row, "Location", "Used to calculate sunset and sunrise"),
+            (self.latitude, "Latitude", "Degrees north (negative for south)"),
+            (self.longitude, "Longitude", "Degrees east (negative for west)"),
+            (self.night_start, "Turn on at", "When the evening transition starts"),
+            (self.day_start, "Turn off at", "When the morning transition starts"),
+            (self.transition, "Transition", "How long the change between day and night takes"),
+            (self.solar_transition, "Transition", "Starts at sunset in the evening and ends at sunrise in the morning. "
+             "Twilight lasts longer in some places and seasons"),
         ):
             self._field_rows[field] = self._night_card.add(SettingRow(title, description, field))
         layout.addWidget(self._night_card)
         layout.addWidget(SectionLabel("Color temperature"))
         self._temperature_card = Card()
-        self._field_rows[self.day_temperature] = self._temperature_card.add(SettingRow("Day light", "Neutral is 6500 K", self.day_temperature))
-        self._temperature_card.add(SettingRow("Night light", "Drag to preview it", self.night_temperature))
+        self._field_rows[self.day_temperature] = self._temperature_card.add(SettingRow("Day", "6500 K is neutral, with no filter",
+                                                                                         self.day_temperature))
+        self._temperature_card.add(SettingRow("Night", "Lower values are warmer. Drag to preview", self.night_temperature))
         layout.addWidget(self._temperature_card)
         self.schedule_info.setContentsMargins(4, 10, 4, 0)
         layout.addWidget(self.schedule_info)
-        layout.addWidget(SectionLabel("For better sleep"))
+        layout.addWidget(SectionLabel("Sleep"))
         self._sleep_card = Card()
-        self._sleep_card.add(SettingRow("Sleep-friendly night light", SLEEP_ADVICE, self.use_sleep_settings))
-        self._bedtime_row = self._sleep_card.add(SettingRow("My bedtime", f"With custom times, night light starts "
-                                                            f"{SLEEP_LEAD_HOURS} hours before it", self.bedtime))
+        self._sleep_card.add(SettingRow("Sleep-friendly night light", SLEEP_ADVICE))
+        self._bedtime_row = self._sleep_card.add(SettingRow("Bedtime", f"Night light starts {SLEEP_LEAD_HOURS} hours before "
+                                                            "and is fully warm 2 hours before", self.bedtime))
+        self._wake_row = self._sleep_card.add(SettingRow("Wake-up time", "Day light is fully back by this time", self.wake_time))
+        sleep_buttons = QWidget()
+        sleep_layout = QHBoxLayout(sleep_buttons)
+        sleep_layout.setContentsMargins(0, 0, 0, 0)
+        sleep_layout.setSpacing(8)
+        sleep_layout.addWidget(self.use_sleep_warmth)
+        sleep_layout.addWidget(self.use_sleep_schedule)
+        self._sleep_card.add(SettingRow("Apply the recommendation", "The full schedule uses custom times built from your bedtime "
+                                        "and wake-up time. Warmth only keeps your current schedule", sleep_buttons))
         layout.addWidget(self._sleep_card)
         layout.addWidget(SectionLabel("Pause night light"))
         pause = Card()
-        pause.add(SettingRow("Pause for any fullscreen app", "Whenever any app fills a display (a game, a video, a browser in "
-                             "fullscreen), night light pauses on that display until the app leaves fullscreen", self.exempt_fullscreen))
-        pause.add(SettingRow("Pause for chosen apps", "Only for the apps in this list: night light pauses on the display showing "
-                             "one while it's in front, fullscreen or not, and fades back when you switch away, minimize or close it. "
-                             "Other apps keep night light", self.pause_for_apps, below=self.exempt_apps))
+        pause.add(SettingRow("Fullscreen apps", "Pauses while any app fills a display, such as a game, a video or a browser "
+                             "in fullscreen", self.exempt_fullscreen))
+        pause.add(SettingRow("Video, calls, games and color work", "Pauses automatically while an app keeps the screen on for "
+                             "video playback, a call or a presentation, while a game runs in exclusive fullscreen, and for "
+                             "photo, video and design apps such as Photoshop, Lightroom and DaVinci Resolve. Winlight "
+                             "decides from the information Windows provides, which doesn't name the app or display "
+                             "involved, so some cases may be missed or paused on the display in front",
+                             self.pause_automatically))
+        pause.add(SettingRow("Selected apps", "Pauses while a listed app is in front, fullscreen or not. Other apps are "
+                             "not affected", self.pause_for_apps, below=self.exempt_apps))
         layout.addWidget(pause)
-        pause_hint = SecondaryLabel("The two are separate: turn on either or both. Other displays always keep night light.", scale=0.9)
+        pause_hint = SecondaryLabel("These options work independently. Night light pauses only on the display showing the app, "
+                                    "and returns when you switch away, minimize or close it.", scale=0.9)
         pause_hint.setWordWrap(True)
         pause_hint.setContentsMargins(4, 8, 4, 0)
         layout.addWidget(pause_hint)
         return page
 
     def _brightness_page(self) -> QWidget:
-        page, layout = _page("Brightness", "Brightness by time of day, and how it is kept.")
+        page, layout = _page("Brightness", "Schedule brightness by time of day, and choose how it is kept.")
         layout.addWidget(self.schedule)
-        layout.addWidget(SectionLabel("Options"))
+        layout.addWidget(SectionLabel("Behavior"))
         options = Card()
-        options.add(SettingRow("Remember each display's brightness", "Put back after starting, sleep and reconnecting a display",
-                               self.remember_brightness))
-        options.add(SettingRow("Change all displays together", "Moving one slider moves every display", self.link_brightness))
+        options.add(SettingRow("Remember each display's brightness", "Restores levels after startup, sleep or reconnecting "
+                               "a display", self.remember_brightness))
+        options.add(SettingRow("Change all displays together", "Moving one slider adjusts every display", self.link_brightness))
         options.add(SettingRow("Follow the laptop's brightness keys",
-                               "When the built-in display's brightness changes, external displays are set to the same level",
+                               "External displays match the built-in display when its brightness changes",
                                self.follow_laptop))
         options.add(SettingRow("Dim displays without brightness control",
-                               "TVs and monitors without DDC/CI are dimmed through their colors; saves no power", self.software_dimming))
+                               "Dims TVs and monitors without DDC/CI by adjusting their colors. This doesn't reduce power use",
+                               self.software_dimming))
         layout.addWidget(options)
         layout.addWidget(SectionLabel("When I'm away"))
         away = Card()
-        away.add(SettingRow("Dim displays when I'm away", "Any input brings them back. Not while an app keeps the screen on "
-                            "(videos, calls, presentations) or a game runs exclusive fullscreen", self.idle_dim))
-        away.add(SettingRow("After", "Without keyboard or mouse input", self.idle_minutes))
-        away.add(SettingRow("Dim to", "Never brighter than they were", self.idle_level))
-        away.add(SettingRow("Never dim while these apps are in front", "For apps that don't keep the screen on by themselves, "
-                            "such as some players, call or music apps", below=self.idle_exempt_apps))
+        away.add(SettingRow("Dim displays when I'm away", "Any keyboard or mouse input restores brightness. Skipped while an "
+                            "app keeps the screen on (video, calls, presentations) or a game runs in exclusive fullscreen",
+                            self.idle_dim))
+        away.add(SettingRow("Dim after", "Time without keyboard or mouse input", self.idle_minutes))
+        away.add(SettingRow("Dim to", "Displays already below this level stay as they are", self.idle_level))
+        away.add(SettingRow("Never dim while these apps are in front", "For apps that don't keep the screen on themselves, "
+                            "such as some media players and call apps", below=self.idle_exempt_apps))
         layout.addWidget(away)
         return page
 
     def _displays_page(self) -> QWidget:
-        page, layout = _page("Displays", "Each display, and how Winlight controls its brightness.")
+        page, layout = _page("Displays", "Your displays, and how Winlight controls their brightness.")
         self._displays_card = Card()
         self._displays_layout = layout
         self._shown_entries: list | None = None
@@ -454,55 +487,57 @@ class SettingsWindow(QWidget):
         actions.addWidget(self.copy_report)
         actions.addWidget(self.save_report)
         layout.addLayout(actions)
-        self.displays_hint = SecondaryLabel("Hover over a display for details. The report lists everything known about each display, "
-                                            "to attach to a bug report.", scale=0.9)
+        self.displays_hint = SecondaryLabel("Hover over a display for details. The report lists everything Winlight knows about "
+                                            "each display; attach it to bug reports.", scale=0.9)
         self.displays_hint.setWordWrap(True)
         self.displays_hint.setContentsMargins(2, 8, 2, 0)
         layout.addWidget(self.displays_hint)
         layout.addWidget(SectionLabel("Names and visibility"))
         names = Card()
-        names.add(SettingRow("Rename or hide displays", "A name replaces the display's own in the panel. "
-                             "Hidden displays are left out of the panel and never changed", below=self.displays))
+        names.add(SettingRow("Rename or hide displays", "A custom name replaces the display's name in the panel. Hidden "
+                             "displays aren't shown in the panel and are never changed", below=self.displays))
         layout.addWidget(names)
         layout.addWidget(SectionLabel("Color calibration"))
         calibration = Card()
         calibration.add(SettingRow("Keep each display's color calibration",
-                                   "Put a calibration back when Windows drops it, for example after the screen turns off",
+                                   "Restores a display's calibration when Windows resets it, for example after the screen "
+                                   "turns off",
                                    self.keep_calibration))
         layout.addWidget(calibration)
         return page
 
     def _general_page(self) -> QWidget:
-        page, layout = _page("General", "Starting with Windows, focus, and about this app.")
+        page, layout = _page("General", f"Startup, appearance, and information about {APP_NAME}.")
         startup = Card()
-        startup.add(SettingRow(f"Start {APP_NAME} when I sign in", "Opens in the system tray", self.start_with_windows))
-        startup.add(SettingRow("Start minimized", "Only the tray icon at start, without this window", self.start_minimized))
+        startup.add(SettingRow(f"Start {APP_NAME} when I sign in", f"{APP_NAME} runs in the system tray", self.start_with_windows))
+        startup.add(SettingRow("Start minimized", "Start in the system tray without opening this window", self.start_minimized))
         layout.addWidget(startup)
         layout.addWidget(SectionLabel("Appearance"))
         appearance = Card()
-        appearance.add(SettingRow("Theme", f"Light or dark for {APP_NAME}'s windows, or the same as Windows", self.theme))
+        appearance.add(SettingRow("Theme", "Light or dark, or the same as Windows", self.theme))
+        appearance.add(SettingRow("Accent color", "Used for switches, sliders and buttons", self.accent))
         layout.addWidget(appearance)
         layout.addWidget(SectionLabel("Focus"))
         focus = Card()
-        focus.add(SettingRow("Never open over fullscreen apps", f"{APP_NAME} won't open its windows on its own while a game, "
+        focus.add(SettingRow("Never open over fullscreen apps", f"{APP_NAME} won't open windows by itself while a game, "
                              "video or presentation is fullscreen", self.respect_fullscreen))
         layout.addWidget(focus)
         layout.addWidget(SectionLabel("About"))
         about = Card()
         about.add(SettingRow(f"{APP_NAME} {display_version()}", "Brightness and night light for every display. "
-                             "Free software under the GPL-3.0 license", icon=icons.night_icon()))
+                             "Free software, licensed under the GPL-3.0", icon=icons.night_icon()))
         self.github = QPushButton("View on GitHub")
         self.github.setToolTip(REPO_URL)
         self.github.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(REPO_URL)))
-        about.add(SettingRow(f"Created by {AUTHOR}", "Source code, releases and the issue tracker", self.github))
+        about.add(SettingRow(f"Created by {AUTHOR}", "Source code, releases and issue tracker", self.github))
         if self._report_problem is not None:
             report = QPushButton("Report a Problem…")
-            report.setToolTip("Saves logs and settings, without personal details, to a zip on the Desktop")
+            report.setToolTip("Saves logs and settings to a zip file on the Desktop, without personal details")
             report.clicked.connect(self._report_problem)
-            about.add(SettingRow("Report a problem", "Collects what a bug report needs into one zip", report))
-        logs = QPushButton("Open log folder")
+            about.add(SettingRow("Report a problem", "Saves the information a bug report needs to one zip file", report))
+        logs = QPushButton("Open folder")
         logs.clicked.connect(_open_log_folder)
-        about.add(SettingRow("Logs", "Where the log, probe.txt and compatibility.txt are saved", logs))
+        about.add(SettingRow("Log files", "The log and diagnostic files Winlight keeps", logs))
         layout.addWidget(about)
         return page
 
@@ -526,6 +561,7 @@ class SettingsWindow(QWidget):
             exempt_apps=self.exempt_apps.apps(),
             exempt_fullscreen=self.exempt_fullscreen.isChecked(),
             pause_for_apps=self.pause_for_apps.isChecked(),
+            pause_automatically=self.pause_automatically.isChecked(),
             solar_transition_minutes=self.solar_transition.currentData(),
         )
         general = GeneralConfig(
@@ -542,6 +578,7 @@ class SettingsWindow(QWidget):
             keep_calibration=self.keep_calibration.isChecked(),
             idle_exempt_apps=self.idle_exempt_apps.apps(),
             theme=self.theme.currentData(),
+            accent=self.accent.currentData(),
         )
         return AppConfig(night_light=night_light, general=general, brightness_schedule=self.schedule.config(),
                          displays=self.displays.prefs())
@@ -592,6 +629,7 @@ class SettingsWindow(QWidget):
             self.solar_transition.addItem(f"{night_light.solar_transition_minutes} min", night_light.solar_transition_minutes)
         self.solar_transition.setCurrentIndex(self.solar_transition.findData(night_light.solar_transition_minutes))
         self.theme.setCurrentIndex(max(0, self.theme.findData(general.theme)))
+        self.accent.setCurrentIndex(max(0, self.accent.findData(general.accent)))
         self.start_with_windows.setChecked(general.start_with_windows and self.start_with_windows.isEnabled())
         self.start_minimized.setChecked(general.start_minimized)
         self.remember_brightness.setChecked(general.remember_brightness)
@@ -605,6 +643,7 @@ class SettingsWindow(QWidget):
         self.keep_calibration.setChecked(general.keep_calibration)
         self.exempt_fullscreen.setChecked(night_light.exempt_fullscreen)
         self.pause_for_apps.setChecked(night_light.pause_for_apps)
+        self.pause_automatically.setChecked(night_light.pause_automatically)
         self.exempt_apps.set_apps(night_light.exempt_apps)
         self.idle_exempt_apps.set_apps(general.idle_exempt_apps)
         self.schedule.set_config(config.brightness_schedule)
@@ -644,7 +683,6 @@ class SettingsWindow(QWidget):
         }
         for widget, show in visible.items():
             self._night_card.set_row_visible(self._field_rows[widget], show)
-        self._sleep_card.set_row_visible(self._bedtime_row, mode is Mode.TIMES)
         self.exempt_apps.setEnabled(self.pause_for_apps.isChecked())
         self._temperature_card.set_row_visible(self._field_rows[self.day_temperature], mode in (Mode.LOCATION, Mode.TIMES))
         self.night_temperature.setEnabled(night_light.enabled)
@@ -653,15 +691,22 @@ class SettingsWindow(QWidget):
         self._update_status()
         self._update_schedule_status()
 
-    def _use_sleep_settings(self) -> None:
-        """Fill in sleep-friendly values (not applied until Apply): night light
-        at SLEEP_KELVIN or warmer, on if it was off, and with custom times
-        starting SLEEP_LEAD_HOURS before bedtime."""
+    def _use_sleep_warmth(self) -> None:
+        """Night light at SLEEP_KELVIN or warmer (a warmer choice stays), on if
+        it was off; the schedule stays. Filled in, not applied until Apply."""
         if self.mode.currentData() == ALWAYS_OFF:
             self.mode.setCurrentIndex(self.mode.findData(self._mode_while_off))
         self.night_temperature.setValue(min(self.night_temperature.value(), SLEEP_KELVIN))
-        if self.mode.currentData() == Mode.TIMES:
-            self.night_start.setTime(self.bedtime.time().addSecs(-SLEEP_LEAD_HOURS * 3600))
+
+    def _use_sleep_schedule(self) -> None:
+        """The whole recommendation as custom times: warming from
+        SLEEP_LEAD_HOURS before bedtime, fully warm two hours before, and day
+        light back by the wake-up time. Filled in, not applied until Apply."""
+        self._use_sleep_warmth()
+        self.mode.setCurrentIndex(self.mode.findData(Mode.TIMES))
+        self.transition.setValue(SLEEP_TRANSITION_MINUTES)
+        self.night_start.setTime(self.bedtime.time().addSecs(-SLEEP_LEAD_HOURS * 3600))
+        self.day_start.setTime(self.wake_time.time().addSecs(-SLEEP_TRANSITION_MINUTES * 60))
 
     def _update_schedule_status(self) -> None:
         config = self.current_config().brightness_schedule
@@ -669,17 +714,18 @@ class SettingsWindow(QWidget):
             self.schedule.set_status("")
             return
         if config != self._saved.brightness_schedule:
-            self.schedule.set_status(f"{describe_schedule(config)}. Apply to start using it.")
+            self.schedule.set_status(f"{describe_schedule(config)}. Click Apply to use this schedule.")
             return
         state = self._scheduler.state if self._scheduler is not None else None
         if state is None:
             self.schedule.set_status(describe_schedule(config))
             return
-        text = f"Now {state.level}%" + (" (changing gradually)" if state.transitioning else f" since {state.since.at:%H:%M}")
+        text = f"Now {state.level}%" + (f", changing to {state.since.level}%" if state.transitioning
+                                        else f", since {state.since.at:%H:%M}")
         if state.next is not None:
             text += f". Next: {state.next.level}% at {state.next.at:%H:%M}"
         if state.approximate_sun:
-            text += ". Sunrise and sunset are taken as 06:00 and 18:00: set a location under Night Light for real times"
+            text += ". Sunrise and sunset are assumed to be 06:00 and 18:00 until you set a location on the Night Light page"
         self.schedule.set_status(text + ".")
 
     @property
@@ -766,7 +812,7 @@ class SettingsWindow(QWidget):
         place = locations.find(zone)
         if place is None:
             log.info("System time zone %r is not in the list of places", zone)
-            self.schedule_info.setText(f"This PC's time zone ({zone or 'unknown'}) isn't in the list. Pick the nearest city instead.")
+            self.schedule_info.setText(f"Your PC's time zone ({zone or 'unknown'}) isn't in the list. Choose the nearest city instead.")
             return
         self.location.setCurrentIndex(self.location.findData(place.zone))
 
@@ -782,7 +828,7 @@ class SettingsWindow(QWidget):
             self.banner_button.setText("Resume" if override.kind is OverrideKind.SUSPEND else "Turn Off")
 
         if self.current_config().night_light != self._saved.night_light:
-            self.schedule_info.setText("Apply to see the new schedule.")
+            self.schedule_info.setText("Click Apply to see the new times.")
         else:
             self.schedule_info.setText(schedule_description(self._controller))
 
@@ -854,7 +900,7 @@ def _location_combo() -> QComboBox:
     combo.addItem(CUSTOM_LOCATION_LABEL, CUSTOM_LOCATION)
     for place in locations.all_locations():
         combo.addItem(place.label, place.zone)
-    combo.lineEdit().setPlaceholderText("Type a city…")
+    combo.lineEdit().setPlaceholderText("Search for a city")
 
     completer = combo.completer()
     completer.setFilterMode(Qt.MatchFlag.MatchContains)

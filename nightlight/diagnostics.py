@@ -42,7 +42,7 @@ from PySide6.QtCore import QStandardPaths, qVersion
 from PySide6.QtGui import QGuiApplication
 
 from nightlight import APP_NAME, __version__, config
-from nightlight.exemptions import FULLSCREEN
+from nightlight.exemptions import describe as describe_pause
 from nightlight.privacy import scrub
 
 log = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def summary(sources: Sources) -> str:
     controller = sources.controller
     lines += ["", f"Night light: {night_light_status(controller)}, showing {controller.current_temperature} K"]
     if controller.paused:
-        kinds = ("a fullscreen app" if why.endswith(FULLSCREEN) else "a listed app" for why in controller.paused.values())
+        kinds = (describe_pause(why) for why in controller.paused.values())
         lines.append("  paused on: " + ", ".join(f"{d} (for {kind})" for d, kind in zip(controller.paused, kinds)))
     windows_night_light = winsystem.windows_night_light_on()
     lines.append(f"Windows Night Light: {'on' if windows_night_light else 'off' if windows_night_light is False else 'unknown'}")

@@ -28,6 +28,7 @@ MAX_TRANSITION_MINUTES = 600
 MAX_IDLE_MINUTES = 240
 MAX_SOLAR_TRANSITION_MINUTES = 120
 THEMES = ("system", "light", "dark")
+ACCENTS = ("windows", "amber", "blue", "teal", "green", "purple", "rose")  # colors in ui/theme.py
 
 
 class Mode(StrEnum):
@@ -55,6 +56,10 @@ class NightLightConfig:
     exempt_apps: tuple[str, ...] = ()
     exempt_fullscreen: bool = False  # pause it on a display while any app is fullscreen there (games, video)
     pause_for_apps: bool = True  # pause it for exempt_apps (a switch of its own; the list is kept while off)
+    # Pause it, as Winlight judges from what Windows reports, for video,
+    # calls and games (an app keeping the screen on, exclusive fullscreen)
+    # and for known color-critical apps (exemptions.COLOR_APPS).
+    pause_automatically: bool = False
     # Sunrise and sunset: how long the change takes. -1 follows twilight
     # (sunset to civil dusk, dawn to sunrise, about 30 min); 0 is instant.
     solar_transition_minutes: int = -1
@@ -99,6 +104,7 @@ class GeneralConfig:
     # after the screen turns off and on), as calibration loaders do.
     keep_calibration: bool = False
     theme: str = "system"  # "system" (follow Windows), "light" or "dark"
+    accent: str = "windows"  # Windows' accent colour, or one of ACCENTS
 
     def normalized(self) -> GeneralConfig:
         # The same ranges as the settings window's fields.
@@ -108,6 +114,7 @@ class GeneralConfig:
             idle_level=_clamp(self.idle_level, 0, 100),
             idle_exempt_apps=tuple(sorted({app.strip().lower() for app in self.idle_exempt_apps if app.strip()})),
             theme=self.theme if self.theme in THEMES else "system",
+            accent=self.accent if self.accent in ACCENTS else "windows",
         )
 
 
@@ -144,6 +151,7 @@ class SchedulePoint:
 
 
 DEFAULT_SCHEDULE_POINTS = (SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00"))
+DEFAULT_SCHEDULE_TRANSITION = 30  # the "Day and night" preset's
 
 
 @dataclass(frozen=True)
@@ -153,7 +161,7 @@ class BrightnessScheduleConfig:
     enabled: bool = False
     preset: str = "day_night"  # the preset the points came from, or "custom"
     points: tuple[SchedulePoint, ...] = DEFAULT_SCHEDULE_POINTS
-    transition_minutes: int = 0  # 0: change at each point (with a short fade); else gradually
+    transition_minutes: int = DEFAULT_SCHEDULE_TRANSITION  # 0: change at each point (with a short fade); else gradually
 
     def normalized(self) -> BrightnessScheduleConfig:
         points = tuple(p.normalized() for p in self.points[:MAX_SCHEDULE_POINTS]) or DEFAULT_SCHEDULE_POINTS

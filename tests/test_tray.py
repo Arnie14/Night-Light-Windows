@@ -65,10 +65,11 @@ def level(now, target, nxt=None, end=None):
 def test_tooltip_shows_the_brightness_schedule(tray):
     scheduler = FakeScheduler(level(70, 70, nxt=100))
     tray.set_scheduler(scheduler)
-    assert "Brightness: 70% · 100% at 07:00" in tray.toolTip()
+    assert "Brightness: 70% → 100% at 07:00" in tray.toolTip()
     scheduler.state = level(55, 40, nxt=100, end=datetime(2026, 6, 15, 20, 30, tzinfo=timezone.utc))
     scheduler.changed.emit()
-    assert "Brightness: 55% → 40% by 20:30" in tray.toolTip()
+    assert "Brightness: 55% → 40%, changing until 20:30" in tray.toolTip()
+    assert "·" not in tray.toolTip().split("Brightness:")[1]
     assert len(tray.toolTip()) < 128  # Windows cuts tray tooltips at 127 characters
 
 

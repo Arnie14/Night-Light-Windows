@@ -26,6 +26,27 @@ def accent(palette: QPalette) -> QColor:
     return palette.color(role)
 
 
+def luminance(color: QColor) -> float:
+    """WCAG relative luminance."""
+    def channel(value: float) -> float:
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+    r, g, b, _a = color.getRgbF()
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def contrast(a: QColor, b: QColor) -> float:
+    """WCAG contrast ratio, 1 to 21."""
+    high, low = sorted((luminance(a), luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def text_on(fill: QColor) -> QColor:
+    """Black or white, whichever reads better on `fill`."""
+    white, black = QColor("#ffffff"), QColor("#000000")
+    return white if contrast(fill, white) >= contrast(fill, black) else black
+
+
 def is_dark(palette: QPalette) -> bool:
     return palette.color(QPalette.ColorRole.Window).lightnessF() < 0.5
 
@@ -270,7 +291,7 @@ class ActionButton(QAbstractButton):
                 fill = blend(fill, window, 0.25)
             elif hover:
                 fill = blend(fill, QColor("#ffffff") if not dark else QColor("#000000"), 0.1)
-            label = QColor("#ffffff") if fill.lightnessF() < 0.62 else QColor("#000000")
+            label = text_on(fill)
         elif self.kind == "subtle":
             fill = blend(window, text, 0.09 if down else 0.05) if (hover or down) and enabled else None
             label = text

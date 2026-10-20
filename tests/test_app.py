@@ -264,7 +264,8 @@ def test_night_light_and_brightness_schedule_firing_together(monkeypatch):
     now = datetime(2026, 6, 15, 20, 0, 1, tzinfo=timezone.utc)
     gamma, backend = FakeGammaBackend(), FakeBrightnessBackend(latency=0)
     monitors = MonitorManager(backend)
-    scheduler = BrightnessScheduler(monitors, BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00"))),
+    scheduler = BrightnessScheduler(monitors, BrightnessScheduleConfig(enabled=True, points=(SchedulePoint(100, "07:00"), SchedulePoint(50, "20:00")),
+                                                                     transition_minutes=0),
                                     None, clock=lambda: now)
     night = NightLightController(gamma, NightLightConfig(enabled=True, mode=Mode.TIMES, night_start="20:00", day_start="07:00",
                                                          transition_minutes=0, night_temperature=4500), clock=lambda: now)
@@ -485,11 +486,11 @@ def test_what_holds_idle_dimming(start, monkeypatch, display_required, exclusive
 
 def test_the_theme_is_applied(start, monkeypatch):
     applied = []
-    monkeypatch.setattr(app_module.theme, "apply", applied.append)
-    night_light, _ = start(GeneralConfig(theme="dark"))
-    assert applied[-1] == "dark"
+    monkeypatch.setattr(app_module.theme, "apply", lambda theme, accent="windows": applied.append((theme, accent)))
+    night_light, _ = start(GeneralConfig(theme="dark", accent="amber"))
+    assert applied[-1] == ("dark", "amber")
     night_light._apply_settings(AppConfig(general=GeneralConfig(theme="light")))
-    assert applied[-1] == "light"
+    assert applied[-1] == ("light", "windows")
 
 
 def test_report_a_problem_clears_its_summary_from_the_clipboard_later(start, monkeypatch, tmp_path):
