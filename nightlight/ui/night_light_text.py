@@ -6,6 +6,7 @@ Wording follows KDE Plasma's Brightness and Color applet and Night Light page.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta
 
 from PySide6.QtWidgets import QMenu
@@ -40,12 +41,24 @@ def night_light_status(controller: NightLightController) -> str:
     return f"{phase} · {state.temperature}K"
 
 
-def paused_text(controller: NightLightController) -> str:
-    """"Paused for game.exe" while night light is paused on a display for an exempt app."""
+def paused_text(controller: NightLightController, display_name: Callable[[str], str] | None = None) -> str:
+    """"Paused on DELL U2720Q for photoshop.exe" while night light is paused
+    on a display for an app. `display_name` gives a GDI name's display name."""
     if not controller.paused or not is_night_light_on(controller):
         return ""
-    reasons = sorted(set(controller.paused.values()))
-    return "Paused for " + ", ".join(reasons)
+    name = display_name or display_label
+    parts = []
+    for display, reason in sorted(controller.paused.items()):
+        app, _, fullscreen = reason.partition(", ")
+        what = f"a fullscreen {app}" if fullscreen and app not in ("", "an app") else ("a fullscreen app" if fullscreen else app)
+        parts.append(f"{name(display)} for {what}")
+    return "Paused on " + "; ".join(parts)
+
+
+def display_label(gdi_name: str) -> str:
+    """A GDI name such as DISPLAY2 -> "display 2"."""
+    number = gdi_name.rsplit("DISPLAY", 1)[-1]
+    return f"display {number}" if number.isdigit() else gdi_name
 
 
 def schedule_description(controller: NightLightController) -> str:

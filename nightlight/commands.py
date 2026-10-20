@@ -48,6 +48,8 @@ class CommandHandler:
             if command == "refresh":
                 self._monitors.retry()
                 return _ok("Detecting displays again.")
+            if command == "panel":
+                return _ok("")  # the app shows the panel (see NightLightApp.handle_request)
         except _Error as exc:
             return {"ok": False, "output": str(exc)}
         return {"ok": False, "output": f"Unknown command {command!r}."}
@@ -125,8 +127,10 @@ class CommandHandler:
         if selector.isdigit():
             matches = [(n, m) for n, m in numbered if n == int(selector)]
         else:
-            matches = [(n, m) for n, m in numbered if m.key.lower() == selector.lower()]
-            matches = matches or [(n, m) for n, m in numbered if selector.lower() in self._name(m).lower()]
+            wanted = selector.lower()
+            matches = [(n, m) for n, m in numbered if m.key.lower() == wanted]
+            # Part of a name (custom ones too) or of an id, as Twinkle Tray's --MonitorID takes.
+            matches = matches or [(n, m) for n, m in numbered if wanted in self._name(m).lower() or wanted in m.key.lower()]
         if not matches:
             raise _Error(f"No display matches {selector!r}. See `winlight-cli --list`.")
         if len(matches) > 1:

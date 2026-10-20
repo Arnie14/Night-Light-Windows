@@ -113,7 +113,11 @@ TVs and displays without DDC/CI (software dimming):
 HDR displays (Settings > Display > Use HDR):
 
 - [ ] An HDR display without DDC/CI shows "HDR · SDR content brightness". Its slider moves Windows' own "SDR content brightness" slider (Settings > Display > HDR) and the two agree after reopening the flyout.
-- [ ] An HDR monitor **with** DDC/CI keeps its normal slider: does moving it change the brightness while HDR is on? Note the model if it doesn't (some lock brightness in HDR mode).
+- [ ] An HDR monitor **with** DDC/CI starts on DDC/CI (Settings > Displays, hover: "How: HDR is on, and changes go over DDC/CI while the monitor takes them"). Move its slider:
+  - If the brightness changes, it stays on DDC/CI.
+  - If it doesn't (the monitor locks brightness in HDR mode), within about 2 s the log says "its brightness looks locked; switching to SDR content brightness", the slider becomes "SDR content brightness" at the level you chose, and the hover text and the compatibility report say why.
+  - Note the model and which happened either way.
+- [ ] Turn HDR off on that monitor: it goes back to DDC/CI.
 - [ ] Turn HDR off and on with Winlight running: the display switches between the two kinds of slider within a few seconds.
 - [ ] Note the TV's input mode (PC/Game mode or not) and whether that changes anything.
 

@@ -79,6 +79,9 @@ class MonitorInfo:
     # "retrying" (it answered before; likely still waking up).
     status: str = "ok"
     details: DisplayDetails | None = None
+    # How its brightness is controlled and why, in a sentence, for the
+    # compatibility report (e.g. why an HDR monitor uses SDR content brightness).
+    why: str = ""
 
     @property
     def channel_label(self) -> str:

@@ -177,17 +177,17 @@ class SettingRow(QWidget):
                  below: QWidget | None = None) -> None:
         super().__init__()
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 11, 14, 11)
-        outer.setSpacing(8)
+        outer.setContentsMargins(18, 15, 16, 15)
+        outer.setSpacing(12)
         line = QHBoxLayout()
-        line.setSpacing(12)
+        line.setSpacing(16)
         if icon is not None:
             glyph = QLabel()
             glyph.setPixmap(icon.pixmap(20, 20))
             glyph.setFixedWidth(24)
             line.addWidget(glyph, 0, Qt.AlignmentFlag.AlignVCenter)
         text = QVBoxLayout()
-        text.setSpacing(1)
+        text.setSpacing(3)
         self.title = QLabel(title)
         self.title.setWordWrap(True)
         text.addWidget(self.title)
@@ -214,20 +214,119 @@ class SectionLabel(QLabel):
     def __init__(self, text: str) -> None:
         super().__init__(text)
         set_font(self, 1.0, QFont.Weight.DemiBold)
-        self.setContentsMargins(2, 10, 0, 2)
+        self.setContentsMargins(2, 18, 0, 6)
 
 
 class PageTitle(QWidget):
     def __init__(self, title: str, subtitle: str = "") -> None:
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(2, 0, 0, 6)
-        layout.setSpacing(2)
+        layout.setContentsMargins(2, 0, 0, 12)
+        layout.setSpacing(4)
         heading = QLabel(title)
         set_font(heading, 1.75, HEADING_WEIGHT)
         layout.addWidget(heading)
         if subtitle:
             layout.addWidget(SecondaryLabel(subtitle))
+
+
+class ActionButton(QAbstractButton):
+    """A button as Windows 11 draws them: "accent" (filled with the accent
+    colour, for the main action), "standard" (a quiet card with a hairline
+    border) or "subtle" (text only until hovered)."""
+
+    HEIGHT = 32
+    RADIUS = 4.0
+
+    def __init__(self, text: str, kind: str = "standard") -> None:
+        super().__init__()
+        self.setText(text)
+        self.kind = kind
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setAccessibleName(text)
+
+    def sizeHint(self) -> QSize:
+        width = self.fontMetrics().horizontalAdvance(self.text()) + 2 * (14 if self.kind == "subtle" else 20)
+        return QSize(max(width, 0 if self.kind == "subtle" else 104), max(self.HEIGHT, self.fontMetrics().height() + 12))
+
+    def hitButton(self, pos) -> bool:
+        return self.rect().contains(pos)
+
+    def paintEvent(self, _event) -> None:
+        palette = self.palette()
+        window = palette.color(QPalette.ColorRole.Window)
+        text = palette.color(QPalette.ColorRole.WindowText)
+        dark = is_dark(palette)
+        enabled, hover, down = self.isEnabled(), self.underMouse(), self.isDown()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        border = Qt.PenStyle.NoPen
+        if self.kind == "accent" and enabled:
+            fill = accent(palette)
+            if down:
+                fill = blend(fill, window, 0.25)
+            elif hover:
+                fill = blend(fill, QColor("#ffffff") if not dark else QColor("#000000"), 0.1)
+            label = QColor("#ffffff") if fill.lightnessF() < 0.62 else QColor("#000000")
+        elif self.kind == "subtle":
+            fill = blend(window, text, 0.09 if down else 0.05) if (hover or down) and enabled else None
+            label = text
+        else:
+            base = blend(window, QColor("#ffffff"), 0.7) if not dark else blend(window, QColor("#ffffff"), 0.06)
+            fill = blend(base, text, 0.06 if down else 0.03) if (hover or down) and enabled else base
+            if self.kind == "accent":  # disabled
+                fill = blend(window, text, 0.07)
+            border = QPen(blend(window, text, 0.16 if not dark else 0.12), 1)
+            label = text
+        if not enabled:
+            label = blend(text, window, 0.6)
+        if fill is not None:
+            painter.setPen(border)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), self.RADIUS, self.RADIUS)
+        painter.setPen(label)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.text())
+        if self.hasFocus() and enabled:
+            painter.setPen(QPen(text, 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.75, 0.75, -0.75, -0.75), self.RADIUS + 1, self.RADIUS + 1)
+
+    def enterEvent(self, event) -> None:
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.update()
+        super().leaveEvent(event)
+
+
+class ActionBar(QWidget):
+    """The bottom of the settings window: "Restore defaults" on the left,
+    "Reset" and "Apply" on the right. Answers button(StandardButton) like the
+    QDialogButtonBox it replaces."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        from PySide6.QtWidgets import QDialogButtonBox
+
+        Button = QDialogButtonBox.StandardButton
+        self.restore_defaults = ActionButton("Restore defaults", "subtle")
+        self.reset = ActionButton("Reset", "standard")
+        self.apply = ActionButton("Apply", "accent")
+        self._buttons = {Button.RestoreDefaults: self.restore_defaults, Button.Reset: self.reset, Button.Apply: self.apply}
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self.restore_defaults)
+        layout.addStretch(1)
+        layout.addWidget(self.reset)
+        layout.addWidget(self.apply)
+
+    def button(self, which) -> ActionButton:
+        return self._buttons[which]
 
 
 class NavButton(QAbstractButton):

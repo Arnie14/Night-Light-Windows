@@ -124,6 +124,7 @@ class NightLightApp:
         self.tray: Tray | None = None
         if has_tray:
             self.tray = Tray(self.controller)
+            self.tray.display_name = self.flyout.display_name_of
             self.tray.flyoutRequested.connect(self._open_flyout)
             self.tray.configureRequested.connect(self.show_settings)
             self.tray.diagnosticsRequested.connect(self.report_problem)
@@ -145,7 +146,8 @@ class NightLightApp:
         self.system_events.unlocked.connect(self.controller.reapply_now)
         self.system_events.displayChanged.connect(self.controller.reapply_now)  # at once; detection follows once settled
         self.system_events.panelBrightness.connect(self.brightness_keys.on_windows_event)
-        self._watcher = DisplayWatcher(qapp, events=self.system_events)
+        self._watcher = DisplayWatcher(qapp, events=self.system_events,
+                                       idle_seconds=winsystem.idle_seconds if sys.platform == "win32" else None)
         self._watcher.displaysChanged.connect(lambda: self._on_displays_changed(RESCAN_AFTER_CHANGE_S))
         self._watcher.suspending.connect(self._on_suspending)
         self._watcher.resumed.connect(self._on_resumed)
@@ -247,6 +249,8 @@ class NightLightApp:
             log.exception("Handling a command-line request failed")
             answer = {"ok": False, "output": "Winlight couldn't do that; see its log for why."}
         reply(answer)
+        if request.get("panel") and answer.get("ok"):
+            self.show_panel()  # --panel: show the result, unless a game or video is fullscreen
 
     def _diagnostics_sources(self) -> diagnostics.Sources:
         return diagnostics.Sources(

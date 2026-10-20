@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from nightlight import APP_NAME, __version__
+from nightlight import APP_NAME, AUTHOR, REPO_URL, display_version
 from nightlight.config import MAX_IDLE_MINUTES, MAX_TRANSITION_MINUTES, AppConfig, GeneralConfig, Mode, NightLightConfig
 from nightlight.controller import NightLightController
 from nightlight.core import locations
@@ -49,7 +49,7 @@ from nightlight.core.schedule import OverrideKind
 from nightlight.ui import icons
 from nightlight.ui.night_light_text import is_night_light_on, night_light_status, schedule_description
 from nightlight.ui.schedule_editor import ScheduleEditor
-from nightlight.ui.settings_parts import Card, NavButton, PageTitle, SectionLabel, SettingRow, StatusBadge, ToggleSwitch
+from nightlight.ui.settings_parts import ActionBar, Card, NavButton, PageTitle, SectionLabel, SettingRow, StatusBadge, ToggleSwitch
 from nightlight.ui.settings_widgets import AppList, DisplayList
 from nightlight.ui.widgets import HEADING_WEIGHT, SecondaryLabel, Separator, TemperatureSlider, WindowsNightLightNotice, set_font
 
@@ -125,12 +125,11 @@ class SettingsWindow(QWidget):
         self.banner.add(banner_row)
 
         Button = QDialogButtonBox.StandardButton
-        self.buttons = QDialogButtonBox(Button.RestoreDefaults | Button.Reset | Button.Apply)
+        self.buttons = ActionBar()
         # Display names are the user's own, not settings with defaults: keep them.
         self.buttons.button(Button.RestoreDefaults).clicked.connect(lambda: self._load(replace(AppConfig(), displays=self.displays.prefs())))
         self.buttons.button(Button.Reset).clicked.connect(lambda: self._load(self._saved))
         self.buttons.button(Button.Apply).clicked.connect(self._apply)
-        self.buttons.button(Button.Apply).setDefault(True)
 
         content = QVBoxLayout()
         content.setContentsMargins(0, 20, 0, 0)
@@ -153,7 +152,7 @@ class SettingsWindow(QWidget):
         content.addWidget(self._stack, 1)
         content.addWidget(Separator())
         footer = QVBoxLayout()
-        footer.setContentsMargins(28, 12, 32, 16)
+        footer.setContentsMargins(28, 14, PAGE_RIGHT + _scrollbar_width(), 16)
         footer.addWidget(self.buttons)
         content.addLayout(footer)
 
@@ -162,7 +161,7 @@ class SettingsWindow(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self._navigation())
         layout.addLayout(content, 1)
-        self.resize(940, 720)
+        self.resize(960, 760)
         self.setMinimumSize(780, 540)
 
         for signal in (
@@ -345,7 +344,8 @@ class SettingsWindow(QWidget):
         pause = Card()
         pause.add(SettingRow("While an app is fullscreen", "Games and videos keep their true colors on the display showing them; "
                              "other displays keep night light", self.exempt_fullscreen))
-        pause.add(SettingRow("For these apps", "On the display showing one of them, while it's in front", below=self.exempt_apps))
+        pause.add(SettingRow("For these apps", "Only on the display showing the app, while it's in front. Night light fades back "
+                             "when you switch away, minimize or close it", below=self.exempt_apps))
         layout.addWidget(pause)
         return page
 
@@ -417,16 +417,20 @@ class SettingsWindow(QWidget):
         layout.addWidget(focus)
         layout.addWidget(SectionLabel("About"))
         about = Card()
-        logs = QPushButton("Open log folder")
-        logs.setToolTip("Where the log, probe.txt and compatibility.txt are saved")
-        logs.clicked.connect(_open_log_folder)
-        about.add(SettingRow(f"{APP_NAME} {__version__}", "Brightness and night light for every display. Free software, GPL-3.0.", logs,
-                             icon=icons.night_icon()))
+        about.add(SettingRow(f"{APP_NAME} {display_version()}", "Brightness and night light for every display. "
+                             "Free software under the GPL-3.0 license", icon=icons.night_icon()))
+        self.github = QPushButton("View on GitHub")
+        self.github.setToolTip(REPO_URL)
+        self.github.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(REPO_URL)))
+        about.add(SettingRow(f"Created by {AUTHOR}", "Source code, releases and the issue tracker", self.github))
         if self._report_problem is not None:
             report = QPushButton("Report a Problem…")
             report.setToolTip("Saves logs and settings, without personal details, to a zip on the Desktop")
             report.clicked.connect(self._report_problem)
             about.add(SettingRow("Report a problem", "Collects what a bug report needs into one zip", report))
+        logs = QPushButton("Open log folder")
+        logs.clicked.connect(_open_log_folder)
+        about.add(SettingRow("Logs", "Where the log, probe.txt and compatibility.txt are saved", logs))
         layout.addWidget(about)
         return page
 
@@ -592,6 +596,7 @@ class SettingsWindow(QWidget):
                 f"{entry.manufacturer} {entry.model}".strip(),
                 f"Serial {entry.serial}" if entry.serial else "",
                 f"Brightness: {entry.brightness if entry.works else entry.status}",
+                entry.why,
                 entry.detail,
                 f"Night light: {entry.night_light}",
             ) if line))
@@ -679,7 +684,7 @@ class SettingsWindow(QWidget):
 def _page(title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(28, 0, PAGE_RIGHT, 24)
+    layout.setContentsMargins(28, 0, PAGE_RIGHT, 28)
     layout.setSpacing(6)
     layout.addWidget(PageTitle(title, subtitle))
     return page, layout

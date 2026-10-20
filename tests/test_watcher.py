@@ -100,3 +100,54 @@ def test_power_and_session_events_pass_through():
     events.locked.emit()
     events.clockChanged.emit()
     assert seen == ["displaysOff", "displaysOn", "clockChanged"]
+
+
+# --- From the audit: what the watcher must not get stuck on --------------------
+
+
+def test_a_sleep_that_never_happened_does_not_leave_the_displays_asleep():
+    # A sleep that failed or was cancelled sends no resume: the displays stayed
+    # "asleep" (nothing sent to them, display changes ignored) for the session.
+    events = FakeEvents()
+    w, clock, seen = watcher(events)
+    events.suspending.emit()
+    for _ in range(18):  # the clock checks keep running normally for 90 s: the PC is awake
+        clock.now += 5
+        w.check_clock()
+    assert seen == ["suspending"]  # not yet: Windows may still be on its way to sleep
+    clock.now += 5
+    w.check_clock()
+    assert seen == ["suspending", "resumed"]
+    events.displayChanged.emit()
+    assert w._settle.isActive()  # display changes count again
+
+
+def test_changing_the_clock_is_not_taken_for_waking_up():
+    events = FakeEvents()
+    w, clock, seen = watcher(events)
+    clock.now += 3600  # the clock was set an hour forward...
+    events.clockChanged.emit()  # ...and Windows said so
+    w.check_clock()
+    assert seen == ["clockChanged"]
+
+
+def test_input_while_the_displays_are_reported_off_means_they_are_on():
+    # A missed "display on" notification left them "off" until the next sleep.
+    events = FakeEvents()
+    idle = {"s": 300.0}
+    clock = Clock()
+    w = DisplayWatcher(QApplication.instance(), clock=clock, events=events, idle_seconds=lambda: idle["s"])
+    seen = []
+    for name in ("displaysOff", "displaysOn"):
+        getattr(w, name).connect(lambda name=name: seen.append(name))
+    events.displayOff.emit()
+    clock.now += 5
+    w.check_clock()
+    assert seen == ["displaysOff"]  # no input: still off
+    idle["s"] = 1.0  # a key was pressed
+    clock.now += 5
+    w.check_clock()
+    assert seen == ["displaysOff", "displaysOn"]
+    clock.now += 5
+    w.check_clock()
+    assert seen == ["displaysOff", "displaysOn"]  # once

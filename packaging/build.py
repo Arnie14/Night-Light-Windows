@@ -35,11 +35,11 @@ VSVersionInfo(
   ffi=FixedFileInfo(filevers={numbers}, prodvers={numbers}, mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
   kids=[
     StringFileInfo([StringTable('040904B0', [
-      StringStruct('CompanyName', 'Winlight'),
+      StringStruct('CompanyName', 'Anurag Jha'),
       StringStruct('FileDescription', 'Winlight: brightness and night light for every display'),
       StringStruct('FileVersion', '{version}'),
       StringStruct('InternalName', 'Winlight'),
-      StringStruct('LegalCopyright', 'GPL-3.0-only'),
+      StringStruct('LegalCopyright', 'Copyright (C) 2026 Anurag Jha. GPL-3.0-only'),
       StringStruct('OriginalFilename', 'Winlight.exe'),
       StringStruct('ProductName', 'Winlight'),
       StringStruct('ProductVersion', '{version}')])]),

@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import QRect, Signal
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
@@ -19,6 +21,7 @@ class Tray(QSystemTrayIcon):
     def __init__(self, controller: NightLightController) -> None:
         super().__init__()
         self._controller = controller
+        self.display_name: Callable[[str], str] | None = None  # set by the app: GDI name -> display name
 
         self._menu = QMenu()
         self._override_menu = QMenu()
@@ -43,7 +46,7 @@ class Tray(QSystemTrayIcon):
     def _update(self) -> None:
         controller = self._controller
         self.setIcon(icons.night_icon() if is_night_light_on(controller) else icons.day_icon())
-        paused = paused_text(controller)
+        paused = paused_text(controller, self.display_name)
         self.setToolTip(f"{APP_NAME}\nNight Light: {night_light_status(controller)}" + (f"\n{paused}" if paused else ""))
 
     def _update_menu(self) -> None:

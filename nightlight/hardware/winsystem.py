@@ -69,7 +69,9 @@ def _foreground_app() -> ForegroundApp | None:
     from nightlight.hardware.win32 import MONITORINFOEXW
 
     hwnd = _user32.GetForegroundWindow()
-    if not hwnd:
+    if not hwnd or _user32.IsIconic(hwnd):
+        # A minimized window can stay the foreground one (when nothing else
+        # takes focus), but it isn't on screen: nothing to pause for.
         return None
     class_name = ctypes.create_unicode_buffer(256)
     _user32.GetClassNameW(hwnd, class_name, len(class_name))
@@ -511,6 +513,8 @@ if sys.platform == "win32":
     _user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.c_void_p]
     _user32.GetMonitorInfoW.restype = wintypes.BOOL
     _user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    _user32.IsIconic.argtypes = [wintypes.HWND]
+    _user32.IsIconic.restype = wintypes.BOOL
     _user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
     _user32.RegisterPowerSettingNotification.argtypes = [wintypes.HANDLE, ctypes.POINTER(_GUID), wintypes.DWORD]
     _user32.RegisterPowerSettingNotification.restype = wintypes.HANDLE

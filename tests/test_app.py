@@ -412,3 +412,13 @@ def test_keeping_calibrations_reaches_the_gamma_backend(start):
     assert gamma.kept == [True]  # at start, before night light sets any ramp
     night_light._apply_settings(AppConfig(general=GeneralConfig(keep_calibration=False)))
     assert gamma.kept == [True, False]
+
+
+def test_the_command_line_can_show_the_panel_after_a_change(start, monkeypatch):
+    night_light, _ = start(GeneralConfig())
+    shown, replies = [], []
+    monkeypatch.setattr(night_light, "show_panel", lambda: shown.append(True))
+    night_light.handle_request({"command": "panel", "panel": True}, replies.append)
+    assert replies[-1]["ok"] and shown == [True]
+    night_light.handle_request({"command": "set", "value": "50", "display": "nope", "panel": True}, replies.append)
+    assert not replies[-1]["ok"] and shown == [True]  # a failed command doesn't pop the panel up

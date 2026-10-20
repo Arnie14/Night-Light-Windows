@@ -66,3 +66,20 @@ def test_the_report_names_only_windows_ways_in():
     text = compat.render(compat.entries([DELL]))
     last = text.strip().splitlines()[-1]
     assert "DDC/CI" in last and "WMI" in last and "KDE" not in last and "Simulated" not in last and "i2c" not in last
+
+
+def test_the_report_says_how_and_why_an_hdr_monitor_is_controlled():
+    from dataclasses import replace
+
+    from nightlight.hardware import windows
+
+    locked = replace(HDR, why=windows.WHY_HDR_LOCKED)
+    [entry] = compat.entries([locked])
+    assert entry.why == windows.WHY_HDR_LOCKED
+    text = compat.render([entry])
+    how = text[text.index("How:"):]
+    assert "locks its brightness in HDR mode" in " ".join(how.split())
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if "How:" in line)
+    block = [lines[start]] + [line for line in lines[start + 1:start + 4] if line.startswith(" " * 17)]
+    assert len(block) > 1 and all(len(line) <= 100 for line in block)  # wrapped under its label

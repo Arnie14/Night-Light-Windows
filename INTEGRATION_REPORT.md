@@ -7,9 +7,10 @@ Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability,
 - **Base architecture: the reliability branch.** One serialized monitor queue with time limits, stable display identity, each display's desired, commanded and observed state, an idempotent brightness scheduler, daylight-saving-safe times, the gamma crash journal, and the redesigned settings window.
 - **Every beta 3 and 4 feature kept, ported onto that base.** Night light pausing for apps and fullscreen, the command line, diagnostics and privacy scrubbing, crash safe mode, the fullscreen focus guard, laptop brightness keys, the wake report, idle dimming, renaming and hiding displays, and the Windows Night Light notice.
 - **No feature removed.** Nothing conflicted badly enough to need a decision from you; the few deliberate behavior changes are listed below.
-- **Tests:** 543, all passing on Windows 11 (beta 4 had 299, the reliability branch 332). Every test from both sides is kept or ported under the same or an equivalent assertion (see [Tests](#tests)).
+- **Tests:** 567, all passing on Windows 11 (beta 4 had 299, the reliability branch 332). Every test from both sides is kept or ported under the same or an equivalent assertion (see [Tests](#tests)).
 - **Real Windows checks on this machine:** 113 of 113 passed. They drove the real APIs: ctypes display configuration, DDC/CI error paths, WMI, gamma ramps, safe mode, the journal, and winsystem's queries. The app itself was also run end to end through the command line.
 - **Bugs found and fixed while integrating:** 9, several of them present in beta 4 as well (see [Bugs found while integrating](#bugs-found-while-integrating)).
+- **Release round:** HDR brightness-lock detection with SDR fallback and a reason for every display's control; the CLI compared with Twinkle Tray's and Monitorian's (`--panel` and partial ids added); per-display pausing clearer and fixed for minimized apps; rename/hide end-to-end tests; a watcher audit (3 stuck states fixed); installer notes, author and GitHub link; roomier settings and Windows 11 style buttons (see [Release round](#release-round-010-beta-5)).
 - **Final round:** an option to keep display calibrations; the command line, installer and GUI checked again; 6 more bugs fixed, including a crash that garbage collection on a monitor thread could cause (see [Final round before release](#final-round-before-release)).
 - **Hardening pass:** 13 more bugs fixed, in concurrency, sleep, clashes with other software, files, logging and the CLI (see [Hardening pass](#hardening-pass)).
 
@@ -60,7 +61,7 @@ The backend investigation also found that WMI calls from the monitor thread are 
 
 ## Tests
 
-- **543 tests, all passing** (`pytest`, Python 3.15, Windows 11 26200), run repeatedly. `ruff --select F` is clean.
+- **567 tests, all passing** (`pytest`, Python 3.15, Windows 11 26200), run repeatedly. `ruff --select F` is clean.
 - **Nothing was dropped to make the suite pass.** Every test name from both sides was checked. The ones without the same name were ported under an equivalent assertion:
   - beta 4's memory-schedule tests are now scheduler tests: current point once, user change until the next point, turning on applies at once, sleeping monitor, idle hold. Two new integration tests on the real `MonitorManager` cover "a new point wins over an old remembered level" and "the user's level stands within a point".
   - beta 4's step-schedule tests are the points tests, with the same cases (off/empty, latest point, overnight, sun offsets, fallback 06:00/18:00, polar).
@@ -247,6 +248,76 @@ The full suite crashed the Python process (an access violation) in about half of
 
 The app has the same background threads, so this could crash it at random. pyqtgraph hit the same problem and solved it the same way: automatic collection is off, and a main-thread timer collects instead (`nightlight/gc_guard.py`). The young generation is collected when Python would, and everything once a minute. A test shows a busy worker thread no longer collects (200 times without the guard, 0 with it). The suite also collects after each test, on the main thread. Five full runs in a row passed (543 tests each) where about half had crashed before.
 
+## Release round (0.1.0 Beta 5)
+
+### HDR monitors: is brightness locked in HDR mode?
+
+Read from both projects:
+
+- **Monitorian** claims every display in HDR mode for SDR content brightness before it looks at DDC/CI.
+- **Twinkle Tray 1.17** keeps DDC/CI and adds an SDR slider (optionally replacing the main one). Since 1.17.2 it shows only SDR where that is the only method; users report the SDR level resetting after sleep.
+
+Winlight now does both. DDC/CI stays while the monitor takes it in HDR mode, since it changes the backlight. A change the monitor ignores (seen in the read-back 1.5 s later), or two it refuses, marks its brightness as locked. The next detection then switches it to SDR content brightness and gives it the level asked for. The lock lasts while HDR is on.
+
+Every display's info now says how its brightness is controlled and why. Settings > Displays shows it on hover, and the compatibility report has a "How:" line.
+
+Tests:
+
+- backend: an HDR monitor on DDC/CI says why; locked, it moves to SDR and its handle is released; HDR off and on tries DDC/CI again; only HDR DDC/CI displays can be marked; with no SDR available, it keeps DDC/CI
+- monitor manager: a monitor that ignores changes and one that refuses them both move to SDR with the user's level; one that takes changes stays on DDC/CI
+- the report: the explanation appears, wrapped under its label
+
+### Command line vs. what users asked of Twinkle Tray and Monitorian
+
+| Requested | Twinkle Tray | Monitorian | Winlight |
+|---|---|---|---|
+| List displays | `--List` | `/get all` | `--list`, `--list --json` |
+| Get one / all | via `--List` | `/get`, `/get all` | `--get`, `--display` |
+| Set, absolute and relative | `--Set`, `--Offset` | `/set 20`, `/set +10` | `--set 40`, `--set +10` |
+| By number / id / all | `--MonitorNum`, `--MonitorID` (partial), `--All` | id, `all` | number, id or **part of one (new)**, name, `all` |
+| Show the result | `--Panel`, `--Overlay` | none | **`--panel` (new)**; no overlay yet |
+| Raw VCP codes, contrast, input | `--VCP` | contrast, color preset, input (paid add-on) | left out on purpose |
+| Night light | none | none | `--night-light` |
+
+Raw VCP codes, contrast and input switching stay out on purpose: an arbitrary DDC/CI write can switch a monitor's input, turn it off or reset it, and none of it can be tested here without external monitors. Every command was run against the installed app.
+
+### Pausing night light per display
+
+The "Pause night light" settings now say exactly what happens: only on the display showing the app, and night light fades back when you switch away, minimize or close it. The panel and tray name the display ("Paused on DELL U2720Q for photoshop.exe"), using custom names, instead of "Paused for photoshop.exe".
+
+- **Fixed:** a minimized window can stay Windows' foreground window, which kept night light paused. It no longer counts.
+- **Tested on the real machine with Notepad on the list:** in front, paused; minimized, back; restored, paused; closed, back.
+
+### Renaming and hiding displays
+
+A new end-to-end test file (`test_display_prefs.py`, 8 tests) runs the whole app with one display renamed and one hidden. It checks:
+
+- the panel
+- the command line: by custom name, "all" skipping the hidden display, and the hidden one still reachable by name
+- remembered levels following a renamed display
+- the brightness schedule, idle dimming and the laptop-key follower leaving the hidden display alone
+- changes taking effect without a restart
+- reports never containing custom names
+- displays hidden under a beta 4 key
+
+### watcher.py audit
+
+Three ways the app could get stuck for the rest of a session, now handled and tested:
+
+- **A sleep announced but never taken** (cancelled or failed): no resume comes. If the clock checks keep running normally 90 s later, the watcher carries on as if woken.
+- **A missed "display on" notification:** input while the displays are reported off means they are on.
+- **A clock change mistaken for a wake:** Windows' clock-change message now re-baselines the check.
+
+### Installer, about, look
+
+- **Installer:** an information page before installing covers the beta disclaimer (no warranty, SmartScreen), what clashes and should be turned off (Windows Night Light, other blue-light filters, GPU color settings, other DDC/CI brightness tools, calibration loaders, Windows' automatic brightness), and recommendations (DDC/CI on, direct connections, TVs, HDR, reporting problems). The publisher is Anurag Jha, with the GitHub link and copyright, also in the program files' version details.
+- **About:** Settings > General has "Created by Anurag Jha" with a View on GitHub button and the exact version ("0.1.0 Beta 5"). `__version__` is now `0.1.0-beta.5`, so diagnostics and reports name the build. The release page names the author.
+- **Settings:**
+  - Rows, section headings and page titles have more room, close to Windows 11 Settings' spacing.
+  - The bottom bar is redrawn in the Windows 11 style: an accent Apply, a quiet bordered Reset, and a text-only Restore defaults on the left. It is painted from the palette in both themes.
+  - The window opens a little larger (960×760).
+- **README:** formal headings without emojis, and a monochrome status scale (● Ready, ◐ In testing, ○ Planned). Screenshots regenerated.
+
 ## Not verified (needs hardware or CI)
 
 - **External DDC/CI monitors:** real writes, the VCP 0xD6 power state, time limits on a hanging monitor, safe mode skipping a real monitor after a crash, flicker.
@@ -282,6 +353,11 @@ The app has the same background threads, so this could crash it at random. pyqtg
 
 ## Next steps (for you)
 
-1. Review and push the branch: `git push -u origin beta5-integration` (pushing isn't possible from this session's shell).
-2. Run your visual checks of the settings pages and flyout, and if possible one external monitor and a real sleep/lock.
-3. Merge into `main` and tag `v0.1.0-beta.5` to let CI build the release.
+`main` is fast-forwarded to this work and tagged `v0.1.0-beta.5` locally. Push both:
+
+```
+git push origin main
+git push origin v0.1.0-beta.5
+```
+
+The tag starts the release workflow: tests on Python 3.13, the build, and a GitHub release titled "Winlight 0.1.0 Beta 5", marked Latest, with the installer and portable zip. You can also push `beta5-integration` to keep the branch.

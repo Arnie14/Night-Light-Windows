@@ -24,7 +24,7 @@ from nightlight.controller import NightLightController
 from nightlight.hardware.brightness import MonitorInfo
 from nightlight.monitors import MonitorManager
 from nightlight.ui import icons
-from nightlight.ui.night_light_text import build_override_menu, is_night_light_on, night_light_status, paused_text
+from nightlight.ui.night_light_text import build_override_menu, display_label, is_night_light_on, night_light_status, paused_text
 from nightlight.ui.placement import flyout_position
 from nightlight.ui.widgets import HEADING_WEIGHT, GlyphButton, MonitorBrightness, SecondaryLabel, Separator, WindowsNightLightNotice, set_font
 
@@ -221,12 +221,19 @@ class Flyout(QFrame):
     def _update_night_light(self) -> None:
         controller = self._controller
         self._night_icon.setPixmap((icons.night_icon() if is_night_light_on(controller) else icons.day_icon()).pixmap(26, 26))
-        paused = paused_text(controller)
+        paused = paused_text(controller, self.display_name_of)
         self._night_text.setText(night_light_status(controller) + (f"\n{paused}" if paused else ""))
         if self._override_menu.isVisible():
             return  # don't rebuild the menu under the user's cursor
         self._toggle.setText(build_override_menu(controller, self._override_menu))
         self._toggle.setMenu(None if self._override_menu.isEmpty() else self._override_menu)
+
+    def display_name_of(self, gdi_name: str) -> str:
+        """A display's name (its custom one if given), from its GDI name."""
+        for info in self._monitors.monitors:
+            if info.display == gdi_name:
+                return self._display_prefs(info.key).name or info.name
+        return display_label(gdi_name)
 
     def _on_toggle_clicked(self) -> None:
         # Only reached without a menu, i.e. while an override is active.

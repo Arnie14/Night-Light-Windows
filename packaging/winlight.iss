@@ -16,7 +16,10 @@ AppName=Winlight
 AppVersion={#AppVersion}
 AppVerName=Winlight {#AppVersion}
 VersionInfoVersion={#VersionNumbers}
-AppPublisher=Winlight
+AppPublisher=Anurag Jha
+AppCopyright=Copyright (C) 2026 Anurag Jha. Free software under the GNU GPL v3.0.
+VersionInfoCompany=Anurag Jha
+VersionInfoDescription=Winlight setup: brightness and night light for every display
 AppPublisherURL=https://github.com/Arnie14/Night-Light-Windows
 AppSupportURL=https://github.com/Arnie14/Night-Light-Windows/issues
 AppUpdatesURL=https://github.com/Arnie14/Night-Light-Windows/releases
@@ -32,6 +35,8 @@ SetupIconFile={#IconFile}
 UninstallDisplayIcon={app}\Winlight.exe
 UninstallDisplayName=Winlight
 WizardStyle=modern
+; Shown before installing: a disclaimer, what clashes with Winlight, recommendations.
+InfoBeforeFile=installer-notes.txt
 Compression=lzma2/max
 SolidCompression=yes
 ; Close a running copy through Windows' Restart Manager if --quit didn't.

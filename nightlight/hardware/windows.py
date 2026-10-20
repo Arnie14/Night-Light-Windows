@@ -109,6 +109,23 @@ RETRYING_DETAIL = (
     "reconnected; Winlight checks again shortly."
 )
 REASON_CHECK_FAILED = "Couldn't be checked"
+# How each display's brightness is controlled, and why (MonitorInfo.why).
+WHY_DDC = "It answers DDC/CI: its own brightness setting (the backlight) is changed."
+WHY_HDR_DDC = (
+    "HDR is on, and changes go over DDC/CI while the monitor takes them (they change its backlight). "
+    "Many monitors lock their brightness in HDR mode; if this one ignores a change, Winlight switches it "
+    "to Windows' SDR content brightness."
+)
+WHY_HDR_LOCKED = (
+    "HDR is on and the monitor locks its brightness in HDR mode (it ignored a DDC/CI change), so Windows' "
+    "SDR content brightness is used: how bright the desktop and other SDR content look, not the backlight."
+)
+WHY_HDR_SDR = (
+    "HDR is on and the monitor doesn't answer DDC/CI, so Windows' SDR content brightness is used: how bright "
+    "the desktop and other SDR content look, not the backlight."
+)
+WHY_WMI = "The built-in panel, through Windows' own brightness control (WMI)."
+WHY_SOFTWARE = "No hardware brightness control: dimmed through its colors (the gamma ramp), which saves no power."
 
 
 class DisplayApi(Protocol):
@@ -417,6 +434,9 @@ class WindowsBrightnessBackend:
         self._stuck_lock = threading.Lock()
         # Displays that answered DDC/CI earlier in this session, by key.
         self._answered_ddc: set[str] = set()
+        # HDR displays whose DDC/CI brightness turned out locked in HDR mode,
+        # by key: SDR content brightness is used for them while HDR stays on.
+        self._hdr_locked: set[str] = set()
         # Skips displays whose DDC/CI crashed or hung the app in an earlier run
         # (a crash can't be caught by time limits, only learnt from).
         self.safe_mode: SafeMode | None = None
@@ -433,6 +453,19 @@ class WindowsBrightnessBackend:
             for monitor in self._monitors:
                 if isinstance(monitor.control, _SoftwareControl):
                     monitor.control.write(100)
+
+    def mark_brightness_locked(self, key: str) -> bool:
+        """An HDR display ignored (or refused) DDC/CI brightness changes: from
+        the next detection, SDR content brightness is used for it while HDR is
+        on, as Monitorian does for every HDR display. True if that applies."""
+        monitor = next((m for m in self._monitors if m.info.key == key), None)
+        if monitor is None or not monitor.info.hdr or monitor.info.channel not in ("ddc", "ddc-high-level"):
+            return False
+        if key not in self._hdr_locked:
+            self._hdr_locked.add(key)
+            log.warning("%s locks its brightness in HDR mode; using Windows' SDR content brightness for it while HDR is on",
+                        monitor.info.name)
+        return True
 
     @property
     def stuck(self) -> dict[str, str]:
@@ -454,6 +487,8 @@ class WindowsBrightnessBackend:
         groups: dict[str, list[win32.DisplayTarget]] = {}
         for target in targets:
             groups.setdefault(target.gdi_name, []).append(target)
+        # HDR turned off (or the display is gone): try DDC/CI again next time it's on.
+        self._hdr_locked &= {_ident(t) for t in targets if t.hdr}
 
         monitors: list[_Monitor] = []
         for gdi_name, group in groups.items():
@@ -528,6 +563,11 @@ class WindowsBrightnessBackend:
                 monitor = responding.pop(0)
                 monitor.info = replace(monitor.info, name=name)
                 self._answered_ddc.add(target.key)
+                if target.hdr and _ident(target) in self._hdr_locked:
+                    sdr = self._fallback(_Monitor(MonitorInfo(0, name, False, status="unsupported")), target)
+                    if sdr.info.supported:
+                        monitor.control.close()  # its DDC/CI handle isn't needed
+                        monitor = sdr
             elif hung:
                 hung -= 1
                 monitor = _Monitor(MonitorInfo(0, name, False, REASON_NOT_RESPONDING, detail=NOT_RESPONDING_DETAIL, status="not responding"))
@@ -543,6 +583,9 @@ class WindowsBrightnessBackend:
                 monitor = self._fallback(monitor, target)
             monitor.info = replace(monitor.info, key=target.key, internal=target.internal, details=_details_of(target),
                                    display=target.gdi_name, hdr=target.hdr)
+            monitor.info = replace(monitor.info, why=_why(monitor.info, _ident(target) in self._hdr_locked))
+            if target.hdr and monitor.info.supported:
+                log.info("%s: HDR is on; brightness through %s. %s", name, monitor.info.channel_label, monitor.info.why)
             monitor.ident = target.key
             monitors.append(monitor)
         return monitors + responding  # more answering monitors than targets; shouldn't happen
@@ -772,6 +815,26 @@ def _details_of(target: win32.DisplayTarget) -> DisplayDetails:
         diagonal_inches=edid.diagonal_inches if edid else 0.0,
         source=target.gdi_name,
     )
+
+
+def _ident(target: win32.DisplayTarget) -> str:
+    """A display's identity as its MonitorInfo.key will be (with_unique_keys)."""
+    return target.key or f"name:{_name_of(target)}"
+
+
+def _why(info: MonitorInfo, hdr_locked: bool) -> str:
+    """How a display's brightness is controlled and why, in a sentence."""
+    if not info.supported:
+        return ""
+    if info.channel in ("ddc", "ddc-high-level"):
+        return WHY_HDR_DDC if info.hdr else WHY_DDC
+    if info.channel == "sdr":
+        return WHY_HDR_LOCKED if hdr_locked else WHY_HDR_SDR
+    if info.channel == "wmi":
+        return WHY_WMI
+    if info.channel == "software":
+        return WHY_SOFTWARE
+    return ""
 
 
 def _sdr_percent(nits: float) -> int:

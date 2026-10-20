@@ -241,3 +241,24 @@ def test_usage_mistakes_exit_with_1_not_2():
     # 2 means Winlight isn't running; scripts may check for it.
     result = subprocess.run([sys.executable, "main.py", "--set"], cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert result.returncode == 1 and "expected one argument" in result.stderr
+
+
+def test_part_of_an_id_selects_a_display_as_twinkle_trays_monitor_id_does(handler):
+    commands, monitors, _ = handler
+    assert commands.handle({"command": "set", "value": "40", "display": "41a2"})["ok"]  # part of DEL41A2
+    assert monitors.faded == [("DEL41A2", 40)]
+    reply = commands.handle({"command": "set", "value": "40", "display": "0"})  # a number is a number
+    assert not reply["ok"] and "No display matches" in reply["output"]
+
+
+def test_panel_requests_are_built_alone_or_after_a_change():
+    import argparse
+
+    from nightlight import cli
+
+    parser = argparse.ArgumentParser()
+    cli.add_arguments(parser)
+    args = parser.parse_args(["--panel"])
+    assert cli.requested(args) and cli.build_request(args) == {"command": "panel", "panel": True}
+    args = parser.parse_args(["--set", "+10", "--panel"])
+    assert cli.build_request(args) == {"command": "set", "value": "+10", "display": "all", "panel": True}

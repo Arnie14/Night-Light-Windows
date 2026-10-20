@@ -223,3 +223,30 @@ def test_windows_night_light_notice(flyout):
     assert flyout.windows_night_light.isHidden()
     flyout.set_windows_night_light(True)
     assert not flyout.windows_night_light.isHidden()
+
+
+def test_a_paused_display_is_named_in_the_panel():
+    # Night light pauses on the display showing a chosen app or a fullscreen
+    # game; with several displays, the panel says which one, by its own name.
+    from dataclasses import replace
+
+    from nightlight.config import DisplayPrefs, Mode
+
+    monitors = FakeMonitors([replace(MONITORS[0], display=r"\.\DISPLAY1"), replace(MONITORS[1], display=r"\.\DISPLAY2")])
+    from nightlight.hardware.gamma import FakeGammaBackend
+
+    controller = NightLightController(FakeGammaBackend(), NightLightConfig(enabled=True, mode=Mode.ALWAYS),
+                                      lambda: datetime(2026, 6, 15, 22, tzinfo=timezone.utc))
+    try:
+        flyout = Flyout(monitors, controller, as_window=True)
+        flyout.set_display_prefs((DisplayPrefs("DEL", "Left screen"),))
+        controller.set_paused({r"\.\DISPLAY1": "photoshop.exe"})
+        assert "Paused on Left screen for photoshop.exe" in flyout._night_text.text()
+        controller.set_paused({r"\.\DISPLAY2": "game.exe, fullscreen"})
+        assert "Paused on Built-in display for a fullscreen game.exe" in flyout._night_text.text()
+        controller.set_paused({r"\.\DISPLAY9": "an app, fullscreen"})  # not a known display
+        assert "Paused on display 9 for a fullscreen app" in flyout._night_text.text()
+        controller.set_paused({})
+        assert "Paused" not in flyout._night_text.text()
+    finally:
+        controller.shutdown()

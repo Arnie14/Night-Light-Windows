@@ -5,7 +5,7 @@ import pytest
 
 from nightlight.core.colortemp import gamma_ramp, identity_ramp, whitepoint
 from nightlight.hardware import win32, windows
-from nightlight.hardware.brightness import MonitorGoneError
+from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo
 from nightlight.hardware.win32 import DdcError, DisplayTarget, PhysicalMonitor
 
 HDMI, DP, INTERNAL, DISPLAYLINK = 5, 10, 11, 16
@@ -1012,3 +1012,73 @@ def test_odd_calibrations_in_the_journal_are_ignored(tmp_path):
     assert journal.calibration("A") is None and journal.calibration("B") is None
     assert journal.calibration("C") is None  # all black: not a calibration
     assert journal.calibration("D") == CALIBRATION
+
+
+# --- HDR monitors: is brightness locked in HDR mode? -------------------------
+# Monitorian uses SDR content brightness for every HDR display; Twinkle Tray
+# keeps DDC/CI with an extra SDR slider. Winlight keeps DDC/CI (it changes the
+# backlight) until the monitor shows it locks brightness in HDR mode.
+
+
+def test_an_hdr_monitor_on_ddc_says_why(monkeypatch):
+    FakeDdc([PhysicalMonitor(D1, 7, "x")], {7: (40, 100)}).install(monkeypatch, [target(D1, "HDR monitor", hdr=True)])
+    install_sdr(monkeypatch)
+    [info] = backend_with().list_monitors()
+    assert info.channel == "ddc" and info.why == windows.WHY_HDR_DDC
+    assert "lock" in info.why and "SDR content brightness" in info.why
+
+
+def test_a_locked_hdr_monitor_moves_to_sdr_brightness_and_back_when_hdr_is_off(monkeypatch):
+    ddc = FakeDdc([PhysicalMonitor(D1, 7, "x")], {7: (40, 100)})
+    targets = [target(D1, "HDR monitor", hdr=True)]
+    ddc.install(monkeypatch, targets)
+    state = install_sdr(monkeypatch, nits=280)
+    backend = backend_with()
+    [info] = backend.list_monitors()
+    assert backend.mark_brightness_locked(info.key) is True
+    ddc.monitors = [PhysicalMonitor(D1, 17, "x")]
+    ddc.vcp = {17: (40, 100)}
+    [info] = backend.list_monitors()
+    assert (info.channel, info.why) == ("sdr", windows.WHY_HDR_LOCKED)
+    assert 17 in ddc.destroyed  # its DDC/CI handle released, not kept open
+    backend.set_brightness(0, 100)
+    assert state["sets"] == [480] and ddc.writes == []  # nothing sent over DDC/CI
+    targets[0] = target(D1, "HDR monitor", hdr=False)  # HDR switched off
+    ddc.monitors = [PhysicalMonitor(D1, 27, "x")]
+    ddc.vcp = {27: (40, 100)}
+    [info] = backend.list_monitors()
+    assert (info.channel, info.why) == ("ddc", windows.WHY_DDC)
+    targets[0] = target(D1, "HDR monitor", hdr=True)  # and on again: DDC/CI is tried again
+    ddc.monitors = [PhysicalMonitor(D1, 37, "x")]
+    ddc.vcp = {37: (40, 100)}
+    [info] = backend.list_monitors()
+    assert info.channel == "ddc"
+
+
+def test_only_hdr_displays_on_ddc_can_be_marked_locked(monkeypatch):
+    FakeDdc([PhysicalMonitor(D1, 7, "x")], {7: (40, 100)}).install(monkeypatch, [target(D1, "SDR monitor")])
+    backend = backend_with()
+    [info] = backend.list_monitors()
+    assert backend.mark_brightness_locked(info.key) is False  # not HDR: a different problem
+    assert backend.mark_brightness_locked("nope") is False
+
+
+def test_a_locked_hdr_monitor_without_sdr_brightness_keeps_ddc(monkeypatch):
+    ddc = FakeDdc([PhysicalMonitor(D1, 7, "x")], {7: (40, 100)})
+    ddc.install(monkeypatch, [target(D1, "HDR monitor", hdr=True)])
+    monkeypatch.setattr(win32, "get_sdr_white_level", lambda t: None)  # an older Windows: no SDR level
+    backend = backend_with()
+    [info] = backend.list_monitors()
+    backend.mark_brightness_locked(info.key)
+    ddc.monitors = [PhysicalMonitor(D1, 17, "x")]
+    ddc.vcp = {17: (40, 100)}
+    [info] = backend.list_monitors()
+    assert info.channel == "ddc" and info.supported  # nothing better to switch to
+
+
+def test_every_way_in_says_why(monkeypatch):
+    assert windows._why(MonitorInfo(0, "x", True, channel="wmi"), False) == windows.WHY_WMI
+    assert windows._why(MonitorInfo(0, "x", True, channel="software"), False) == windows.WHY_SOFTWARE
+    assert windows._why(MonitorInfo(0, "x", True, channel="sdr", hdr=True), False) == windows.WHY_HDR_SDR
+    assert windows._why(MonitorInfo(0, "x", True, channel="ddc"), False) == windows.WHY_DDC
+    assert windows._why(MonitorInfo(0, "x", False, channel=""), False) == ""

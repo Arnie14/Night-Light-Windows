@@ -436,3 +436,65 @@ def test_a_level_windows_reported_is_announced_as_changed_elsewhere(manager):
     monitors.brightnessSet.connect(lambda *args: chosen.append(args))
     monitors.note_level("A", 45)
     assert seen == [("A", 45)] and chosen == []  # not a choice made in the app
+
+
+# --- HDR monitors that lock their brightness ------------------------------------
+
+
+class HdrBackend(SlowBackend):
+    """One HDR monitor on DDC/CI whose brightness is locked in HDR mode (writes
+    accepted and ignored, or refused), and Windows' SDR content brightness."""
+
+    def __init__(self, refuses=False):
+        super().__init__(delay=0)
+        self.ignores_writes = not refuses
+        self.refuses = refuses
+        self.locked = set()
+        self.sdr_sets = []
+        self.values = {"A": 50}
+
+    def list_monitors(self):
+        if "A" in self.locked:
+            return [MonitorInfo(0, "HDR monitor", True, key="A", channel="sdr", control="sdr", hdr=True)]
+        return [MonitorInfo(0, "HDR monitor", True, key="A", channel="ddc", hdr=True)]
+
+    def set_brightness(self, index, value):
+        if "A" in self.locked:
+            self.sdr_sets.append(value)
+            return
+        if self.refuses:
+            raise OSError("Setting VCP 0x10 failed")
+        super().set_brightness(index, value)
+
+    def mark_brightness_locked(self, key):
+        self.locked.add(key)
+        return True
+
+
+@pytest.mark.parametrize("refuses", [False, True], ids=["ignores changes", "refuses changes"])
+def test_an_hdr_monitor_that_locks_its_brightness_moves_to_sdr_brightness(manager, monkeypatch, refuses):
+    monkeypatch.setattr(monitors_module, "VERIFY_DELAY_MS", 1100)
+    backend = HdrBackend(refuses=refuses)
+    monitors = manager(backend)
+    ready(monitors)
+    monitors.set_brightness("A", 30)
+    if refuses:
+        QTest.qWait(100)
+        monitors.set_brightness("A", 31)  # refused twice
+    assert wait_until(lambda: monitors.state("A").info.channel == "sdr", 5000)
+    assert wait_until(lambda: backend.sdr_sets, 3000)
+    assert backend.sdr_sets[-1] == (31 if refuses else 30)  # what the user chose last, now through SDR
+    assert backend.locked == {"A"}
+
+
+def test_an_hdr_monitor_that_takes_changes_stays_on_ddc(manager, monkeypatch):
+    monkeypatch.setattr(monitors_module, "VERIFY_DELAY_MS", 1100)
+    backend = HdrBackend()
+    backend.ignores_writes = False  # this one works in HDR
+    monitors = manager(backend)
+    ready(monitors)
+    monitors.set_brightness("A", 30)
+    assert wait_until(lambda: monitors.state("A").commanded == 30)
+    for _ in range(32):  # past the verification read (short waits: a long QTest.qWait starves the monitor thread)
+        QTest.qWait(50)
+    assert monitors.state("A").info.channel == "ddc" and backend.locked == set() and monitors.state("A").observed == 30

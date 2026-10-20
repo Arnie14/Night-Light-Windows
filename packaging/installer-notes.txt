@@ -1,0 +1,43 @@
+﻿WINLIGHT - BEFORE YOU INSTALL
+
+Winlight controls the brightness of every display (external monitors over DDC/CI, the laptop panel through Windows, HDR displays through Windows' SDR brightness, and TVs by dimming their colors) and adds a night light with a schedule.
+
+Winlight is free software by Anurag Jha, released under the GNU General Public License v3.0.
+Source code, releases and the issue tracker: https://github.com/Arnie14/Night-Light-Windows
+
+
+DISCLAIMER
+
+This is a beta release. It has been tested on Windows 11 with a laptop panel; external monitors, TVs and HDR displays vary widely and are still being tested. Winlight is provided as is, without warranty of any kind (see the license). It only changes display brightness and color settings that Windows exposes, and puts colors back to normal when it quits, but use it at your own risk.
+
+Winlight is not yet code-signed, so Windows SmartScreen may warn about it. Choose "More info", then "Run anyway".
+
+
+TURN OFF WHAT CLASHES WITH WINLIGHT
+
+Only one program should set a display's colors, and only one should send it brightness commands. If two do, colors end up tinted twice, flicker, or brightness jumps back.
+
+Night light and color tools - turn these off, or quit them:
+  - Windows Night Light: Settings > System > Display > Night light.
+  - f.lux, Iris, LightBulb, CareUEyes, Redshift and other blue-light filters.
+  - GPU color settings: NVIDIA Control Panel ("Adjust desktop color settings"), AMD Software ("Custom Color", color temperature) and Intel Graphics Command Center (color). Leave them at their defaults.
+  - Scripts or tools that set gamma or "screen temperature" (AutoHotkey scripts, game overlays).
+
+Brightness tools that talk to monitors over DDC/CI - run only one:
+  - Twinkle Tray, Monitorian, ClickMonitorDDC, PowerToys Power Display, and monitor makers' utilities (for example Dell Display Manager or LG OnScreen Control). Two programs sending DDC/CI commands at once can make a monitor ignore both, or hang it until it is unplugged.
+
+Color calibration loaders:
+  - DisplayCAL's profile loader and similar tools keep reapplying a calibration. If you use one, leave Winlight's "Keep each display's color calibration" option off; or turn the loader off and let Winlight keep the calibration.
+
+Windows settings that change brightness on their own (laptops):
+  - "Change brightness automatically when lighting changes" and "content adaptive brightness" (Settings > System > Display > Brightness) can override the level Winlight sets. Turn them off if brightness drifts.
+
+
+RECOMMENDATIONS
+
+  - External monitors: turn on DDC/CI in the monitor's own on-screen menu (it is off by default on many models).
+  - Connect monitors directly where you can. USB docks (DisplayLink), some hubs, KVM switches and adapters do not pass DDC/CI.
+  - Most TVs do not support DDC/CI. Winlight dims them through their colors instead, which saves no power.
+  - HDR: Windows does not apply night light to displays in HDR mode. Many monitors lock their brightness in HDR mode; Winlight notices and uses Windows' SDR content brightness for them.
+  - Keep your graphics driver up to date.
+  - If something goes wrong, right-click the tray icon and choose "Report a Problem..." to save a diagnostics file (it leaves out your name, computer name and location), then open an issue on GitHub.

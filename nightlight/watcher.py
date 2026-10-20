@@ -37,6 +37,13 @@ CLOCK_CHECK_MS = 5000
 RESUME_GAP_S = 30.0
 # A clock jump this soon after Windows reported the resume is the same wake.
 NATIVE_RESUME_WINDOW_S = 120.0
+# Windows said it was going to sleep, yet the clock checks keep running
+# normally this long after: it didn't (a sleep that failed or was cancelled
+# sends no resume). Without this, displays stayed "asleep" for the session.
+STALE_SUSPEND_S = 90.0
+# Input this recent while the displays are reported off means they're on:
+# Windows' "display on" notification was missed.
+INPUT_MEANS_ON_S = CLOCK_CHECK_MS / 1000
 
 
 class DisplayWatcher(QObject):
@@ -47,12 +54,16 @@ class DisplayWatcher(QObject):
     displaysOn = Signal()  # displays back on after Windows' screen timeout
     clockChanged = Signal()
 
-    def __init__(self, app: QGuiApplication, clock: Callable[[], float] = time.time, parent: QObject | None = None, events=None) -> None:
+    def __init__(self, app: QGuiApplication, clock: Callable[[], float] = time.time, parent: QObject | None = None, events=None,
+                 idle_seconds: Callable[[], float | None] | None = None) -> None:
         super().__init__(parent)
         self._clock = clock
+        self._idle_seconds = idle_seconds  # seconds since the last keyboard or mouse input (winsystem.idle_seconds)
         self._last_check = clock()
         self._native_resume_at: float | None = None
         self._suspended = False
+        self._suspended_at = 0.0
+        self._displays_off = False
 
         self._settle = QTimer(self, singleShot=True, interval=SETTLE_MS)
         self._settle.timeout.connect(self._emit_changed)
@@ -69,10 +80,10 @@ class DisplayWatcher(QObject):
         if events is not None:
             events.suspending.connect(self._on_suspending)
             events.resumed.connect(self._on_native_resume)
-            events.displayOff.connect(self.displaysOff)
-            events.displayOn.connect(self.displaysOn)
+            events.displayOff.connect(self._on_displays_off)
+            events.displayOn.connect(self._on_displays_on)
             events.displayChanged.connect(lambda: self._changed("Windows reported a display change"))
-            events.clockChanged.connect(self.clockChanged)
+            events.clockChanged.connect(self._on_clock_changed)
 
     def check_clock(self) -> None:
         now = self._clock()
@@ -81,11 +92,35 @@ class DisplayWatcher(QObject):
         if gap > RESUME_GAP_S:
             if self._native_resume_at is not None and now - self._native_resume_at < NATIVE_RESUME_WINDOW_S:
                 return  # Windows already said so
-            log.info("Woke up after %.0f s (sleep, hibernation or a clock change)", gap)
+            log.info("Woke up after %.0f s (sleep or hibernation, noticed from the clock)", gap)
             self._resume()
+            return
+        if self._suspended and now - self._suspended_at > STALE_SUSPEND_S:
+            log.warning("Windows said the PC was going to sleep %.0f s ago, but it is still running; carrying on as awake",
+                        now - self._suspended_at)
+            self._resume()
+        if self._displays_off and self._idle_seconds is not None:
+            idle = self._idle_seconds()
+            if idle is not None and idle < INPUT_MEANS_ON_S:
+                log.info("Input while the displays were reported off: they're on (Windows didn't say so)")
+                self._on_displays_on()
+
+    def _on_clock_changed(self) -> None:
+        # The clock was changed (by hand, or synced): its jump isn't a wake.
+        self._last_check = self._clock()
+        self.clockChanged.emit()
+
+    def _on_displays_off(self) -> None:
+        self._displays_off = True
+        self.displaysOff.emit()
+
+    def _on_displays_on(self) -> None:
+        self._displays_off = False
+        self.displaysOn.emit()
 
     def _on_suspending(self) -> None:
         self._suspended = True
+        self._suspended_at = self._clock()
         self._settle.stop()  # nothing to re-apply while asleep
         self.suspending.emit()
 
@@ -96,6 +131,7 @@ class DisplayWatcher(QObject):
 
     def _resume(self) -> None:
         self._suspended = False
+        self._displays_off = False  # waking turns them on
         self.resumed.emit()
 
     def _on_screen_added(self, screen: QScreen) -> None:

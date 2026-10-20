@@ -184,6 +184,7 @@ class MonitorService:
         self._reads: set[str] | None = None  # None: nothing to read
         self._dimming: bool | None = None
         self._retry = False  # displays skipped after a crash (safe mode) are to be probed again
+        self._hdr_locks: set[str] = set()  # HDR displays found to lock their DDC/CI brightness
         self._reads_after_detection = False  # the next reads finish a detection (Refreshed)
         self._closing = False
         self._suspended = False
@@ -227,6 +228,13 @@ class MonitorService:
     def request_software_dimming(self, enabled: bool) -> None:
         with self._cond:
             self._dimming = enabled
+            self._cond.notify()
+
+    def request_hdr_lock(self, key: str) -> None:
+        """This HDR display ignored DDC/CI brightness changes: tell the backend
+        (it switches to SDR content brightness) and detect again."""
+        with self._cond:
+            self._hdr_locks.add(key)
             self._cond.notify()
 
     def request_retry(self) -> None:
@@ -322,6 +330,9 @@ class MonitorService:
         if self._retry and not self._suspended:
             self._retry = False
             return "retry", None
+        if self._hdr_locks and not self._suspended:
+            locks, self._hdr_locks = self._hdr_locks, set()
+            return "hdr_lock", locks
         if self._detect and not self._suspended and not self._detection_stuck and self._detection_due():
             self._detect = self._detect_forced = False
             return "detect", None
@@ -387,6 +398,19 @@ class MonitorService:
                 self._call(lambda: set_dimming(enabled), WRITE_TIMEOUT_S, "changing software dimming")
             except Exception as exc:
                 log.warning("Changing software dimming failed: %s", exc)
+
+    def _do_hdr_lock(self, keys: set[str]) -> None:
+        mark = getattr(self._backend, "mark_brightness_locked", None)
+        if mark is None:
+            return
+        try:
+            changed = [key for key in sorted(keys) if self._call(lambda key=key: mark(key), WRITE_TIMEOUT_S, "noting a locked HDR display")]
+        except Exception as exc:
+            log.warning("Noting a display that locks its brightness in HDR mode failed: %s", exc)
+            return
+        if changed:
+            with self._cond:
+                self._detect = self._detect_forced = True
 
     def _do_retry(self, _payload) -> None:
         if retry := getattr(self._backend, "retry_skipped", None):
@@ -708,6 +732,8 @@ class MonitorManager(QObject):
         self._written_at: dict[str, float] = {}  # key -> when the app last changed it
         self._verify_keys: set[str] = set()
         self._warned_ignored: set[str] = set()
+        # key -> (the level to give it once on SDR brightness, the detection it was found at)
+        self._after_hdr_lock: dict[str, tuple[int | None, int]] = {}
         self._verify_timer = QTimer(self, singleShot=True, interval=VERIFY_DELAY_MS)
         self._verify_timer.timeout.connect(self._verify)
 
@@ -910,6 +936,15 @@ class MonitorManager(QObject):
         self.states = states
         self.monitors = event.monitors
         self.monitorsChanged.emit(event.monitors)
+        for key, (value, found_at) in list(self._after_hdr_lock.items()):
+            state = states.get(key)
+            if state is not None and state.info.channel in ("ddc", "ddc-high-level") and self.generation < found_at + 2:
+                continue  # not detected again yet (still DDC/CI after that: no SDR brightness to switch to)
+            del self._after_hdr_lock[key]
+            if state is not None and state.info.channel in ("ddc", "ddc-high-level"):
+                continue
+            if state is not None and state.info.supported and value is not None:
+                self.set_brightness(key, value)  # the level the user chose, now through SDR brightness
 
     def _on_DetectionStuck(self, event: DetectionStuck) -> None:
         for state in self.states.values():
@@ -939,7 +974,9 @@ class MonitorManager(QObject):
             self._set_status(state, Status.OK if value is not None else Status.UNREADABLE, emit=False)
         if state.verify and not settling and value is not None and state.commanded is not None and state.desired is None:
             state.verify = False
-            if abs(value - state.commanded) > VERIFY_TOLERANCE and state.key not in self._warned_ignored:
+            if abs(value - state.commanded) > VERIFY_TOLERANCE and self._hdr_ddc(state):
+                self._hdr_locked(state, f"it accepted {state.commanded}% but stayed at {value}%")
+            elif abs(value - state.commanded) > VERIFY_TOLERANCE and state.key not in self._warned_ignored:
                 self._warned_ignored.add(state.key)
                 log.warning("%s accepted %d%% but reports %d%%; it may ignore DDC/CI changes in its current mode",
                             state.info.name, state.commanded, value)
@@ -978,6 +1015,8 @@ class MonitorManager(QObject):
         if state is None:
             return
         state.failures += 1
+        if not event.timeout and state.failures >= 2 and self._hdr_ddc(state):
+            self._hdr_locked(state, f"its DDC/CI brightness changes failed ({event.message})")
         if event.timeout:
             self._set_status(state, Status.NOT_RESPONDING, emit=False)
             self.refresh_later((10, 30))  # see whether it recovers once the call returns
@@ -987,6 +1026,22 @@ class MonitorManager(QObject):
         else:
             state.message, state.detail = "The last change failed", event.message
         self.displayChanged.emit(event.key)
+
+    @staticmethod
+    def _hdr_ddc(state: DisplayState) -> bool:
+        return state.info.hdr and state.info.channel in ("ddc", "ddc-high-level")
+
+    def _hdr_locked(self, state: DisplayState, evidence: str) -> None:
+        """Many monitors lock their brightness in HDR mode: DDC/CI changes are
+        ignored or refused. Switch the display to Windows' SDR content
+        brightness (the backend does at the next detection) and give it the
+        level the user wanted there."""
+        if state.key in self._after_hdr_lock:
+            return
+        log.warning("%s is in HDR mode and %s: its brightness looks locked; switching to SDR content brightness", state.info.name, evidence)
+        wanted = state.desired if state.desired is not None else state.commanded  # a refused change was never commanded
+        self._after_hdr_lock[state.key] = (wanted, self.generation)
+        self._service.request_hdr_lock(state.key)
 
     def _on_Gone(self, event: Gone) -> None:
         if (state := self.states.get(event.key)) is not None:

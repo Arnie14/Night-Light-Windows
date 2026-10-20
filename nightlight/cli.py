@@ -25,6 +25,7 @@ examples:
   winlight-cli --set +10 --display 2        display 2 up by 10
   winlight-cli --set 70 --display DELL      by name (any part of it) or id
   winlight-cli --get --display 1            prints just the number, for scripts
+  winlight-cli --set +10 --panel            and show the panel (for hotkey tools)
   winlight-cli --night-light toggle         also on, off, auto (follow the schedule), status
   winlight-cli --list --json                for scripts
 """
@@ -35,17 +36,25 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--list", action="store_true", help="list displays with their numbers, ids and brightness")
     group.add_argument("--get", action="store_true", help="print the brightness of --display (default: all)")
     group.add_argument("--set", metavar="VALUE", help="set brightness: 0-100, or +N/-N to change it")
-    group.add_argument("--display", default="all", metavar="WHICH", help="a number from --list, an id, part of a name, or all")
+    group.add_argument("--display", default="all", metavar="WHICH", help="a number from --list, an id (or part of one), part of a name, or all")
     group.add_argument("--night-light", choices=("on", "off", "toggle", "auto", "status"), help="night light: on/off until changed back, or auto")
     group.add_argument("--refresh", action="store_true", help="detect displays again")
+    group.add_argument("--panel", action="store_true", help="show the Winlight panel (after any change asked for)")
     group.add_argument("--json", action="store_true", help="print JSON instead of text")
 
 
 def requested(args: argparse.Namespace) -> bool:
-    return bool(args.list or args.get or args.set is not None or args.night_light or args.refresh)
+    return bool(args.list or args.get or args.set is not None or args.night_light or args.refresh or args.panel)
 
 
 def build_request(args: argparse.Namespace) -> dict:
+    request = _command(args)
+    if getattr(args, "panel", False):
+        request["panel"] = True  # shown after the command (alone: just shown)
+    return request
+
+
+def _command(args: argparse.Namespace) -> dict:
     if getattr(args, "diagnostics_request", False):
         return {"command": "diagnostics"}
     if args.list:
@@ -56,7 +65,9 @@ def build_request(args: argparse.Namespace) -> dict:
         return {"command": "get", "display": args.display}
     if args.night_light:
         return {"command": "night-light", "action": args.night_light}
-    return {"command": "refresh"}
+    if args.refresh:
+        return {"command": "refresh"}
+    return {"command": "panel"}
 
 
 def unicode_output() -> None:

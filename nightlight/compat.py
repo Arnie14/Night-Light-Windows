@@ -11,6 +11,7 @@ does ask each display and API directly.
 from __future__ import annotations
 
 import platform
+import textwrap
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,6 +49,7 @@ class CompatibilityEntry:
     status: str  # "Works", or a short reason it doesn't now
     detail: str
     night_light: str
+    why: str = ""  # how its brightness is controlled, and why
 
     @property
     def summary(self) -> str:
@@ -109,6 +111,7 @@ def entries(monitors: list[MonitorInfo], states: dict | None = None, warmest: di
                 status=status,
                 detail=detail,
                 night_light=night_light,
+                why=info.why,
             )
         )
     return result
@@ -147,6 +150,7 @@ def render(items: list[CompatibilityEntry], system: dict[str, str] | None = None
         lines += ["", f"{number}. {e.name}" + (" (built-in)" if e.built_in else "")]
         facts = [
             ("Brightness", e.brightness if e.works else f"not controllable: {e.status}"),
+            ("How", e.why),
             ("Night light", e.night_light),
             ("Connection", e.connector),
             ("Manufacturer", e.manufacturer),
@@ -157,7 +161,7 @@ def render(items: list[CompatibilityEntry], system: dict[str, str] | None = None
             ("HDR", "on" if e.hdr else "off"),
             ("Identity", e.key),
         ]
-        lines += [f"   {label + ':':<14}{value}" for label, value in facts if value]
+        lines += [textwrap.fill(f"   {label + ':':<14}{value}", width=100, subsequent_indent=" " * 17) for label, value in facts if value]
         if not e.works:
             if e.detail:
                 lines.append(f"   {'Why:':<14}{e.detail}")
