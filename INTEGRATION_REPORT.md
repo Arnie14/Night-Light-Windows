@@ -44,7 +44,7 @@ Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability,
 
 ## Bugs found while integrating
 
-Found by running the merged code against the real Windows APIs and app on the Windows test machine; each has a test that failed before the fix.
+Found by running the merged code against the real Windows APIs and app on the test laptop; each has a test that failed before the fix.
 
 | # | Bug | In beta 4? | Fix |
 |---|---|---|---|
@@ -69,12 +69,12 @@ The backend investigation also found that WMI calls from the monitor thread are 
   - `test_winevents.py` is ported into `test_winsystem.py`, including the real-window test. It now also sends display on/off and panel-brightness power settings with real payloads.
   - `test_brightness_schedule_steps` and `test_turned_off_neither_restores_nor_saves` keep their assertions, rewritten for points and keys.
 - **Assertions changed on purpose:** the two winsystem classification rows (decision 2), the 06:00/18:00 fallback (decision 6), masked serials in the report, and the watcher's unlock row (decision 1).
-- **Environment fix:** beta 4's `test_start_not_minimized_opens_settings` failed because it called the real fullscreen check while VS Code was fullscreen. The app fixture now stubs it; tests that need a busy fullscreen state still set one.
+- **Environment fix:** beta 4's `test_start_not_minimized_opens_settings` failed because it called the real fullscreen check while an editor was fullscreen on the test laptop. The app fixture now stubs it; tests that need a busy fullscreen state still set one.
 - **New tests for ported behavior** that had none: fades and cutting a fade short, retry, refresh signals, idle source, `note_level`, settling readings, idle hold ordering, legacy keys in the flyout and settings, concurrent safe-mode markers and beta 4's marker, the real-window event test, diagnostics with the compatibility report, and the CLI's "can't be changed now".
 
 ## Verified on real Windows
 
-Windows 11 Pro 26200, one laptop panel (AUO 24ED, WMI, a calibrated gamma ramp), no external monitor, HDR off.
+Test laptop: Windows 11 Pro 26200, one built-in panel (AUO 24ED, WMI, a calibrated gamma ramp), no external monitor, HDR off.
 
 - **Real-API checks (113/113)**, from a script outside the repo that drives the real APIs:
   - ctypes structures and `QueryDisplayConfig`
@@ -164,7 +164,7 @@ INFO [monitor-service] nightlight.monitors: setting the brightness of DELL U2720
 
 Thread names tell the UI, the queue and a stuck call apart, every backend call is traced at debug level, and decisions (paused, resumed, deferred and why, backed off from another program) are logged at info level. The notification window's handle and its registrations are logged at debug level, so a report shows whether Windows' messages could arrive at all. Privacy rules still apply: the file is scrubbed, serials are shortened, and no time zone or app names are written.
 
-### Verified on the Windows test machine in this pass
+### Verified on the test laptop in this pass
 
 - **Sleep and session, in the running app (source and the PyInstaller build):** suspend, resume (both messages merged into one wake), lock, unlock, display change, clock change and sign-out were sent to its real notification window from another process. The screen was also really turned off and on (`SC_MONITORPOWER`).
   - Nothing was sent while asleep.
@@ -180,13 +180,13 @@ Thread names tell the UI, the queue and a stuck call apart, every backend call i
   - `Winlight.exe` and `winlight-cli.exe` worked: list, set, get, exit codes 0/1/2, `--report` and `--diagnostics`.
   - Its log had no errors, and its diagnostics zip no personal details.
 - **Real-API checks:** 113 of 113 again after the changes.
-- **Dependencies:** `pip check` is clean; all code parses as Python 3.12, and no newer standard-library APIs are used. The `wmi` package warns about invalid escape sequences on Python 3.15, which a future Python will reject; CI uses 3.13. The Inno Setup installer was built, installed, upgraded, uninstalled and reinstalled on the Windows test machine.
+- **Dependencies:** `pip check` is clean; all code parses as Python 3.12, and no newer standard-library APIs are used. The `wmi` package warns about invalid escape sequences on Python 3.15, which a future Python will reject; CI uses 3.13. The Inno Setup installer was built, installed, upgraded, uninstalled and reinstalled on the test laptop.
 - **CI robustness:** the chaos test allows for a stalled thread on a loaded runner. The real-window test skips on CI, with a reason, only if Windows refuses the registration (no desktop session).
 
 
 ### Keeping color calibrations (new option)
 
-Settings > Displays > **Keep each display's color calibration** (off by default). On test laptop, turning the screen off and on makes Windows reset the ramp to a flat one, dropping the ICC calibration until Windows' loader runs again (usually the next sign-in). With the option on, Winlight puts it back, as DisplayCAL's profile loader does.
+Settings > Displays > **Keep each display's color calibration** (off by default). On the test laptop, turning the screen off and on makes Windows reset the ramp to a flat one, dropping the ICC calibration until Windows' loader runs again (usually the next sign-in). With the option on, Winlight puts it back, as DisplayCAL's profile loader does.
 
 The backend stays small by reusing what was already there:
 
@@ -263,7 +263,7 @@ Raw VCP codes, contrast and input switching stay out on purpose: an arbitrary DD
 The "Pause night light" settings now say exactly what happens: only on the display showing the app, and night light fades back when the user switches away, minimizes or closes it. The panel and tray name the display ("Paused on DELL U2720Q for photoshop.exe"), using custom names, instead of "Paused for photoshop.exe".
 
 - **Fixed:** a minimized window can stay Windows' foreground window, which kept night light paused. It no longer counts.
-- **Tested on the real machine with Notepad on the list:** in front, paused; minimized, back; restored, paused; closed, back.
+- **Tested on the test laptop with Notepad on the list:** in front, paused; minimized, back; restored, paused; closed, back.
 
 ### Renaming and hiding displays
 
@@ -294,11 +294,11 @@ A new end-to-end test file (`test_display_prefs.py`, 8 tests) runs the whole app
 
 ## Beta 6 round (0.1.0 Beta 6)
 
-Ten points from testing beta 5 on a single-display PC.
+Beta 6 fixes the problems found while testing beta 5 on a single-display laptop, and adds the options that testing called for.
 
 ### Microsoft Defender quarantined the app
 
-Defender recorded two detections on the test machine: `Behavior:Win32/Persistence.A!ml` and `Trojan:Win32/Bearfoos.A!ml`, both on the installed `Winlight.exe`.
+Defender recorded two detections on the test laptop: `Behavior:Win32/Persistence.A!ml` and `Trojan:Win32/Bearfoos.A!ml`, both on the installed `Winlight.exe`.
 
 - **Cause of the behavior detection:** beta 5 rewrote its `HKCU\...\Run` value at every start, to keep the path current. Behavior monitoring took an unsigned program doing that for malware making itself persistent, then quarantined the program.
 - **The fix:**
@@ -346,7 +346,7 @@ The tooltip stays under Windows' 127-character limit.
 
 ### Settings window
 
-- **Maximize and restore:** clicking the real caption buttons (from another process) worked on this PC. The window's normal size, 960×760, was taller than a 1080p screen at 150% scaling, so "restore" brought back a window that still filled the screen. Reproduced by making the normal size taller than this screen. The window now opens centered and fits the screen's free area.
+- **Maximize and restore:** clicking the real caption buttons (from another process) worked on the test laptop (1920×1080 at 125%). The window's normal size, 960×760, was taller than a 1080p screen at 150% scaling, so "restore" brought back a window that still filled the screen. Reproduced on the test laptop by making the normal size taller than its screen. The window now opens centered and fits the screen's free area.
 - **White flash:** Windows shows a new window before its first paint. Measured by sampling the screen while the settings window opened in dark mode: a fully white frame in 6 of 9 openings. Windows now open transparent and fade in after the first paint (150 ms), applied to the settings window and the Report a Problem message: 0 of 9. Page switches and the tray panel showed no flash.
 - **Header:** a larger logo (48 px), name and description, with more room.
 - **Theme:** Follow Windows, Light or Dark (Settings > General > Appearance), through Qt's color scheme override.
@@ -382,8 +382,8 @@ Real-API checks: 113 of 113, plus the autostart (9) and idle-hold (8) checks abo
 - **A real sleep, hibernate and lock cycle.** Sleep, wake, lock, unlock, display change, clock change and sign-out were sent to the running app's real window (source and installed builds), and the screen was really turned off and on; a real sleep or hibernation, and how it looks, weren't.
 - **A real idle cycle**, and video keeping the screen on. Dimming and coming back were run on the real panel with a scripted idle time.
 - **Windows Night Light turned on:** only "off" was read.
-- **CI:** the GitHub Actions run used Python 3.13 and produced a build. On the test machine (Python 3.15), the PyInstaller build and Inno Setup installer were built and run, including installation with the PATH option, upgrade over a running copy, uninstall and reinstall.
-- **A time zone change while running:** handled from Windows' clock-change message and a check each minute (tested with a stand-in zone); not tried by changing this PC's zone.
+- **CI:** the GitHub Actions run used Python 3.13 and produced a build. On the test laptop (Python 3.15), the PyInstaller build and Inno Setup installer were built and run, including installation with the PATH option, upgrade over a running copy, uninstall and reinstall.
+- **A time zone change while running:** handled from Windows' clock-change message and a check each minute (tested with a stand-in zone); not tried by changing the test laptop's zone.
 - **The GUI by eye:** layout at other scalings, keyboard navigation, the settings pages with real displays.
 - **Defender over time:** whether `Bearfoos.A!ml` (a verdict on the unsigned file) comes back for new builds; it needs code signing or Microsoft's review of a false-positive submission.
 
@@ -393,7 +393,7 @@ Real-API checks: 113 of 113, plus the autostart (9) and idle-hold (8) checks abo
 - Twinkle Tray's "normalize brightness" (a per-monitor range), contrast.
 - Falling back to VCP 0x13/0x6B, and an update-rate setting, if testing finds monitors that need them.
 - Preferring SDR over DDC/CI on HDR monitors that lock brightness in HDR mode (needs testing).
-- Adding the real-API check script to `tools/`: it assumes this laptop's single panel and would need generalizing first.
+- Adding the real-API check script to `tools/`: it assumes the test laptop's single panel and would need generalizing first.
 
 ## Release checklist
 

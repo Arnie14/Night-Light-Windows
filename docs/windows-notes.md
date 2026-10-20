@@ -64,7 +64,7 @@ Twinkle Tray uses gamma ramps for its "software brightness" fallback (`tt-window
 
 - **Windows rejects ramps far from identity.** Twinkle Tray never dims the peak below about 70% and changes the curve below that. For night light this means very warm temperatures are likely to be refused: if the same limit applies to a single channel, blue crosses it between 4100 and 4000 K (blue is 0.667 and 0.648 there). The real limit is measured during Windows testing with `--probe`. Raising the `GdiIcmGammaRange` registry value (DWORD `256` under `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM`, the same value f.lux's "expanded range" sets) lifts the limit.
   - ✅ When a ramp is refused, the backend finds the warmest temperature Windows accepts for that display, stays there and logs one warning. `--probe` reports the limit and the registry value.
-  - Measured on the first Windows machine (Intel UHD 630, Windows 11 25H2): the limit is **3280 K**, blue peaking at 0.50, well past the 70% guess. The 70% figure holds for dimming every channel at once (software dimming at 20% is accepted), not for one channel alone. With 20% dimming on top, the limit moves to 4400 K, so the limit is found again whenever the dimming changes.
+  - Measured on the test laptop (Intel UHD 630, Windows 11 25H2): the limit is **3280 K**, blue peaking at 0.50, well past the 70% guess. The 70% figure holds for dimming every channel at once (software dimming at 20% is accepted), not for one channel alone. With 20% dimming on top, the limit moves to 4400 K, so the limit is found again whenever the dimming changes.
 - **"Success" isn't always success.** Twinkle Tray reads the ramp back after `SetDeviceGammaRamp` and compares it with a tolerance of 256, because some drivers return TRUE without applying the ramp or keep fewer bits.
   - ✅ The ramp is read back and checked, with one warning if the driver ignored it.
 - **Ramps outlive the app**, and Windows loads a calibrated monitor's ICC calibration into the ramp. Twinkle Tray reads the existing ramp as the base and recognises its own leftover dimming.
@@ -270,7 +270,7 @@ Sleep and hibernation cause most failures in this kind of app, DDC/CI the next m
 
 ## 10. First Windows run (October 2026)
 
-HP ZBook Studio G5, Windows 11 25H2 (build 26200), Intel UHD 630 + NVIDIA Quadro P1000, one built-in AUO panel (`AUO24ED`, eDP, no DDC/CI, WMI with 101 levels), Python 3.15, PySide6 6.12.
+Test laptop: HP ZBook Studio G5, Windows 11 25H2 (build 26200), Intel UHD 630 + NVIDIA Quadro P1000, one built-in AUO panel (`AUO24ED`, eDP, no DDC/CI, WMI with 101 levels), Python 3.15, PySide6 6.12.
 
 - All structure layouts match the SDK; `QueryDisplayConfig`, both HDR queries, the SDR level query, dxva2 and GDI gamma calls all work, without leaking handles or GDI objects over hundreds of calls.
 - The panel's DDC/CI handle (value 0, which is valid) answers every read with `0xC0262589`; invalid handles give `0xC026258C` on all four dxva2 calls, which the backend turns into "monitor gone". Detection no longer probes the panel over DDC/CI, which took it from about 670 ms to about 25 ms.

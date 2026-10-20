@@ -73,24 +73,24 @@ def test_nothing_personal_gets_into_the_bundle(tmp_path, monkeypatch):
     from nightlight import privacy
     from nightlight.config import NightLightConfig
 
-    monkeypatch.setattr(diagnostics, "scrub", privacy.Scrubber(user="anurag", computer="ANURAG-PC", home=r"C:\Users\Anurag"))
+    monkeypatch.setattr(diagnostics, "scrub", privacy.Scrubber(user="jsmith", computer="JSMITH-PC", home=r"C:\Users\Jsmith"))
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "night-light.log").write_text(
-        "INFO Settings file: C:\\Users\\Anurag\\AppData\\Local\\night-light\\settings.json\n"
-        "INFO pipe night-light-anurag on ANURAG-PC, mail anurag@example.com\n"
+        "INFO Settings file: C:\\Users\\Jsmith\\AppData\\Local\\night-light\\settings.json\n"
+        "INFO pipe night-light-jsmith on JSMITH-PC, mail jsmith@example.com\n"
     )
     controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=timezone.utc))
     settings = AppConfig(
         NightLightConfig(latitude=50.4501, longitude=30.5234, timezone="Europe/Kyiv", exempt_apps=("secret-project.exe",)),
         GeneralConfig(idle_exempt_apps=("hidden-call.exe",)),
-        displays=(DisplayPrefs("DEL41A2", "Anurag's desk"),),
+        displays=(DisplayPrefs("DEL41A2", "Jsmith's desk"),),
     )
     src = diagnostics.Sources(FakeMonitors(), controller, lambda: settings, tmp_path / "settings.json", logs)
     path, _ = diagnostics.write_bundle(src, tmp_path / "out")
     with zipfile.ZipFile(path) as bundle:
         everything = "\n".join(bundle.read(name).decode() for name in bundle.namelist())
-    for secret in ("Anurag", "anurag", "ANURAG-PC", "example.com", "Kyiv", "50.45", "30.52", "secret-project", "hidden-call", "desk"):
+    for secret in ("Jsmith", "jsmith", "JSMITH-PC", "example.com", "Kyiv", "50.45", "30.52", "secret-project", "hidden-call", "desk"):
         assert secret not in everything, secret
     assert "<home>" in everything and "<user>" in everything and "<computer>" in everything
     controller.shutdown()
@@ -118,13 +118,13 @@ def test_a_display_that_does_not_answer_now_says_so(tmp_path):
 def test_the_compatibility_report_is_included_and_scrubbed(tmp_path, monkeypatch):
     from nightlight import privacy
 
-    monkeypatch.setattr(diagnostics, "scrub", privacy.Scrubber(user="anurag", computer="ANURAG-PC", home=r"C:\Users\Anurag"))
+    monkeypatch.setattr(diagnostics, "scrub", privacy.Scrubber(user="jsmith", computer="JSMITH-PC", home=r"C:\Users\Jsmith"))
     src, controller = sources(tmp_path)
-    src.compatibility = lambda: "1. DELL\n   Identity:     DEL41A2:7XKJ9F3\n   saved by anurag\n"
+    src.compatibility = lambda: "1. DELL\n   Identity:     DEL41A2:7XKJ9F3\n   saved by jsmith\n"
     path, _ = diagnostics.write_bundle(src, tmp_path / "out")
     with zipfile.ZipFile(path) as bundle:
         report = bundle.read("compatibility.txt").decode()
-    assert "DEL41A2:…J9F3" in report and "7XKJ9F3" not in report and "anurag" not in report
+    assert "DEL41A2:…J9F3" in report and "7XKJ9F3" not in report and "jsmith" not in report
     controller.shutdown()
 
 

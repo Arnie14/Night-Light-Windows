@@ -3,16 +3,16 @@ import logging
 
 from nightlight.privacy import Scrubber, ScrubbingFormatter
 
-SCRUB = Scrubber(user="anurag", computer="ANURAG-PC", home=r"C:\Users\Anurag")
+SCRUB = Scrubber(user="jsmith", computer="JSMITH-PC", home=r"C:\Users\Jsmith")
 
 
 def test_home_paths_in_both_slash_styles_and_any_case():
-    assert SCRUB(r"C:\Users\Anurag\AppData\Local\x.log") == r"<home>\AppData\Local\x.log"
-    assert SCRUB("c:/users/anurag/Desktop/Winlight.zip") == "<home>/Desktop/Winlight.zip"
+    assert SCRUB(r"C:\Users\Jsmith\AppData\Local\x.log") == r"<home>\AppData\Local\x.log"
+    assert SCRUB("c:/users/jsmith/Desktop/Winlight.zip") == "<home>/Desktop/Winlight.zip"
 
 
 def test_user_computer_and_email():
-    assert SCRUB("pipe night-light-anurag on ANURAG-PC") == "pipe night-light-<user> on <computer>"
+    assert SCRUB("pipe night-light-jsmith on JSMITH-PC") == "pipe night-light-<user> on <computer>"
     assert SCRUB("from a.b+c@mail.example.org") == "from <email>"
 
 
@@ -35,14 +35,14 @@ def test_tracebacks_are_scrubbed_too():
     privacy.scrub = formatter_scrub
     try:
         try:
-            raise OSError(r"cannot open C:\Users\Anurag\AppData\settings.json")
+            raise OSError(r"cannot open C:\Users\Jsmith\AppData\settings.json")
         except OSError:
-            record = logging.getLogger("t").makeRecord("t", logging.ERROR, __file__, 1, "Saving failed for anurag", (), None)
+            record = logging.getLogger("t").makeRecord("t", logging.ERROR, __file__, 1, "Saving failed for jsmith", (), None)
             import sys
 
             record.exc_info = sys.exc_info()
         output = formatter.format(record)
     finally:
         privacy.scrub = original
-    assert "Anurag" not in output and "anurag" not in output
+    assert "Jsmith" not in output and "jsmith" not in output
     assert "<home>" in output and "<user>" in output

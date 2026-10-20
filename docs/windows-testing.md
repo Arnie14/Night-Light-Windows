@@ -179,7 +179,8 @@ In Settings > General:
 
 - [ ] Tick **Start Winlight when I sign in** and Apply. Task Manager > Startup apps lists Winlight. In `regedit`, `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` has a `Winlight` value whose command uses `pythonw.exe` and the full path to `main.py`.
 - [ ] Sign out and in (or restart): Winlight starts, with **no console window**, and only its tray icon shows.
-- [ ] Untick it and Apply: the `Winlight` value is gone from the Run key.
+- [ ] Untick it and Apply: Task Manager > Startup apps shows Winlight as Disabled. The `Winlight` value stays in the Run key, and `...\Explorer\StartupApproved\Run` has a `Winlight` value starting with `03` (Task Manager's "disabled"). Tick it again and Apply: that value is gone.
+- [ ] Restart Winlight: neither key changes at start (Winlight only reads them; the installer creates the entry for installed copies).
 - [ ] Untick **Start minimized in the system tray** and Apply, quit and start again: the settings window opens at start. Tick it again: only the tray icon appears.
 - [ ] With both ticked, sign out and in: still only the tray icon.
 
