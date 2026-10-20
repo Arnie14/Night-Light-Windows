@@ -7,8 +7,10 @@ cross-compile):
     python packaging/build.py                      # version from nightlight/__init__.py
     python packaging/build.py --version 0.3.0-beta.1
 
-Output goes to dist/: Winlight/ (the app), Winlight-<version>-portable.zip
-and Winlight-<version>-setup.exe.
+Output goes to dist/: Winlight/ (the app), Winlight-<version>-portable.zip,
+Winlight-<version>-setup.exe and SHA256SUMS.txt, the SHA-256 checksum of
+each download in the format sha256sum reads (check one on Windows with
+Get-FileHash <file>; the hash is the same, in upper case).
 
 Versions are MAJOR.MINOR.PATCH, optionally followed by -alpha.N, -beta.N,
 -rc.N or -dev. Windows' version resources take four numbers; the fourth
@@ -21,6 +23,7 @@ release itself 9000 and a dev build 0. 0.3.0-beta.1 is file version
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shutil
@@ -137,7 +140,23 @@ def main() -> int:
             run(iscc, f"/DAppVersion={version}", f"/DVersionNumbers={'.'.join(map(str, numbers))}",
                 f"/DSourceDir={app}", f"/DOutputDir={DIST}", f"/DIconFile={BUILD / 'winlight.ico'}",
                 str(ROOT / "packaging" / "winlight.iss"))
+    sums = write_checksums(sorted(DIST.glob(f"Winlight-{version}-*")), DIST / "SHA256SUMS.txt")
+    print(sums.read_text(encoding="utf-8"), end="")
     return 0
+
+
+def write_checksums(files: list[Path], out: Path) -> Path:
+    """`out` lists each file's SHA-256 as sha256sum writes it: the hash in
+    lower case, two spaces, the file name."""
+    lines = []
+    for file in files:
+        digest = hashlib.sha256()
+        with file.open("rb") as stream:
+            for block in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(block)
+        lines.append(f"{digest.hexdigest()}  {file.name}\n")
+    out.write_text("".join(lines), encoding="utf-8", newline="\n")
+    return out
 
 
 def check(app: Path) -> None:

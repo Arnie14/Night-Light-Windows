@@ -34,7 +34,7 @@ Brightness tools for Windows usually manage monitor brightness, and color tools 
 ## Getting started
 
 1. Download `Winlight-<version>-setup.exe` from [Releases](https://github.com/Arnie14/WinLight/releases/latest) and run it. It installs for your user only, with no administrator prompt, and starts Winlight at sign-in (a task you can untick during setup). The `…-portable.zip` runs from any folder instead.
-2. Builds aren't code-signed yet, so Windows SmartScreen may show "Windows protected your PC": choose **More info**, then **Run anyway**.
+2. Builds aren't code-signed yet, so Windows SmartScreen may show "Windows protected your PC": choose **More info**, then **Run anyway**. To check that a download is the file GitHub built, compare `Get-FileHash <file>` in PowerShell with its line in the release's `SHA256SUMS.txt` (also shown on the release page).
 3. Click the sun or moon icon in the tray (check the ^ overflow area) for the panel; ⚙ opens Settings.
 4. **Turn off Windows Night Light** (Settings > System > Display > Night light) and other color tools: two night lights tint the screen twice. Winlight shows a notice when Windows Night Light is on.
 5. External monitors need **DDC/CI** turned on in their own on-screen menu. Most TVs have no DDC/CI; Winlight dims them through their colors instead.

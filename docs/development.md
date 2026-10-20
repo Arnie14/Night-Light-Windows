@@ -34,7 +34,7 @@ Create `.venv` on the machine that uses it: a virtual environment copied from Li
 
 Useful options (`python main.py --help` lists them all):
 
-- `--debug`: verbose logging. The log is also written to `%LOCALAPPDATA%\WinLight\Logs\night-light.log`.
+- `--debug`: verbose logging. The log is also written to `%LOCALAPPDATA%\WinLight\Logs\WinLight.log`.
 - `--probe`: prints what each Windows API reports about every display and saves it as `probe.txt` in the log folder. It changes nothing, except that each display is briefly tinted to find the warmest night light Windows allows. Use it when a monitor misbehaves.
 - `--report`: prints the compatibility report (also in Settings > Displays) and saves it as `compatibility.txt`. It sends nothing to the displays.
 - `--quit`: asks the running copy to quit cleanly, restoring normal colors. The installer uses it before upgrading or uninstalling.
@@ -85,7 +85,7 @@ pip install -e ".[dev,build]"
 python packaging/build.py
 ```
 
-This writes `dist\Winlight\` (the app, with `LICENSE.txt` and `THIRD_PARTY_NOTICES.txt`), `Winlight-<version>-portable.zip` and `Winlight-<version>-setup.exe`. The build smoke-tests the frozen app and `winlight-cli.exe` before packaging. [`packaging/`](../packaging/) holds the PyInstaller spec, the Inno Setup script, the installer's information page and the icon generator; `tools/third_party_notices.py` writes the notices from the installed packages' own license files, with the texts they don't ship kept in `packaging/licenses/`.
+This writes `dist\Winlight\` (the app, with `LICENSE.txt` and `THIRD_PARTY_NOTICES.txt`), `Winlight-<version>-portable.zip`, `Winlight-<version>-setup.exe` and `SHA256SUMS.txt`, the SHA-256 checksum of each download in the format `sha256sum -c` reads. The release workflow publishes `SHA256SUMS.txt` with the files, and lists the checksums on the release page and in the run's summary. The build smoke-tests the frozen app and `winlight-cli.exe` before packaging. [`packaging/`](../packaging/) holds the PyInstaller spec, the Inno Setup script, the installer's information page and the icon generator; `tools/third_party_notices.py` writes the notices from the installed packages' own license files, with the texts they don't ship kept in `packaging/licenses/`.
 
 The README screenshots come from `python tools/screenshots.py` (demo displays, light and dark); run it on Windows for the native look.
 

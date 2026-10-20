@@ -55,3 +55,18 @@ def test_the_app_version_follows_the_scheme():
 def test_the_installer_app_id_never_changes():
     script = (ROOT / "packaging" / "winlight.iss").read_text(encoding="utf-8")
     assert re.search(r"^AppId=(.+)$", script, re.M).group(1) == APP_ID
+
+
+def test_checksums_are_written_as_sha256sum_reads_them(tmp_path):
+    import hashlib
+
+    setup, portable = tmp_path / "Winlight-0.3.0-beta.1-setup.exe", tmp_path / "Winlight-0.3.0-beta.1-portable.zip"
+    setup.write_bytes(b"installer")
+    portable.write_bytes(b"x" * 3_000_000)  # more than one read block
+    out = build_module().write_checksums([portable, setup], tmp_path / "SHA256SUMS.txt")
+    lines = out.read_bytes().decode().splitlines(keepends=True)
+    assert lines == [
+        f"{hashlib.sha256(b'x' * 3_000_000).hexdigest()}  {portable.name}\n",
+        f"{hashlib.sha256(b'installer').hexdigest()}  {setup.name}\n",
+    ]
+    assert b"\r" not in out.read_bytes()  # sha256sum -c on Linux reads it as is

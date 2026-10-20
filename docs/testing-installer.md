@@ -8,6 +8,7 @@ Tell us your setup in the issue: Windows version, laptop or desktop, and each di
 
 ## 1. Install
 
+- [ ] Optional: in PowerShell, `Get-FileHash Winlight-<version>-setup.exe` prints the same hash (in upper case) as the file's line in the release's `SHA256SUMS.txt`.
 - [ ] Run `Winlight-<version>-setup.exe`. If SmartScreen says "Windows protected your PC", choose **More info → Run anyway** (the beta isn't code-signed yet).
 - [ ] The first page explains the beta, what clashes with Winlight and what to turn off; read it.
 - [ ] No administrator prompt appears. "Start Winlight when I sign in" is ticked; optionally tick "Add winlight-cli to PATH".

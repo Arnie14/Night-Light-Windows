@@ -208,6 +208,10 @@ def parse_hhmm(text: str) -> time:
 # newer version renames that folder, so nothing inside it changes.
 DATA_FOLDER = "WinLight"
 OLD_DATA_FOLDER = "night-light"
+# The log file in Logs/, with its rotated copies (WinLight.log.1, .2).
+# Before 0.3.0 it was night-light.log; the first start renames those too.
+LOG_FILE = "WinLight.log"
+OLD_LOG_FILE = "night-light.log"
 _data_dir: Path | None = None
 
 
@@ -235,12 +239,32 @@ def _migrated(new: Path, old: Path) -> Path:
     return new
 
 
+def migrate_log_files(folder: Path) -> None:
+    """Rename night-light.log and its rotated copies to WinLight.log, .1, .2,
+    so the log keeps its history under the new name. Skipped if the new log
+    already exists; a file that can't be renamed (an older copy has it
+    open) stays, and reports still include it."""
+    if (folder / LOG_FILE).exists():
+        return
+    for old in sorted(folder.glob(OLD_LOG_FILE + "*")):
+        new = folder / (LOG_FILE + old.name[len(OLD_LOG_FILE):])
+        try:
+            old.rename(new)
+        except OSError:
+            log.debug("Could not rename %s", old.name, exc_info=True)
+
+
+def is_log_file(name: str) -> bool:
+    """A log file of this app, by its current or its old name."""
+    return name.startswith((LOG_FILE, OLD_LOG_FILE))
+
+
 def default_path() -> Path:
     return data_dir() / "settings.json"
 
 
 def log_dir() -> Path:
-    """Where night-light.log, probe.txt and compatibility.txt go: Logs in
+    """Where WinLight.log, probe.txt and compatibility.txt go: Logs in
     the settings folder on Windows (so they move with it), the usual log
     folder elsewhere."""
     if sys.platform == "win32":

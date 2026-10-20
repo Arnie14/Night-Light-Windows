@@ -261,7 +261,8 @@ def add_log_file() -> Path | None:
     folder = log_folder()
     if folder is None:
         return None
-    path = folder / "night-light.log"
+    config.migrate_log_files(folder)
+    path = folder / config.LOG_FILE
     try:
         handler = logging.handlers.RotatingFileHandler(path, maxBytes=1_000_000, backupCount=2, encoding="utf-8")
     except OSError:

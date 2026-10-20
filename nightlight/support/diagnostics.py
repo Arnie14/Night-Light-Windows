@@ -209,7 +209,7 @@ def write_bundle(sources: Sources, folder: Path | None = None) -> tuple[Path, st
                 log.warning("Could not add the compatibility report", exc_info=True)
         if sources.log_dir is not None and sources.log_dir.is_dir():
             for file in sorted(sources.log_dir.iterdir()):
-                if file.is_file() and (file.name.startswith("night-light.log") or file.name == "probe.txt"):
+                if file.is_file() and (config.is_log_file(file.name) or file.name == "probe.txt"):
                     # Scrubbed again: lines from older versions weren't.
                     bundle.writestr(f"logs/{file.name}", scrub(file.read_text(encoding="utf-8", errors="replace")))
     log.info("Diagnostics saved to %s", path)

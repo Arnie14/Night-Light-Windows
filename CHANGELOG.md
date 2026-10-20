@@ -6,7 +6,7 @@ Changes in each version of Winlight, newest first. Version numbers follow the sc
 
 ### Changed
 
-- **Data folder renamed.** Settings, state and logs move from `%LOCALAPPDATA%\night-light` to `%LOCALAPPDATA%\WinLight`. The first start renames the folder, so nothing inside it changes; if an older copy still has it open, the old folder is used and the rename is tried again at the next start. Going back to 0.2.0 or earlier afterwards starts with default settings.
+- **Data folder and log renamed.** Settings, state and logs move from `%LOCALAPPDATA%\night-light` to `%LOCALAPPDATA%\WinLight`, and the log from `night-light.log` to `WinLight.log`, its history included. The first start renames the folder, so nothing inside it changes; if an older copy still has it open, the old folder is used and the rename is tried again at the next start. Going back to 0.2.0 or earlier afterwards starts with default settings.
 - **Report a Problem** saves its zip in `%LOCALAPPDATA%\WinLight\Reports` instead of on the Desktop, which OneDrive's folder backup often syncs to the cloud. Old zips on the Desktop are still deleted after a week.
 - **Windows 11** is the supported system; Windows 10 hasn't been tested.
 - The project's repository is now `github.com/Arnie14/WinLight`.
@@ -15,6 +15,7 @@ Changes in each version of Winlight, newest first. Version numbers follow the sc
 ### Added
 
 - **Windows' limit on warm colors is shown.** Windows refuses gamma ramps far from neutral; when it holds a display warmer than asked, Settings shows the limit under the night temperature ("Built-in display: 3300 K (Windows limit)"). The sleep recommendation explains it, and asks each display for the warmest it accepts.
+- **SHA-256 checksums.** Each release has a `SHA256SUMS.txt` with the checksum of every download, also listed on the release page, to check a download with `Get-FileHash`.
 - **Third-party notices** (`THIRD_PARTY_NOTICES.txt`) ship with the app: Qt and PySide6 (LGPL-3.0), Python, the PyInstaller bootloader, astral, tzdata, platformdirs, WMI and pywin32, with their license texts. Settings > General > About opens them.
 
 ### Fixed

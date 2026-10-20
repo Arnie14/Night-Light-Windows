@@ -69,12 +69,24 @@ jobs:
             python packaging/build.py
           }
 
+      - name: Checksums
+        # build.py writes SHA256SUMS.txt; show it in the run's summary and
+        # pass it to the release notes.
+        id: checksums
+        shell: pwsh
+        run: |
+          $sums = (Get-Content dist/SHA256SUMS.txt -Raw).Trim()
+          "### SHA-256 checksums`n``````text`n$sums`n``````" >> $env:GITHUB_STEP_SUMMARY
+          $delimiter = "SUMS_" + [guid]::NewGuid().ToString("N")
+          "sums<<$delimiter`n$sums`n$delimiter" >> $env:GITHUB_OUTPUT
+
       - uses: actions/upload-artifact@v4
         with:
           name: winlight-windows
           path: |
             dist/Winlight-*-setup.exe
             dist/Winlight-*-portable.zip
+            dist/SHA256SUMS.txt
           if-no-files-found: error
 
       - name: Name the release
@@ -102,6 +114,7 @@ jobs:
           files: |
             dist/Winlight-*-setup.exe
             dist/Winlight-*-portable.zip
+            dist/SHA256SUMS.txt
           prerelease: ${{ steps.release.outputs.prerelease }}
           make_latest: ${{ steps.release.outputs.prerelease == 'false' }}
           generate_release_notes: true
@@ -116,6 +129,13 @@ jobs:
             |---|---|
             | `…-setup.exe` | Installer. No admin rights needed. |
             | `…-portable.zip` | Unzip and run `Winlight.exe`. |
+            | `SHA256SUMS.txt` | The SHA-256 checksum of each file. |
+
+            **Checksums (SHA-256).** In PowerShell, `Get-FileHash <file>` prints a download's hash; it should match (in upper case) the line for that file:
+
+            ```text
+            ${{ steps.checksums.outputs.sums }}
+            ```
 
             Winlight **replaces** Windows Night Light: turn Windows' one off, or colors are tinted twice. External monitors need **DDC/CI** turned on in their on-screen menu.
 

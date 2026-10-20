@@ -243,3 +243,24 @@ def test_settings_and_logs_live_in_the_winlight_folder(monkeypatch, tmp_path):
     if sys.platform == "win32":
         assert config.log_dir() == tmp_path / "WinLight" / "Logs"
     monkeypatch.setattr(config, "_data_dir", None)
+
+
+def test_the_log_files_take_the_new_name_with_their_history(tmp_path):
+    for name, text in (("night-light.log", "today\n"), ("night-light.log.1", "yesterday\n"), ("night-light.log.2", "before\n")):
+        (tmp_path / name).write_text(text)
+    config.migrate_log_files(tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["WinLight.log", "WinLight.log.1", "WinLight.log.2"]
+    assert (tmp_path / "WinLight.log").read_text() == "today\n" and (tmp_path / "WinLight.log.2").read_text() == "before\n"
+
+
+def test_an_existing_winlight_log_is_never_replaced(tmp_path):
+    (tmp_path / "WinLight.log").write_text("new\n")
+    (tmp_path / "night-light.log").write_text("old\n")
+    config.migrate_log_files(tmp_path)
+    assert (tmp_path / "WinLight.log").read_text() == "new\n" and (tmp_path / "night-light.log").exists()
+
+
+def test_log_files_by_either_name():
+    assert config.is_log_file("WinLight.log") and config.is_log_file("WinLight.log.2")
+    assert config.is_log_file("night-light.log.1")  # one an older copy kept open
+    assert not config.is_log_file("probe.txt") and not config.is_log_file("settings.json")

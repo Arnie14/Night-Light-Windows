@@ -58,7 +58,7 @@ python main.py --report
 python main.py --debug
 ```
 
-The log is also written to `%LOCALAPPDATA%\WinLight\Logs\night-light.log`; its path is printed at start. The first start of a version from 0.3.0 renames an existing `%LOCALAPPDATA%\night-light` folder to `WinLight` (the log says "Renamed the settings folder"), keeping its settings.
+The log is also written to `%LOCALAPPDATA%\WinLight\Logs\WinLight.log`; its path is printed at start. The first start of a version from 0.3.0 renames an existing `%LOCALAPPDATA%\night-light` folder to `WinLight` (the log says "Renamed the settings folder"), keeping its settings.
 
 - [ ] A sun or moon icon appears in the tray, sharp at your scaling and readable on a light and a dark taskbar. Repeat the checks below with the icon in the overflow (^) area too.
 - [ ] Hover over the icon: "Winlight", "Night Light: …" with the status, the brightness schedule's level while that schedule is on, and any display night light is paused on.
@@ -197,7 +197,7 @@ Settings > Brightness > **Change brightness by time of day**:
 ## 10. Diagnostics and privacy
 
 - [ ] Tray > Report a Problem…: a zip in `%LOCALAPPDATA%\WinLight\Reports` with summary.txt, settings.json and the logs; the summary on the clipboard; Show File opens the folder with the zip selected; Open GitHub Issues opens the issue page.
-- [ ] Open `night-light.log` and the zip: your Windows user name, computer name and email don't appear anywhere (look for `<user>`, `<computer>`, `<home>` instead), nor your city, coordinates, custom display names or listed apps.
+- [ ] Open `WinLight.log` and the zip: your Windows user name, computer name and email don't appear anywhere (look for `<user>`, `<computer>`, `<home>` instead), nor your city, coordinates, custom display names or listed apps.
 - [ ] If a monitor ever freezes Winlight: end it in Task Manager and start it again. That display shows "Skipped: Winlight stopped while talking to this display last time"; ⟳ tries it again.
 
 ## 11. The installed app

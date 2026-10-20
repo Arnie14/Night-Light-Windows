@@ -194,3 +194,17 @@ def test_cleanup_covers_the_reports_folder_and_where_older_versions_saved(monkey
         os.utime(path, (1_000_000_000, 1_000_000_000))
         old.append(path)
     assert sorted(diagnostics.remove_old_bundles()) == sorted(old)
+
+
+def test_reports_include_the_log_by_its_new_and_old_names(tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "WinLight.log").write_text("now\n")
+    (logs / "night-light.log.1").write_text("from before the rename\n")
+    (logs / "unrelated.txt").write_text("not ours\n")
+    src, controller = sources(tmp_path, logs)
+    path, _ = diagnostics.write_bundle(src, tmp_path / "out")
+    with zipfile.ZipFile(path) as bundle:
+        names = set(bundle.namelist())
+    assert {"logs/WinLight.log", "logs/night-light.log.1"} <= names and "logs/unrelated.txt" not in names
+    controller.shutdown()
