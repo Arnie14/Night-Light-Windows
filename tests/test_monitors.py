@@ -479,7 +479,7 @@ def test_an_hdr_monitor_that_locks_its_brightness_moves_to_sdr_brightness(manage
     ready(monitors)
     monitors.set_brightness("A", 30)
     if refuses:
-        QTest.qWait(100)
+        assert wait_until(lambda: monitors.state("A").failures == 1)
         monitors.set_brightness("A", 31)  # refused twice
     assert wait_until(lambda: monitors.state("A").info.channel == "sdr", 5000)
     assert wait_until(lambda: backend.sdr_sets, 3000)
