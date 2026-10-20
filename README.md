@@ -1,6 +1,6 @@
 # Winlight
 
-Brightness and night light for every display on Windows, by Anurag Jha: external monitors, TVs and the laptop panel, from one tray panel, with a night light schedule. Inspired by KDE Plasma's display controls, for multi-monitor setups where Windows' own controls fall short.
+Brightness and night light for every display on Windows: external monitors, TVs and the laptop panel, all controlled from one tray panel with a night light schedule. Inspired by KDE Plasma's display controls for multi-monitor setups where Windows' own controls fall short.
 
 <p align="center">
   <img src="docs/screenshots/flyout-light.png" alt="The Winlight panel in light mode: a slider per display and Night Light" width="340">
@@ -275,7 +275,7 @@ tests/                   pytest suite (Windows backends run against a fake of th
 
 ## License
 
-Winlight is created and maintained by **Anurag Jha**. It is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE). Source files carry an `SPDX-License-Identifier: GPL-3.0-only` header, and the license is also declared in [pyproject.toml](pyproject.toml).
+Winlight is free software under the **GNU General Public License v3.0**. See [LICENSE](LICENSE). Source files carry an `SPDX-License-Identifier: GPL-3.0-only` header, and the license is also declared in [pyproject.toml](pyproject.toml).
 
 ## Acknowledgements
 

@@ -39,7 +39,7 @@ Both projects combine several APIs, because no single one gives everything:
 - **Some errors mean the monitor is gone.** `ERROR_GRAPHICS_MONITOR_NO_LONGER_EXISTS` and `INVALID_PHYSICAL_MONITOR_HANDLE` mean the monitor was unplugged or the layout changed, so both re-detect.
   - ✅ `MonitorGoneError` triggers re-detection, rate-limited to once per 30 s.
 - **Handles stay open.** Both keep physical monitor handles between calls and destroy them on re-detection. `monitorcontrol` opens them at listing time and frees them on garbage collection.
-  - ✅ Our own backend keeps them, and `close()` frees them.
+  - ✅ Winlight's backend keeps them, and `close()` frees them.
 - **Other brightness codes.** Some monitors only respond to `0x13` (brightness), `0x6B` (backlight level) or even only `0x12` (contrast). Twinkle Tray tries these in that order and allows a per-monitor VCP override.
   - 📋 Add the fallback codes if testing turns up such a monitor.
 

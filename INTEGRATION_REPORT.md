@@ -1,14 +1,14 @@
 # Integration report: 0.1.0 beta 5
 
-Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability, scheduling, identity and UI work, built on a version from before beta 3) into `main` at beta 4 (`863dbe6`). This report records what changed, the design decisions, how it was tested, what is known not to be verified, and what is deferred.
+Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability, scheduling, identity and UI work, built on a version from before beta 3) into `main` at beta 4 (`863dbe6`). This report summarizes the changes, design decisions, test results, unverified areas and deferred work.
 
 ## Summary
 
 - **Base architecture: the reliability branch.** One serialized monitor queue with time limits, stable display identity, each display's desired, commanded and observed state, an idempotent brightness scheduler, daylight-saving-safe times, the gamma crash journal, and the redesigned settings window.
 - **Every beta 3 and 4 feature kept, ported onto that base.** Night light pausing for apps and fullscreen, the command line, diagnostics and privacy scrubbing, crash safe mode, the fullscreen focus guard, laptop brightness keys, the wake report, idle dimming, renaming and hiding displays, and the Windows Night Light notice.
-- **No feature removed.** Nothing conflicted badly enough to need a decision from you; the few deliberate behavior changes are listed below.
+- **No feature removed.** No conflicts required feature removal; deliberate behavior changes are listed below.
 - **Tests:** 567, all passing on Windows 11 (beta 4 had 299, the reliability branch 332). Every test from both sides is kept or ported under the same or an equivalent assertion (see [Tests](#tests)).
-- **Real Windows checks on this machine:** 113 of 113 passed. They drove the real APIs: ctypes display configuration, DDC/CI error paths, WMI, gamma ramps, safe mode, the journal, and winsystem's queries. The app itself was also run end to end through the command line.
+- **Real Windows checks:** 113 of 113 passed. They exercised the real APIs: ctypes display configuration, DDC/CI error paths, WMI, gamma ramps, safe mode, the journal, and winsystem's queries. The app was also run end to end through the command line.
 - **Bugs found and fixed while integrating:** 9, several of them present in beta 4 as well (see [Bugs found while integrating](#bugs-found-while-integrating)).
 - **Release round:** HDR brightness-lock detection with SDR fallback and a reason for every display's control; the CLI compared with Twinkle Tray's and Monitorian's (`--panel` and partial ids added); per-display pausing clearer and fixed for minimized apps; rename/hide end-to-end tests; a watcher audit (3 stuck states fixed); installer notes, author and GitHub link; roomier settings and Windows 11 style buttons (see [Release round](#release-round-010-beta-5)).
 - **Final round:** an option to keep display calibrations; the command line, installer and GUI checked again; 6 more bugs fixed, including a crash that garbage collection on a monitor thread could cause (see [Final round before release](#final-round-before-release)).
@@ -35,7 +35,7 @@ Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability,
 2. **Displays turning off suspend DDC/CI** (`winsystem.classify` now reports `DISPLAY_OFF` and `LOCKED`; beta 4 returned nothing for them). The two classification test rows were changed on purpose.
 3. **The wake report owns the schedule after waking:** 2, 5, 10, 20, 30, 60 and 120 s, stopping early. This replaces the reliability branch's 3–120 s list. A second wake within a minute still resumes the queue (tested).
 4. **Idle dimming of a display in standby is dropped, not retried.** There's no point dimming a sleeping display, and coming back restores with `RESTORE`, which is retried.
-5. **The schedule wins over a remembered level only when a new point begins.** Within a point that was already applied, the level you chose stands across restarts and sleep. Beta 4's "a manual change pauses the schedule until its next step" behaves the same; it's now enforced by the scheduler's saved point id instead of `set_at` times.
+5. **The schedule wins over a remembered level only when a new point begins.** Within a point that was already applied, a manually selected level remains in effect across restarts and sleep. Beta 4's "a manual change pauses the schedule until its next step" behaves the same; it's now enforced by the scheduler's saved point id instead of `set_at` times.
 6. **Sunrise/sunset fallback without a location: 06:00 and 18:00**, as in beta 4. The reliability branch used 07:00 and 19:00.
 7. **Levels set by the schedule are remembered**, so a monitor reconnected in the evening comes back at the evening level.
 8. **A reading that disagrees with a level accepted less than a second ago isn't taken as the truth** (see bug 3). The verification read 1.5 s later decides, so a display that really ignores changes is still reported (tested).
@@ -43,11 +43,11 @@ Branch `beta5-integration` merges `windows-reliability-and-ui` (the reliability,
 
 ## Bugs found while integrating
 
-Found by running the merged code against the real Windows APIs and the real app on this machine; each has a test that failed before the fix.
+Found by running the merged code against the real Windows APIs and app on the Windows test machine; each has a test that failed before the fix.
 
 | # | Bug | In beta 4? | Fix |
 |---|---|---|---|
-| 1 | A gamma ramp Windows reset (lock screen, wake) was adopted as the new base whenever the display list happened to refresh during `verify()` (every 10 s), so night light stayed off until the temperature next changed | Yes | Refreshing the list re-applies tint, dimming and pauses to a display we had set (`windows.py`, 3 tests) |
+| 1 | A gamma ramp Windows reset (lock screen, wake) was adopted as the new base whenever the display list happened to refresh during `verify()` (every 10 s), so night light stayed off until the temperature next changed | Yes | Refreshing the list re-applies tint, dimming and pauses to a display previously tinted by Winlight (`windows.py`, 3 tests) |
 | 2 | A listed or fullscreen app already in front at start didn't pause night light: the first check ran before the controller was connected, and later checks only report changes | Yes | The app hands the watcher's current state to the controller after connecting (test) |
 | 3 | On a WMI laptop panel, a reading right after a write returns the old level (Windows eases the backlight), so after waking the slider showed the stale level, memory and the laptop-key follower saw it, and a false "ignores changes" warning was logged | Not visible: beta 4 had no observed state | `SETTLE_S` (2 tests, plus the real-panel check) |
 | 4 | The compatibility report and `probe.txt` printed the local time zone name ("Eastern Daylight Time"), which tells where the user is; `probe.txt` goes into the diagnostics zip | Yes (probe) | UTC in both |
@@ -68,7 +68,7 @@ The backend investigation also found that WMI calls from the monitor thread are 
   - `test_winevents.py` is ported into `test_winsystem.py`, including the real-window test. It now also sends display on/off and panel-brightness power settings with real payloads.
   - `test_brightness_schedule_steps` and `test_turned_off_neither_restores_nor_saves` keep their assertions, rewritten for points and keys.
 - **Assertions changed on purpose:** the two winsystem classification rows (decision 2), the 06:00/18:00 fallback (decision 6), masked serials in the report, and the watcher's unlock row (decision 1).
-- **Environment fix:** beta 4's `test_start_not_minimized_opens_settings` failed on this machine because it called the real fullscreen check while VS Code was fullscreen. The app fixture now stubs it; the tests that need it busy still set it.
+- **Environment fix:** beta 4's `test_start_not_minimized_opens_settings` failed because it called the real fullscreen check while VS Code was fullscreen. The app fixture now stubs it; tests that need a busy fullscreen state still set one.
 - **New tests for ported behavior** that had none: fades and cutting a fade short, retry, refresh signals, idle source, `note_level`, settling readings, idle hold ordering, legacy keys in the flyout and settings, concurrent safe-mode markers and beta 4's marker, the real-window event test, diagnostics with the compatibility report, and the CLI's "can't be changed now".
 
 ## Verified on real Windows (this machine)
@@ -163,7 +163,7 @@ INFO [monitor-service] nightlight.monitors: setting the brightness of DELL U2720
 
 Thread names tell the UI, the queue and a stuck call apart, every backend call is traced at debug level, and decisions (paused, resumed, deferred and why, backed off from another program) are logged at info level. The notification window's handle and its registrations are logged at debug level, so a report shows whether Windows' messages could arrive at all. Privacy rules still apply: the file is scrubbed, serials are shortened, and no time zone or app names are written.
 
-### Verified on this machine in this pass
+### Verified on the Windows test machine in this pass
 
 - **Sleep and session, in the running app (source and the PyInstaller build):** suspend, resume (both messages merged into one wake), lock, unlock, display change, clock change and sign-out were sent to its real notification window from another process. The screen was also really turned off and on (`SC_MONITORPOWER`).
   - Nothing was sent while asleep.
@@ -179,7 +179,7 @@ Thread names tell the UI, the queue and a stuck call apart, every backend call i
   - `Winlight.exe` and `winlight-cli.exe` worked: list, set, get, exit codes 0/1/2, `--report` and `--diagnostics`.
   - Its log had no errors, and its diagnostics zip no personal details.
 - **Real-API checks:** 113 of 113 again after the changes.
-- **Dependencies:** `pip check` is clean; all code parses as Python 3.12, and no newer standard-library APIs are used. The `wmi` package warns about invalid escape sequences on Python 3.15, which a future Python will reject; CI uses 3.13. The Inno Setup installer was built, installed, upgraded, uninstalled and reinstalled here.
+- **Dependencies:** `pip check` is clean; all code parses as Python 3.12, and no newer standard-library APIs are used. The `wmi` package warns about invalid escape sequences on Python 3.15, which a future Python will reject; CI uses 3.13. The Inno Setup installer was built, installed, upgraded, uninstalled and reinstalled on the Windows test machine.
 - **CI robustness:** the chaos test allows for a stalled thread on a loaded runner. The real-window test skips on CI, with a reason, only if Windows refuses the registration (no desktop session).
 
 ## Final round before release
@@ -230,7 +230,7 @@ There are also 8 backend tests, plus settings and app tests.
 The app's own windows and tooltips no longer name other software; the repository's code comments and docs still credit them. Two places still mentioned other software:
 
 - **The compatibility report's last line**, shown in Settings, listed "KDE Plasma" and "Simulated" from the Linux development backends. It now lists only the Windows ways in.
-- **The tooltips you saw** came from the previously installed beta. The current tooltips and per-display reasons were checked by parsing every string in the code.
+- **Tooltips:** the previously installed beta displayed older text. The current tooltips and per-display reasons were checked by parsing every string in the code.
 
 Log messages still mention f.lux where it helps a bug report.
 
@@ -279,11 +279,11 @@ Tests:
 | Raw VCP codes, contrast, input | `--VCP` | contrast, color preset, input (paid add-on) | left out on purpose |
 | Night light | none | none | `--night-light` |
 
-Raw VCP codes, contrast and input switching stay out on purpose: an arbitrary DDC/CI write can switch a monitor's input, turn it off or reset it, and none of it can be tested here without external monitors. Every command was run against the installed app.
+Raw VCP codes, contrast and input switching stay out on purpose: an arbitrary DDC/CI write can switch a monitor's input, turn it off or reset it, and testing these features requires external monitors. Every command was run against the installed app.
 
 ### Pausing night light per display
 
-The "Pause night light" settings now say exactly what happens: only on the display showing the app, and night light fades back when you switch away, minimize or close it. The panel and tray name the display ("Paused on DELL U2720Q for photoshop.exe"), using custom names, instead of "Paused for photoshop.exe".
+The "Pause night light" settings now say exactly what happens: only on the display showing the app, and night light fades back when the user switches away, minimizes or closes it. The panel and tray name the display ("Paused on DELL U2720Q for photoshop.exe"), using custom names, instead of "Paused for photoshop.exe".
 
 - **Fixed:** a minimized window can stay Windows' foreground window, which kept night light paused. It no longer counts.
 - **Tested on the real machine with Notepad on the list:** in front, paused; minimized, back; restored, paused; closed, back.
@@ -310,8 +310,8 @@ Three ways the app could get stuck for the rest of a session, now handled and te
 
 ### Installer, about, look
 
-- **Installer:** an information page before installing covers the beta disclaimer (no warranty, SmartScreen), what clashes and should be turned off (Windows Night Light, other blue-light filters, GPU color settings, other DDC/CI brightness tools, calibration loaders, Windows' automatic brightness), and recommendations (DDC/CI on, direct connections, TVs, HDR, reporting problems). The publisher is Anurag Jha, with the GitHub link and copyright, also in the program files' version details.
-- **About:** Settings > General has "Created by Anurag Jha" with a View on GitHub button and the exact version ("0.1.0 Beta 5"). `__version__` is now `0.1.0-beta.5`, so diagnostics and reports name the build. The release page names the author.
+- **Installer:** an information page before installing covers the beta disclaimer (no warranty, SmartScreen), what clashes and should be turned off (Windows Night Light, other blue-light filters, GPU color settings, other DDC/CI brightness tools, calibration loaders, Windows' automatic brightness), and recommendations (DDC/CI on, direct connections, TVs, HDR, reporting problems). Publisher information, the GitHub link and copyright also appear in the program files' version details.
+- **About:** Settings > General has a creator credit and a View on GitHub button, along with the exact version ("0.1.0 Beta 5"). `__version__` is now `0.1.0-beta.5`, so diagnostics and reports name the build.
 - **Settings:**
   - Rows, section headings and page titles have more room, close to Windows 11 Settings' spacing.
   - The bottom bar is redrawn in the Windows 11 style: an accent Apply, a quiet bordered Reset, and a text-only Restore defaults on the left. It is painted from the palette in both themes.
@@ -326,7 +326,7 @@ Three ways the app could get stuck for the rest of a session, now handled and te
 - **A real sleep, hibernate and lock cycle.** Sleep, wake, lock, unlock, display change, clock change and sign-out were sent to the running app's real window (source and installed builds), and the screen was really turned off and on; a real sleep or hibernation, and how it looks, weren't.
 - **A real idle cycle**, and video keeping the screen on. Dimming and coming back were run on the real panel with a scripted idle time.
 - **Windows Night Light turned on:** only "off" was read.
-- **CI:** the GitHub Actions run on Python 3.13, and a build made there. Here (Python 3.15) the PyInstaller build and the Inno Setup installer were built and run: install with the PATH option, upgrade over a running copy, uninstall and reinstall.
+- **CI:** the GitHub Actions run used Python 3.13 and produced a build. On the test machine (Python 3.15), the PyInstaller build and Inno Setup installer were built and run, including installation with the PATH option, upgrade over a running copy, uninstall and reinstall.
 - **A time zone change while running:** handled from Windows' clock-change message and a check each minute (tested with a stand-in zone); not tried by changing this PC's zone.
 - **The GUI by eye:** layout at other scalings, keyboard navigation, the settings pages with real displays.
 
@@ -351,13 +351,13 @@ Three ways the app could get stuck for the rest of a session, now handled and te
 | Docs and screenshots match | ✅ README, windows-notes, windows-testing, testing-installer, screenshots |
 | Unverified hardware and CI identified | ✅ See above |
 
-## Next steps (for you)
+## Release steps
 
-`main` is fast-forwarded to this work and tagged `v0.1.0-beta.5` locally. Push both:
+At the time of this report, `main` is fast-forwarded to this work and tagged `v0.1.0-beta.5` locally. To publish, push both:
 
 ```
 git push origin main
 git push origin v0.1.0-beta.5
 ```
 
-The tag starts the release workflow: tests on Python 3.13, the build, and a GitHub release titled "Winlight 0.1.0 Beta 5", marked Latest, with the installer and portable zip. You can also push `beta5-integration` to keep the branch.
+Pushing the tag starts the release workflow: tests on Python 3.13, the build, and a GitHub release titled "Winlight 0.1.0 Beta 5", marked Latest, with the installer and portable zip. Push `beta5-integration` separately to preserve the integration branch.

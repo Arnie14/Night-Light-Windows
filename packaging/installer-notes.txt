@@ -2,7 +2,7 @@
 
 Winlight controls the brightness of every display (external monitors over DDC/CI, the laptop panel through Windows, HDR displays through Windows' SDR brightness, and TVs by dimming their colors) and adds a night light with a schedule.
 
-Winlight is free software by Anurag Jha, released under the GNU General Public License v3.0.
+Winlight is free software released under the GNU General Public License v3.0.
 Source code, releases and the issue tracker: https://github.com/Arnie14/Night-Light-Windows
 
 

@@ -93,7 +93,7 @@ jobs:
           body: |
             <img src="https://raw.githubusercontent.com/Arnie14/Night-Light-Windows/${{ github.ref_name }}/docs/screenshots/flyout-light.png" width="300" alt="Winlight">
 
-            By **Anurag Jha** · free software under the GNU GPL v3.0.
+            Free software under the GNU GPL v3.0.
 
             **Beta** — not code-signed yet. If SmartScreen warns, choose **More info → Run anyway**.
 
