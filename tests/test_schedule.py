@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-only
+import itertools
 from datetime import UTC, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -215,3 +216,140 @@ def test_twilight_never_ends_before_it_begins_far_from_the_place(zone):
         for transition in schedule_around(config, now):
             assert transition.start <= transition.end, (zone, transition)
             assert transition.end - transition.start < timedelta(hours=2), (zone, transition)
+
+
+# --- Never pausing late at night ----------------------------------------------
+
+
+def held(config: NightLightConfig, when: datetime, **changes) -> bool:
+    from dataclasses import replace
+
+    from nightlight.core.schedule import pausing_held
+
+    return pausing_held(replace(config, never_pause_at_night=True, **changes), when)
+
+
+def test_never_pausing_is_off_unless_chosen():
+    from nightlight.core.schedule import pausing_held
+
+    assert not pausing_held(TIMES, at(23))
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "day", "expected"),
+    [
+        (19, 59, 15, False),
+        (20, 0, 15, True),  # the evening transition starts
+        (23, 30, 15, True),
+        (2, 0, 16, True),  # after midnight
+        (5, 59, 16, True),
+        (6, 0, 16, False),  # the morning transition starts
+        (12, 0, 16, False),
+    ],
+)
+def test_from_the_evening_transition_until_the_morning_one(hour, minute, day, expected):
+    assert held(TIMES, at(hour, minute, day), never_pause_from="evening") is expected
+
+
+def test_from_night_waits_for_the_evening_transition_to_end():
+    assert not held(TIMES, at(20, 15), never_pause_from="night")  # still warming
+    assert held(TIMES, at(20, 30), never_pause_from="night")
+    assert not held(TIMES, at(6, 10, 16), never_pause_from="night")
+
+
+@pytest.mark.parametrize(
+    ("time", "hour", "minute", "day", "expected"),
+    [
+        ("22:00", 21, 59, 15, False),
+        ("22:00", 22, 0, 15, True),
+        ("22:00", 3, 0, 16, True),
+        ("22:00", 6, 0, 16, False),
+        ("01:00", 0, 30, 16, False),  # a bedtime after midnight
+        ("01:00", 1, 30, 16, True),
+        ("01:00", 7, 0, 16, False),
+    ],
+)
+def test_from_a_set_time_until_the_morning_transition(time, hour, minute, day, expected):
+    assert held(TIMES, at(hour, minute, day), never_pause_from="time", never_pause_time=time) is expected
+
+
+def test_with_sunset_and_sunrise():
+    kyiv = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=50.45, longitude=30.52)
+    assert held(kyiv, at(23, 30, tz=KYIV_SUMMER), never_pause_from="evening")
+    assert not held(kyiv, at(12, 0, tz=KYIV_SUMMER), never_pause_from="evening")
+
+
+def test_with_night_light_always_on_the_custom_times_stand_for_night():
+    always = NightLightConfig(enabled=True, mode=Mode.ALWAYS, night_start="21:00", day_start="07:00")
+    assert held(always, at(22), never_pause_from="night")
+    assert not held(always, at(15), never_pause_from="night")
+
+
+# --- High latitudes -----------------------------------------------------------
+
+STOCKHOLM = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=59.33, longitude=18.07)
+REYKJAVIK = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=64.15, longitude=-21.94)
+
+
+def zone(name):
+    return ZoneInfo(name)
+
+
+def evening_and_morning(config, day, tz):
+    """The evening that starts on `day` (local) and the morning after it."""
+    transitions = schedule_around(config, datetime(2026, day[0], day[1], 15, tzinfo=tz), tz)
+    evening = next(t for t in transitions if t.to_night and t.start > datetime(2026, day[0], day[1], 12, tzinfo=tz))
+    morning = next(t for t in transitions if not t.to_night and t.start >= evening.start)
+    return evening, morning
+
+
+@pytest.mark.parametrize(("config", "tz", "day", "sunset"), [
+    (STOCKHOLM, "Europe/Stockholm", (6, 15), "22:05"),  # dusk past midnight in other years: this day fell back to 18:00
+    (NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=60.17, longitude=24.94), "Europe/Helsinki", (6, 2), "22:31"),
+])
+def test_summer_days_whose_dusk_nears_midnight_keep_their_real_times(config, tz, day, sunset):
+    evening, morning = evening_and_morning(config, day, zone(tz))
+    assert f"{evening.start:%H:%M}" == sunset
+    assert evening.end < morning.start  # a short night between
+
+
+def test_a_white_night_turns_at_solar_midnight():
+    """Reykjavik in June: the sun sets after midnight and never gets 6
+    degrees down, so there is no civil dusk. It used to fall back to
+    18:00 and 06:00; now the darkest moment ends the evening and starts
+    the morning (as LightBulb takes the closest point)."""
+    evening, morning = evening_and_morning(REYKJAVIK, (6, 20), zone("Atlantic/Reykjavik"))
+    assert f"{evening.start:%m-%d %H:%M}" == "06-21 00:03"  # sunset, just after midnight
+    assert evening.end == morning.start and f"{evening.end:%H:%M}" == "01:29"  # solar midnight
+    assert f"{morning.end:%H:%M}" == "02:55"  # sunrise
+    darkest = compute_state(REYKJAVIK, evening.end, zone=zone("Atlantic/Reykjavik"))
+    assert darkest.night_factor > 0.99
+
+
+def test_a_long_chosen_transition_stops_at_solar_midnight():
+    night = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=64.15, longitude=-21.94, solar_transition_minutes=120)
+    evening, morning = evening_and_morning(night, (6, 20), zone("Atlantic/Reykjavik"))
+    assert evening.end == morning.start  # 2 h each way would overlap: they meet at the darkest moment
+
+
+@pytest.mark.parametrize(("config", "tz"), [(STOCKHOLM, "Europe/Stockholm"), (REYKJAVIK, "Atlantic/Reykjavik")])
+def test_every_day_of_the_year_has_its_own_sun_times_without_overlaps_or_jumps(config, tz):
+    tz = zone(tz)
+    for offset in range(0, 365, 3):
+        day = datetime(2026, 1, 1, 12, tzinfo=tz) + timedelta(days=offset)
+        transitions = schedule_around(config, day, tz)
+        assert {f"{t.start:%H:%M}" for t in transitions} != {"06:00", "18:00"}, f"fell back on {day:%m-%d}"
+        for earlier, later in itertools.pairwise(transitions):
+            assert earlier.to_night != later.to_night and earlier.end <= later.start, f"{day:%m-%d}"
+    previous = None
+    for minutes in range(0, 3 * 24 * 60, 10):  # midsummer, every 10 minutes: no jumps
+        factor = compute_state(config, datetime(2026, 6, 20, tzinfo=tz) + timedelta(minutes=minutes), zone=tz).night_factor
+        assert previous is None or abs(factor - previous) < 0.25
+        previous = factor
+
+
+def test_polar_night_falls_back_like_polar_day():
+    tromso = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=69.65, longitude=18.96)
+    tz = zone("Europe/Oslo")
+    transitions = schedule_around(tromso, datetime(2026, 12, 21, 12, tzinfo=tz), tz)
+    assert {f"{t.start:%H:%M}" for t in transitions} == {"06:00", "18:00"}

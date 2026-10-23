@@ -27,6 +27,7 @@ Reliability rules, learnt from Monitorian's and Twinkle Tray's bug reports:
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import logging
 import sys
@@ -35,9 +36,11 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
+from datetime import date
 from pathlib import Path
 from typing import Protocol
 
+from nightlight.core import icc
 from nightlight.core.colortemp import (
     NEUTRAL_KELVIN,
     SOFTWARE_DIM_MIN,
@@ -61,6 +64,7 @@ from nightlight.hardware.brightness import (
     with_unique_keys,
 )
 from nightlight.hardware.calls import CallTimeout, start_side_call
+from nightlight.hardware.gamma import GammaBusy
 from nightlight.system.files import write_atomic
 from nightlight.system.safe_mode import SKIPPED_REASON, SKIPPED_SHORT, SafeMode
 
@@ -86,6 +90,27 @@ CONTEST_CHANGES = 3
 CONTEST_WINDOW_S = 30.0
 CONTEST_BACKOFF_S = 120.0
 CONTEST_BACKOFF_MAX_S = 1800.0
+# After waking, unlocking or a display turning on, Windows may reset the
+# ramps several times as the desktop comes back; those resets aren't
+# another program fighting over them.
+SETTLING_S = 15.0
+# Where a display's calibration came from, and how that reads in Settings,
+# the command line and reports.
+SCREEN, KEPT, PROFILE = "screen", "kept", "profile"
+CALIBRATION_TEXT = {
+    SCREEN: "In use",
+    KEPT: "Put back by Winlight after Windows dropped it",
+    PROFILE: "Loaded from its color profile",
+}
+CALIBRATION_NONE = "None detected"
+CALIBRATION_REMEMBERED = "None now; Winlight remembers one it can put back"
+CALIBRATION_HDR = "Not used while HDR is on"
+# Each ramp set differs from the last in its top entry by up to this much
+# (of 65535; invisible, and within RAMP_TOLERANCE). Some drivers ignore a
+# ramp that is the same as the last one they were sent, even though the
+# screen's real ramp was reset meanwhile (by sleep, say): LightBulb's fix
+# (github.com/Tyrrrz/LightBulb, DeviceContext.SetGamma).
+NUDGE_STEPS = 5
 
 # Short reasons, shown under a disabled slider, and the longer advice that
 # goes with them (tooltip and compatibility report).
@@ -143,6 +168,8 @@ class DisplayApi(Protocol):
     def set_sdr_white_level(self, target: win32.DisplayTarget, nits: float) -> bool: ...
     def get_gamma_ramp(self, gdi_name: str) -> win32.GammaRamp | None: ...
     def set_gamma_ramp(self, gdi_name: str, ramp: win32.GammaRamp) -> bool: ...
+    def display_profile(self, gdi_name: str) -> str | None: ...
+    def windows_loads_calibrations(self) -> bool: ...
 
 
 class _Control:
@@ -896,6 +923,18 @@ class GammaJournal:
             self._calibrations[key] = ramp
             self.save()
 
+    def forget_calibration(self, key: str) -> None:
+        if self._calibrations.pop(key, None) is not None:
+            self.save()
+
+    def forget_calibrations(self) -> int:
+        """Forget every calibration remembered; how many there were."""
+        count = len(self._calibrations)
+        if count:
+            self._calibrations.clear()
+            self.save()
+        return count
+
     def entry(self, key: str) -> dict | None:
         entry = self._entries.get(key)
         return entry if entry and entry.get("dirty") else None
@@ -945,6 +984,13 @@ class GammaJournal:
         return None
 
 
+def nudged(ramp: win32.GammaRamp, offset: int) -> win32.GammaRamp:
+    """`ramp` with each channel's top entry lowered by `offset` (see NUDGE_STEPS)."""
+    if not offset:
+        return ramp
+    return [[*channel[:-1], max(channel[-2] if len(channel) > 1 else 0, channel[-1] - offset)] for channel in ramp]
+
+
 def _valid_ramp(value: object) -> bool:
     """A ramp read back from the journal file: three channels of 16-bit values."""
     return (isinstance(value, list) and len(value) == 3 and all(
@@ -958,6 +1004,11 @@ class _GammaDisplay:
     hdr: bool = False
     key: str = ""  # identity, for the journal
     base: win32.GammaRamp | None = None  # the ramp to tint, None for identity
+    # Where the base came from: SCREEN (Windows had it on screen), KEPT (put
+    # back from memory after Windows dropped it) or PROFILE (reloaded from
+    # the color profile); "" without one.
+    calibration: str = ""
+    restored: list[date] = field(default_factory=list)  # days it was put back, one entry each time
     last_set: win32.GammaRamp | None = None
     warmest: int = 0  # warmest temperature Windows accepted here, once it refused one
     dim: int = 100  # software dimming, percent (100: none)
@@ -973,6 +1024,61 @@ class _GammaDisplay:
     @property
     def effective_dim(self) -> int:
         return min(self.dim, self.idle_dim)
+
+
+# How long a gamma change waits for another thread's; once a wait failed,
+# only this long until the lock is free again, so the UI doesn't stall at
+# every night light tick and check meanwhile.
+LOCK_WAIT_S = 2.0
+LOCK_WAIT_STUCK_S = 0.05
+
+
+class _GammaLock:
+    """The gamma backend's lock, waited for only so long.
+
+    Software dimming changes the ramp on the monitor thread, under this
+    lock. If the driver hangs in that call, its time limit (calls.py)
+    abandons it, but the abandoned thread still holds the lock: the UI
+    thread's next change would wait forever, freezing the app. Waiting at
+    most LOCK_WAIT_S and raising GammaBusy keeps it responsive; night light
+    and dimming are on hold until the stuck call returns."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._stuck = False
+
+    def __enter__(self) -> _GammaLock:
+        if not self._lock.acquire(timeout=LOCK_WAIT_STUCK_S if self._stuck else LOCK_WAIT_S):
+            if not self._stuck:
+                self._stuck = True
+                log.warning("Changing a gamma ramp is stuck, probably in the display driver; night light and software "
+                            "dimming are on hold until it returns")
+            raise GammaBusy
+        if self._stuck:
+            self._stuck = False
+            log.info("The stuck gamma ramp change returned; night light and dimming carry on")
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self._lock.release()
+
+
+def _skipped_while_stuck(default):
+    """For changes the next tick or check repeats anyway, and reads with a
+    harmless answer: while the lock is stuck (see _GammaLock), skip and give
+    `default` (called, if it is a type) instead of raising."""
+
+    def decorate(method):
+        @functools.wraps(method)
+        def guarded(self, *args, **kwargs):
+            try:
+                return method(self, *args, **kwargs)
+            except GammaBusy:
+                return default() if callable(default) else default
+
+        return guarded
+
+    return decorate
 
 
 class WindowsGammaBackend:
@@ -1001,7 +1107,9 @@ class WindowsGammaBackend:
         self._warned: set[tuple[str, str]] = set()
         self._kelvin = NEUTRAL_KELVIN
         self._keep_calibration = False
-        self._lock = threading.RLock()
+        self._nudge = 0
+        self._settling_until = 0.0
+        self._lock = _GammaLock()
 
     def set_journal(self, path: Path) -> None:
         """Where to keep the crash-recovery journal; call before the first change."""
@@ -1009,6 +1117,7 @@ class WindowsGammaBackend:
             self._journal = GammaJournal(path)
             self._listed_at = None  # look at the displays again with it
 
+    @_skipped_while_stuck(None)
     def set_keep_calibration(self, enabled: bool) -> None:
         """Put each display's calibration back when Windows drops it (resets its
         ramp to a flat one, e.g. when the screen turns off and on), as
@@ -1024,11 +1133,13 @@ class WindowsGammaBackend:
                     self._isolated(display, self._apply)
 
     @property
+    @_skipped_while_stuck(False)
     def dimmed(self) -> bool:
         """Some display is dimmed, so its ramp must be kept even while night light is off."""
         with self._lock:
             return any(d.effective_dim < 100 for d in self._displays.values())
 
+    @_skipped_while_stuck(None)
     def set_idle_dim(self, levels: dict[str, int]) -> None:
         """Dim these displays (GDI name -> percent) for idle, undim the rest.
         Software only: no DDC/CI writes. HDR displays are skipped, since
@@ -1041,6 +1152,7 @@ class WindowsGammaBackend:
                     display.warmest = 0  # the room for tinting depends on the dimming
                     self._isolated(display, self._apply)
 
+    @_skipped_while_stuck(None)
     def set_override(self, gdi_name: str, kelvin: int | None) -> None:
         """Give one display its own temperature (None: follow night light), used
         to pause night light on the display showing an exempt app."""
@@ -1051,11 +1163,23 @@ class WindowsGammaBackend:
             display.kelvin_override = kelvin
             self._isolated(display, self._apply)
 
-    def verify(self) -> bool:
+    @_skipped_while_stuck(False)
+    def reapply(self) -> bool:
+        """After waking, unlocking or a display turning on: set every ramp of
+        ours again, even where it reads back right. A driver can report the
+        ramp it was last sent while the screen shows a reset one. Resets in
+        the next SETTLING_S are Windows', not a contest. True if any was set."""
+        with self._lock:
+            self._settling_until = time.monotonic() + SETTLING_S
+        return self.verify(force=True)
+
+    @_skipped_while_stuck(False)
+    def verify(self, force: bool = False) -> bool:
         """Put our ramps back where something reset them: Windows does on the
         lock screen, after sleep and on display changes, often before any event
         arrives. Cheap (one GetDeviceGammaRamp per display), so it can run every
-        second or two, and right after those events. True if any was re-applied."""
+        second or two, and right after those events. `force` sets them again
+        even where they read back right (see reapply). True if any was re-applied."""
         with self._lock:
             self._reapplied = False
             displays = self._current_displays()
@@ -1069,13 +1193,18 @@ class WindowsGammaBackend:
                         self._isolated(display, self._apply)
                         reapplied = True
                     continue
-                if display.hdr or display.last_set is None:
+                if display.hdr or (display.last_set is None and not force):
                     continue
                 try:
                     current = self._api.get_gamma_ramp(display.name)
                 except OSError:
                     continue
-                if current is None or ramps_match(current, display.last_set):
+                if current is None or (not force and ramps_match(current, display.last_set)):
+                    continue
+                if force and not display.contested and ramps_match(current, display.last_set or current):
+                    if self._active(display):
+                        self._isolated(display, self._apply)  # the same ramp, nudged: sent to the driver again
+                        reapplied = True
                     continue
                 log.debug("The gamma ramp of %s was reset; applying it again", display.name)
                 self._isolated(display, self._sync_base)
@@ -1087,15 +1216,115 @@ class WindowsGammaBackend:
                 reapplied = reapplied or (active and not display.contested)
         return reapplied
 
+    @_skipped_while_stuck(dict)
+    def calibration_status(self) -> dict[str, str]:
+        """GDI name -> how its color calibration stands, in a few words."""
+        with self._lock:
+            status = {}
+            for display in self._current_displays():
+                if display.hdr:
+                    text = CALIBRATION_HDR
+                elif display.base is not None:
+                    text = CALIBRATION_TEXT.get(display.calibration, CALIBRATION_TEXT[SCREEN])
+                    if times := display.restored.count(date.today()):
+                        text += f" ({'once' if times == 1 else f'{times} times'} today)" if display.calibration == KEPT else \
+                            f"; put back {'once' if times == 1 else f'{times} times'} today"
+                elif self._journal.calibration(display.key or display.name) is not None:
+                    text = CALIBRATION_REMEMBERED
+                else:
+                    text = CALIBRATION_NONE
+                status[display.name] = text
+            return status
+
+    @_skipped_while_stuck(list)
+    def calibrated(self) -> list[str]:
+        """GDI names of the displays whose own calibration is on screen now."""
+        with self._lock:
+            return [d.name for d in self._current_displays() if not d.hdr and d.base is not None and d.calibration in (SCREEN, PROFILE)]
+
+    def reload_calibrations(self) -> dict[str, str]:
+        """Read each display's calibration from its color profile again and
+        put it on screen (under night light), as Windows does at sign-in and
+        calibration loaders do; a profile without one means none. GDI name
+        -> what happened. Left alone while "Use Windows display calibration"
+        is off: another program loads calibrations then."""
+        try:
+            windows_loads = self._api.windows_loads_calibrations()
+        except OSError:
+            windows_loads = True
+        results = {}
+        with self._lock:
+            for display in self._current_displays():
+                if display.hdr:
+                    results[display.name] = "skipped: HDR is on, and Windows ignores calibrations then"
+                elif not windows_loads:
+                    results[display.name] = ("left alone: \"Use Windows display calibration\" is off, so another program "
+                                             "loads calibrations")
+                else:
+                    results[display.name] = self._reload_calibration(display)
+                    log.info("Reloading the calibration of %s: %s", display.name, results[display.name])
+            self._journal.flush()
+        return results
+
+    def _reload_calibration(self, display: _GammaDisplay) -> str:
+        try:
+            path = self._api.display_profile(display.name)
+            if path is None:
+                return "Windows didn't say which color profile it uses"
+            ramp = icc.calibration_ramp(Path(path).read_bytes(), win32.RAMP_SIZE)
+        except icc.UnreadableCalibration as exc:
+            log.info("The profile of %s has a calibration Winlight can't read: %s", display.name, exc)
+            return f"its profile ({Path(path).name}) has a calibration in a form Winlight can't read"
+        except (OSError, ValueError) as exc:
+            log.info("Could not read the color profile of %s: %s", display.name, exc)
+            return "its color profile couldn't be read"
+        key = display.key or display.name
+        name = Path(path).name
+        if ramp is None or ramps_match(ramp, identity_ramp(win32.RAMP_SIZE), tolerance=0):
+            display.base, display.calibration = None, ""
+            self._journal.forget_calibration(key)
+            outcome = f"none: its profile ({name}) holds no calibration"
+        else:
+            display.base, display.calibration = ramp, PROFILE
+            self._journal.remember_calibration(key, ramp)
+            outcome = f"loaded from {name}"
+        display.warmest = display.dim_floor = 0  # what Windows accepts depends on the base
+        display.contested = False
+        if self._active(display):
+            self._isolated(display, self._apply)
+        else:
+            self._set(display, display.base or identity_ramp(win32.RAMP_SIZE))
+        return outcome
+
+    def forget_calibrations(self) -> int:
+        """Forget the calibrations remembered for putting back, so one removed
+        in Windows is no longer restored. Displays showing one put back from
+        memory get their ramp without it. How many were forgotten."""
+        with self._lock:
+            count = self._journal.forget_calibrations()
+            for display in self._current_displays():
+                if display.calibration == KEPT:
+                    display.base, display.calibration = None, ""
+                    if self._active(display):
+                        self._isolated(display, self._apply)
+                    elif display.last_set is not None:
+                        self._set(display, identity_ramp(win32.RAMP_SIZE))
+            if count:
+                log.info("Forgot %d remembered display calibration(s)", count)
+            return count
+
+    @_skipped_while_stuck(dict)
     def warmest_accepted(self) -> dict[str, int]:
         """GDI name -> the warmest temperature Windows has accepted, where it refused warmer."""
         with self._lock:
             return {d.name: d.warmest for d in self._displays.values() if d.warmest}
 
+    @_skipped_while_stuck(set)
     def hdr_displays(self) -> set[str]:
         with self._lock:
             return {d.name for d in self._displays.values() if d.hdr}
 
+    @_skipped_while_stuck(None)
     def displays_changed(self) -> None:
         """Displays were added, removed or reconfigured: look at them again.
         Windows resets gamma ramps then, so dimmed displays are dimmed again."""
@@ -1108,12 +1337,14 @@ class WindowsGammaBackend:
                 if display.effective_dim < 100 or display.kelvin_override is not None or self._keeps(display):
                     self._isolated(display, self._apply)
 
+    @_skipped_while_stuck(None)
     def apply(self, kelvin: int) -> None:
         with self._lock:
             self._kelvin = kelvin
             for display in self._current_displays():
                 self._isolated(display, self._apply)
 
+    @_skipped_while_stuck(None)
     def reset(self) -> None:
         """Night light off: neutral colors, keeping any dimming. Displays the
         app hasn't changed are left alone, so other color tools aren't fought."""
@@ -1127,6 +1358,7 @@ class WindowsGammaBackend:
                     if display.leftover or not ramps_match(display.last_set, base):
                         self._set(display, base)
 
+    @_skipped_while_stuck(None)
     def release(self) -> None:
         """Quitting: give every display back its own ramp, undimmed."""
         with self._lock:
@@ -1175,6 +1407,7 @@ class WindowsGammaBackend:
             self._apply(display)
             return max(display.dim, display.dim_floor)
 
+    @_skipped_while_stuck(dict)
     def idle_dimming(self) -> dict[str, int]:
         """GDI name -> idle dimming level, where dimmed (for diagnostics)."""
         with self._lock:
@@ -1227,7 +1460,13 @@ class WindowsGammaBackend:
 
     def _try(self, display: _GammaDisplay, kelvin: int, dim: int) -> bool:
         base = display.base if dim >= 100 else dimmed_ramp(dim, win32.RAMP_SIZE, display.base)
-        return self._set(display, gamma_ramp(whitepoint(kelvin), win32.RAMP_SIZE, base))
+        ramp = gamma_ramp(whitepoint(kelvin), win32.RAMP_SIZE, base)
+        if kelvin < NEUTRAL_KELVIN or dim < 100:
+            # Tinted or dimmed: nudged (see NUDGE_STEPS). The display's own
+            # ramp, untinted, is always set exactly as it was.
+            self._nudge = (self._nudge + 1) % NUDGE_STEPS
+            ramp = nudged(ramp, self._nudge)
+        return self._set(display, ramp)
 
     def _set(self, display: _GammaDisplay, ramp: win32.GammaRamp) -> bool:
         try:
@@ -1307,9 +1546,15 @@ class WindowsGammaBackend:
             return False
         if current is None or not ramps_match(current, identity_ramp(win32.RAMP_SIZE)):
             return False
-        display.base = calibration
+        display.base, display.calibration = calibration, KEPT
+        self._count_restored(display)
         log.info("%s had lost its color calibration; putting it back", display.name)
         return True
+
+    @staticmethod
+    def _count_restored(display: _GammaDisplay) -> None:
+        today = date.today()
+        display.restored = [day for day in display.restored if day == today] + [today]
 
     def _keeps(self, display: _GammaDisplay) -> bool:
         """Whether this display's calibration is being kept on screen."""
@@ -1337,6 +1582,7 @@ class WindowsGammaBackend:
         recovered = self._journal.recognises(key, current)
         if recovered is not None or not plausible_base(current):
             display.base = None if recovered is None or ramps_match(recovered, identity_ramp(win32.RAMP_SIZE)) else recovered
+            display.calibration = SCREEN if display.base is not None else ""
             display.leftover = True
             if recovered is not None:
                 log.warning("%s still had the tint Winlight left when it last stopped unexpectedly; restoring the ramp it had before", display.name)
@@ -1354,12 +1600,13 @@ class WindowsGammaBackend:
                 if calibration is not None:
                     # Windows dropped it (the screen turned off and on, waking):
                     # it stays the base, and is put back.
-                    display.base = calibration
+                    display.base, display.calibration = calibration, KEPT
+                    self._count_restored(display)
                     log.info("Windows dropped the color calibration of %s; putting it back", display.name)
                 else:
-                    display.base = None
+                    display.base, display.calibration = None, ""
             else:
-                display.base = current
+                display.base, display.calibration = current, SCREEN
                 self._journal.remember_calibration(key, current)
                 log.info("Keeping the existing gamma ramp of %s (its calibration) as the base for night light", display.name)
 
@@ -1367,6 +1614,9 @@ class WindowsGammaBackend:
         """Our ramp was replaced: once is Windows (a reset) or a tool starting;
         again and again is another program fighting over it (see CONTEST_CHANGES)."""
         now = time.monotonic()
+        if now < self._settling_until:
+            log.debug("The gamma ramp of %s was reset again while the desktop came back", display.name)
+            return
         display.foreign = [t for t in display.foreign if now - t < CONTEST_WINDOW_S] + [now]
         if display.contested:
             display.contested_until = now + display.backoff  # still at it: keep away

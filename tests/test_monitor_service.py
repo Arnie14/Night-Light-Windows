@@ -586,3 +586,25 @@ def test_the_worker_survives_an_unexpected_error(monkeypatch):
     service.close()
     thread.join(2)
     assert backend.calls and backend.calls[0][0] == "list" and not thread.is_alive()
+
+
+def test_events_said_on_the_callers_thread_come_after_the_lock_is_let_go():
+    """On the UI thread a superseded write's event runs its slots at once;
+    they take other locks (the gamma backend's), so not inside this one."""
+    import threading
+
+    backend = ScriptedBackend([("A", True)])
+    held_during_event = []
+
+    def emit(event):
+        # Another thread can take the lock only if this one let it go.
+        result = []
+        probe = threading.Thread(target=lambda: result.append(service._cond.acquire(timeout=0.5)) or (result[0] and service._cond.release()))
+        probe.start()
+        probe.join()
+        held_during_event.append(not result[0])
+
+    service = MonitorService(backend, emit, InlineRunner(), clock=FakeClock())
+    service.request_write(Write("A", 80))
+    service.request_write(Write("A", 30, RESTORE, require_awake=True))  # superseded: an event, said on this thread
+    assert held_during_event == [False]

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
-    QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -27,10 +27,12 @@ from nightlight.ui import icons
 from nightlight.ui.night_light_text import (
     brightness_status,
     build_override_menu,
+    can_suspend,
     display_label,
     is_night_light_on,
     night_light_status,
     paused_text,
+    toggle_suspended,
 )
 from nightlight.ui.placement import flyout_position
 from nightlight.ui.widgets import HEADING_WEIGHT, GlyphButton, MonitorBrightness, SecondaryLabel, Separator, WindowsNightLightNotice, set_font
@@ -101,7 +103,10 @@ class Flyout(QFrame):
         self._night_text.setWordWrap(True)
         night_labels.addWidget(self._night_text)
         self._override_menu = QMenu(self)
-        self._toggle = QPushButton()
+        # KDE's Suspend button: a click suspends until resumed; its arrow has
+        # the timed choices. "Resume" or "Turn Off" while an override lasts.
+        self._toggle = QToolButton()
+        self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self._toggle.clicked.connect(self._on_toggle_clicked)
         configure = GlyphButton(icons.gear_glyph, "Settings")
         configure.clicked.connect(self.configureRequested)
@@ -237,8 +242,22 @@ class Flyout(QFrame):
         self._night_text.setText(night_light_status(controller) + (f"\n{paused}" if paused else ""))
         if self._override_menu.isVisible():
             return  # don't rebuild the menu under the user's cursor
-        self._toggle.setText(build_override_menu(controller, self._override_menu))
-        self._toggle.setMenu(None if self._override_menu.isEmpty() else self._override_menu)
+        label = build_override_menu(controller, self._override_menu)
+        Mode = QToolButton.ToolButtonPopupMode
+        if controller.state.override is not None:  # "Resume" or "Turn Off": a click ends it
+            self._toggle.setText(label)
+            self._toggle.setToolTip("")
+            self._toggle.setMenu(None)
+        elif controller.config.enabled:
+            self._toggle.setText("Suspend")
+            self._toggle.setToolTip("Night light stays off until you resume it. The arrow has timed choices")
+            self._toggle.setMenu(self._override_menu)
+            self._toggle.setPopupMode(Mode.MenuButtonPopup)
+        else:  # night light is off: only "Activate ▸"
+            self._toggle.setText(label)
+            self._toggle.setToolTip("")
+            self._toggle.setMenu(self._override_menu)
+            self._toggle.setPopupMode(Mode.InstantPopup)
 
     def set_scheduler(self, scheduler) -> None:
         self._scheduler = scheduler
@@ -258,5 +277,8 @@ class Flyout(QFrame):
         return display_label(gdi_name)
 
     def _on_toggle_clicked(self) -> None:
-        # Only reached without a menu, i.e. while an override is active.
-        self._controller.clear_override()
+        controller = self._controller
+        if controller.state.override is not None:
+            controller.clear_override()  # "Resume" or "Turn Off"
+        elif can_suspend(controller):
+            toggle_suspended(controller)  # "Suspend": until resumed

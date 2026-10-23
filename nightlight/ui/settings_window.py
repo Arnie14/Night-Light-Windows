@@ -55,9 +55,11 @@ from nightlight.core import locations
 from nightlight.core.brightness_schedule import describe as describe_schedule
 from nightlight.core.colortemp import limited_displays
 from nightlight.core.schedule import OverrideKind
+from nightlight.hardware.gamma import GammaBusy
 from nightlight.ui import icons
 from nightlight.ui import theme as theme_module
 from nightlight.ui.night_light_text import is_night_light_on, night_light_status, schedule_description
+from nightlight.ui.preview_notice import PreviewNotice
 from nightlight.ui.schedule_editor import ScheduleEditor
 from nightlight.ui.settings_parts import ActionBar, Card, NavButton, PageTitle, SectionLabel, SettingRow, StatusBadge, ToggleSwitch
 from nightlight.ui.settings_widgets import AppList, DisplayList
@@ -105,6 +107,13 @@ SLEEP_ADVICE = (
         "hours before bed. Windows may limit how warm a display can go; Winlight then uses the warmest setting each display "
     "accepts. This is general guidance, not medical advice"
 )
+GAMMA_BUSY = "A change to the display colors is stuck, probably in the display driver. Try again in a moment."
+# When "never pause late at night" starts (config.NEVER_PAUSE_FROM).
+NEVER_PAUSE_CHOICES = {
+    "evening": "When night light starts warming",
+    "night": "When night light is fully on",
+    "time": "At a set time, such as bedtime",
+}
 NIGHT_DESCRIPTION = "Lower values are warmer. Drag to preview"
 
 
@@ -124,6 +133,8 @@ class SettingsWindow(QWidget):
         report_problem: Callable[[], None] | None = None,
         warmest: Callable[[], dict[str, int]] | None = None,
         display_name: Callable[[str], str] | None = None,
+        reload_calibrations: Callable[[], dict[str, str]] | None = None,
+        forget_calibrations: Callable[[], int] | None = None,
     ) -> None:
         super().__init__()
         self._controller = controller
@@ -137,6 +148,9 @@ class SettingsWindow(QWidget):
         self._report = report
         self._running_apps = running_apps
         self._report_problem = report_problem
+        self._reload_calibrations = reload_calibrations
+        self._preview_notice: PreviewNotice | None = None  # made when a slider is first held
+        self._forget_calibrations = forget_calibrations
         self._display_prefs = config.displays
         self._saved = replace(config, night_light=controller.config)
         self._mode_while_off = self._saved.night_light.mode
@@ -147,6 +161,8 @@ class SettingsWindow(QWidget):
         self._stack = QStackedWidget()
         for page in (self._night_light_page(), self._brightness_page(), self._displays_page(), self._general_page()):
             self._stack.addWidget(_scrolling(page))
+        # Each page opens at its top, rather than where it was last left.
+        self._stack.currentChanged.connect(self._scroll_to_top)
 
         # Shown while a temporary override from the tray/flyout is in effect.
         self.banner = Card()
@@ -229,6 +245,9 @@ class SettingsWindow(QWidget):
             self.exempt_fullscreen.toggled,
             self.pause_for_apps.toggled,
             self.exempt_apps.changed,
+            self.never_pause.toggled,
+            self.never_pause_from.currentIndexChanged,
+            self.never_pause_time.timeChanged,
             self.idle_exempt_apps.changed,
             self.displays.changed,
             self.keep_calibration.toggled,
@@ -358,6 +377,21 @@ class SettingsWindow(QWidget):
         self.pause_for_apps = ToggleSwitch("Pause night light for selected apps")
         self.pause_automatically = ToggleSwitch("Pause night light automatically for video, calls, games and color work")
         self.exempt_apps = AppList(self._running_apps)
+        self.never_pause = ToggleSwitch("Never pause night light late at night")
+        self.never_pause_from = QComboBox()
+        for key, label in NEVER_PAUSE_CHOICES.items():
+            self.never_pause_from.addItem(label, key)
+        self.never_pause_from.setFixedWidth(WIDE_FIELD)
+        self.never_pause_time = QTimeEdit(displayFormat="HH:mm")
+        self.never_pause_time.setFixedWidth(NARROW_FIELD)
+        self._never_pause_when = QWidget()
+        when = QHBoxLayout(self._never_pause_when)
+        when.setContentsMargins(0, 0, 0, 0)
+        when.setSpacing(8)
+        when.addWidget(SecondaryLabel("Starting"))
+        when.addWidget(self.never_pause_from)
+        when.addWidget(self.never_pause_time)
+        when.addStretch(1)
 
         # Brightness
         self.schedule = ScheduleEditor()
@@ -450,9 +484,13 @@ class SettingsWindow(QWidget):
                              self.pause_automatically))
         pause.add(SettingRow("Selected apps", "Pauses while a listed app is in front, fullscreen or not. Other apps are "
                              "not affected", self.pause_for_apps, below=self.exempt_apps))
+        pause.add(SettingRow("Never pause late at night", "Keeps night light on for every app, whatever the options above, "
+                             "from this point until the morning transition starts, so a late video or game doesn't undo it",
+                             self.never_pause, below=self._never_pause_when))
         layout.addWidget(pause)
-        pause_hint = SecondaryLabel("These options work independently. Night light pauses only on the display showing the app, "
-                                    "and returns when you switch away, minimize or close it.", scale=0.9)
+        pause_hint = SecondaryLabel("The first three options work independently, and the last one overrides them late at night. "
+                                    "Night light pauses only on the display showing the app, and returns when you switch away, "
+                                    "minimize or close it.", scale=0.9)
         pause_hint.setWordWrap(True)
         pause_hint.setContentsMargins(4, 8, 4, 0)
         layout.addWidget(pause_hint)
@@ -515,7 +553,24 @@ class SettingsWindow(QWidget):
                                    "Restores a display's calibration when Windows resets it, for example after the screen "
                                    "turns off",
                                    self.keep_calibration))
+        self.reload_calibration = QPushButton("Reload")
+        self.reload_calibration.clicked.connect(self._reload)
+        self.reload_calibration.setEnabled(self._reload_calibrations is not None)
+        calibration.add(SettingRow("Reload calibrations", "Reads each display's calibration from its color profile in Windows "
+                                   "again and puts it on screen, as Windows does when you sign in",
+                                   self.reload_calibration))
+        self.forget_calibration = QPushButton("Forget")
+        self.forget_calibration.clicked.connect(self._forget)
+        self.forget_calibration.setEnabled(self._forget_calibrations is not None)
+        calibration.add(SettingRow("Forget remembered calibrations", "Stops putting back calibrations Winlight remembered, "
+                                   "such as one you have since removed in Windows",
+                                   self.forget_calibration))
         layout.addWidget(calibration)
+        self.calibration_result = SecondaryLabel(scale=0.9)
+        self.calibration_result.setWordWrap(True)
+        self.calibration_result.setContentsMargins(2, 8, 2, 0)
+        self.calibration_result.hide()
+        layout.addWidget(self.calibration_result)
         return page
 
     def _general_page(self) -> QWidget:
@@ -581,6 +636,9 @@ class SettingsWindow(QWidget):
             pause_for_apps=self.pause_for_apps.isChecked(),
             pause_automatically=self.pause_automatically.isChecked(),
             solar_transition_minutes=self.solar_transition.currentData(),
+            never_pause_at_night=self.never_pause.isChecked(),
+            never_pause_from=self.never_pause_from.currentData(),
+            never_pause_time=self.never_pause_time.time().toString("HH:mm"),
         )
         general = GeneralConfig(
             start_with_windows=self.start_with_windows.isChecked(),
@@ -627,8 +685,17 @@ class SettingsWindow(QWidget):
                   area.y() + max(0, (area.height() - height - FRAME_HEIGHT) // 2))
 
     def closeEvent(self, event) -> None:
-        self._controller.preview(None)
+        self._preview(None)
+        # Opened again, the window starts afresh: the first page, at its top,
+        # without the last action's message.
+        self.calibration_result.hide()
+        self.show_page(0)
+        self._scroll_to_top()
         super().closeEvent(event)
+
+    def _scroll_to_top(self, *_args) -> None:
+        if isinstance(area := self._stack.currentWidget(), QScrollArea):
+            area.verticalScrollBar().setValue(0)
 
     def _load(self, config: AppConfig) -> None:
         night_light, general = config.night_light, config.general
@@ -663,6 +730,9 @@ class SettingsWindow(QWidget):
         self.pause_for_apps.setChecked(night_light.pause_for_apps)
         self.pause_automatically.setChecked(night_light.pause_automatically)
         self.exempt_apps.set_apps(night_light.exempt_apps)
+        self.never_pause.setChecked(night_light.never_pause_at_night)
+        self.never_pause_from.setCurrentIndex(max(0, self.never_pause_from.findData(night_light.never_pause_from)))
+        self.never_pause_time.setTime(QTime.fromString(night_light.never_pause_time, "HH:mm"))
         self.idle_exempt_apps.set_apps(general.idle_exempt_apps)
         self.schedule.set_config(config.brightness_schedule)
         self._display_prefs = config.displays
@@ -702,6 +772,8 @@ class SettingsWindow(QWidget):
         for widget, show in visible.items():
             self._night_card.set_row_visible(self._field_rows[widget], show)
         self.exempt_apps.setEnabled(self.pause_for_apps.isChecked())
+        self._never_pause_when.setEnabled(self.never_pause.isChecked())
+        self.never_pause_time.setVisible(night_light.never_pause_from == "time")
         self._temperature_card.set_row_visible(self._field_rows[self.day_temperature], mode in (Mode.LOCATION, Mode.TIMES))
         self.night_temperature.setEnabled(night_light.enabled)
         for field in (self.idle_minutes, self.idle_level, self.idle_exempt_apps):
@@ -775,6 +847,8 @@ class SettingsWindow(QWidget):
                 description = " · ".join(part for part in (entry.connector, entry.status) if part)
             if entry.night_light != "Yes":
                 description += f"\nNight light: {entry.night_light.split(':')[0].split(',')[0]}"
+            if entry.calibration:
+                description += f"\nCalibration: {entry.calibration}"
             row = SettingRow(entry.name + (" (built-in)" if entry.built_in else ""), description,
                              StatusBadge("Works" if entry.works else "Not controllable", entry.works), icon=icons.display_glyph(
                                  self.palette().color(QPalette.ColorRole.WindowText)))
@@ -794,6 +868,31 @@ class SettingsWindow(QWidget):
         layout.replaceWidget(self._displays_card, card)
         self._displays_card.deleteLater()
         self._displays_card = card
+
+    def _reload(self) -> None:
+        try:
+            results = self._reload_calibrations() if self._reload_calibrations is not None else {}
+        except GammaBusy:
+            self._show_calibration_result(GAMMA_BUSY)
+            return
+        lines = [f"{self._display_name(name)}: {outcome}." for name, outcome in sorted(results.items())]
+        self._show_calibration_result("\n".join(lines) or "No display to reload.")
+
+    def _forget(self) -> None:
+        try:
+            count = self._forget_calibrations() if self._forget_calibrations is not None else 0
+        except GammaBusy:
+            self._show_calibration_result(GAMMA_BUSY)
+            return
+        self._show_calibration_result(
+            f"Forgot {count} remembered calibration{'s' if count != 1 else ''}. Reload brings back the ones Windows still has."
+            if count else "No calibrations were remembered.")
+
+    def _show_calibration_result(self, text: str) -> None:
+        self.calibration_result.setText(text)
+        self.calibration_result.show()
+        self._shown_entries = None  # the calibration lines changed
+        self._update_displays()
 
     def _detect_displays(self) -> None:
         if self._monitors is not None:
@@ -860,11 +959,22 @@ class SettingsWindow(QWidget):
             self.schedule_info.setText(schedule_description(self._controller))
 
     def _connect_preview(self, slider: TemperatureSlider) -> None:
-        """While a temperature slider is held, show that temperature on screen, as KDE does."""
+        """While a temperature slider is held, show that temperature on screen,
+        with a note in the middle of the screen saying so, as KDE does."""
         inner = slider.slider
-        inner.sliderPressed.connect(lambda: self._controller.preview(slider.value()))
-        inner.sliderMoved.connect(lambda _: self._controller.preview(slider.value()))
-        inner.sliderReleased.connect(lambda: self._controller.preview(None))
+        inner.sliderPressed.connect(lambda: self._preview(slider.value()))
+        inner.sliderMoved.connect(lambda _: self._preview(slider.value()))
+        inner.sliderReleased.connect(lambda: self._preview(None))
+
+    def _preview(self, kelvin: int | None) -> None:
+        self._controller.preview(kelvin)
+        if kelvin is None:
+            if self._preview_notice is not None:
+                self._preview_notice.hide()
+            return
+        if self._preview_notice is None:
+            self._preview_notice = PreviewNotice()
+        self._preview_notice.show_kelvin(kelvin, near=self)
 
 
 def _page(title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:

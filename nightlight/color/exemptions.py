@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 # Checking the foreground window is cheap; this is quick enough that
 # switching to a game pauses night light before it has drawn much.
 POLL_MS = 400
+# While the displays are off: nothing is on screen to pause for (see
+# NightLightController.set_displays_off).
+POLL_OFF_MS = 10_000
 FULLSCREEN = ", fullscreen"
 AUTOMATIC = ", automatic"
 # Apps where colour accuracy matters, paused for by the automatic mode.
@@ -70,10 +73,13 @@ class ForegroundWatcher(QObject):
     pausedChanged = Signal(dict)  # display -> reason
 
     def __init__(self, probe: Callable[[], ForegroundApp | None], config: NightLightConfig, parent: QObject | None = None,
-                 media: Callable[[], bool] = lambda: False) -> None:
+                 media: Callable[[], bool] = lambda: False, held: Callable[[], bool] = lambda: False) -> None:
         super().__init__(parent)
         self._probe = probe
         self._media = media
+        # Whether "never pause late at night" holds now: then nothing pauses.
+        self._held = held
+        self._was_held = False
         self._config = config
         self._paused: dict[str, str] = {}
         self._timer = QTimer(self, interval=POLL_MS)
@@ -96,12 +102,27 @@ class ForegroundWatcher(QObject):
 
     def check(self) -> None:
         app = self._probe()
+        if app is not None and app.shell:
+            # Start, Alt+Tab or the taskbar opened over the app: no change for
+            # now, or a paused video would flash warm while Start is open.
+            return
         # Asked only when it can matter: a call into Windows each time.
         media = bool(app and self._config.pause_automatically and self._media())
-        self._publish(paused_displays(app, self._config, media))
+        paused = paused_displays(app, self._config, media)
+        # Asked only when something would pause: it works out the schedule.
+        held = bool(paused) and self._held()
+        if held and not self._was_held:
+            log.info("Not pausing night light: it stays on for everything late at night")
+        self._was_held = held
+        self._publish({} if held else paused)
 
     def stop(self) -> None:
         self._timer.stop()
+
+    def set_displays_off(self, off: bool) -> None:
+        self._timer.setInterval(POLL_OFF_MS if off else POLL_MS)
+        if not off and self._timer.isActive():
+            self.check()  # what is in front now that they are back
 
     def _publish(self, paused: dict[str, str]) -> None:
         if paused != self._paused:

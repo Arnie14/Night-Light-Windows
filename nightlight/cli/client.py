@@ -26,7 +26,8 @@ examples:
   winlight-cli --set 70 --display DELL      by name (any part of it) or id
   winlight-cli --get --display 1            prints just the number, for scripts
   winlight-cli --set +10 --panel            and show the panel (for hotkey tools)
-  winlight-cli --night-light toggle         also on, off, auto (follow the schedule), status
+  winlight-cli --night-light toggle         also on, off, suspend, resume, auto (the schedule), status
+  winlight-cli --calibration reload         reload each display's calibration from its color profile
   winlight-cli --list --json                for scripts
 """
 
@@ -37,14 +38,19 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--get", action="store_true", help="print the brightness of --display (default: all)")
     group.add_argument("--set", metavar="VALUE", help="set brightness: 0-100, or +N/-N to change it")
     group.add_argument("--display", default="all", metavar="WHICH", help="a number from --list, an id (or part of one), part of a name, or all")
-    group.add_argument("--night-light", choices=("on", "off", "toggle", "auto", "status"), help="night light: on/off until changed back, or auto")
+    group.add_argument("--night-light", choices=("on", "off", "toggle", "suspend", "resume", "auto", "status"),
+                       help="night light: on/off until changed back, suspend until resumed, resume or auto (the schedule)")
+    group.add_argument("--calibration", choices=("status", "reload", "forget"),
+                       help="color calibrations: how each display's stands, reload them from their profiles, "
+                       "or forget the ones remembered for putting back")
     group.add_argument("--refresh", action="store_true", help="detect displays again")
     group.add_argument("--panel", action="store_true", help="show the Winlight panel (after any change asked for)")
     group.add_argument("--json", action="store_true", help="print JSON instead of text")
 
 
 def requested(args: argparse.Namespace) -> bool:
-    return bool(args.list or args.get or args.set is not None or args.night_light or args.refresh or args.panel)
+    return bool(args.list or args.get or args.set is not None or args.night_light or args.calibration or args.refresh
+                or args.panel)
 
 
 def build_request(args: argparse.Namespace) -> dict:
@@ -65,6 +71,8 @@ def _command(args: argparse.Namespace) -> dict:
         return {"command": "get", "display": args.display}
     if args.night_light:
         return {"command": "night-light", "action": args.night_light}
+    if args.calibration:
+        return {"command": "calibration", "action": args.calibration}
     if args.refresh:
         return {"command": "refresh"}
     return {"command": "panel"}

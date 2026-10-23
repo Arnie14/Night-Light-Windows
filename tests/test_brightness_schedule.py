@@ -5,7 +5,7 @@ saving changes."""
 
 import itertools
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -481,3 +481,15 @@ def test_a_preset_reaches_its_level_after_its_transition():
     halfway = scheduled_level(config, at(15, 17, 22))
     assert halfway.transitioning and 70 < halfway.level < 100
     assert scheduled_level(config, at(15, 17, 45)).level == 70
+
+
+def test_sunrise_and_sunset_in_a_white_night_are_the_real_ones():
+    """Reykjavik in June: astral's sun() gives up (no civil dusk), and these
+    fell back to 06:00 and 18:00."""
+    from zoneinfo import ZoneInfo
+
+    from nightlight.core.brightness_schedule import sun_times
+
+    sunrise, sunset, approximate = sun_times(date(2026, 6, 20), ZoneInfo("Atlantic/Reykjavik"), (64.15, -21.94))
+    assert not approximate
+    assert f"{sunrise:%H:%M}" == "02:54" and f"{sunset:%m-%d %H:%M}" == "06-21 00:03"

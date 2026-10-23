@@ -14,6 +14,7 @@ from nightlight.hardware.winsystem import (
     UNLOCKED,
     classify,
     is_fullscreen,
+    is_passing_shell,
     night_light_on_from_blob,
 )
 
@@ -24,8 +25,9 @@ MONITOR = (0, 0, 2560, 1440)
     ("window", "class_name", "expected"),
     [
         ((0, 0, 2560, 1440), "UnityWndClass", True),  # borderless fullscreen game
-        ((-8, -8, 2568, 1448), "Chrome_WidgetWin_1", True),  # maximised past the edges counts too
+        ((-8, -8, 2568, 1448), "Chrome_WidgetWin_1", True),  # a browser's fullscreen video: past the edges counts too
         ((0, 0, 2560, 1400), "Chrome_WidgetWin_1", False),  # maximised above the taskbar
+        ((0, 31, 2560, 1440), "Notepad", False),  # maximised over a hidden taskbar: the title bar is outside the client area
         ((100, 100, 900, 700), "Notepad", False),
         ((0, 0, 2560, 1440), "Progman", False),  # the desktop
         ((0, 0, 2560, 1440), "WorkerW", False),
@@ -33,6 +35,37 @@ MONITOR = (0, 0, 2560, 1440)
 )
 def test_fullscreen(window, class_name, expected):
     assert is_fullscreen(window, MONITOR, class_name) is expected
+
+
+@pytest.mark.parametrize(
+    ("class_name", "exe"),
+    [
+        ("Shell_TrayWnd", "explorer.exe"),  # the taskbar
+        ("XamlExplorerHostIslandWindow", "explorer.exe"),  # Alt+Tab on Windows 11
+        ("MultitaskingViewFrame", "explorer.exe"),  # Task View
+        ("Windows.UI.Core.CoreWindow", "startmenuexperiencehost.exe"),  # Start
+        ("Windows.UI.Core.CoreWindow", "searchhost.exe"),  # search
+        ("Windows.UI.Core.CoreWindow", "lockapp.exe"),  # the lock screen
+        ("progman", "explorer.exe"),  # class names compare without case
+    ],
+)
+def test_windows_shell_is_never_a_fullscreen_app(class_name, exe):
+    assert not is_fullscreen(MONITOR, MONITOR, class_name, exe)
+
+
+def test_passing_shell_ui_but_not_the_desktop():
+    assert is_passing_shell("Windows.UI.Core.CoreWindow", "startmenuexperiencehost.exe")
+    assert is_passing_shell("Shell_TrayWnd", "explorer.exe")
+    assert not is_passing_shell("Progman", "explorer.exe")  # on the desktop, nothing is in front
+    assert not is_passing_shell("WorkerW", "explorer.exe")
+    assert not is_passing_shell("UnityWndClass", "game.exe")
+
+
+def test_a_maximized_window_drawing_its_own_title_bar_is_not_fullscreen():
+    """VS Code or a browser, maximized with the taskbar hidden automatically:
+    its client area covers the monitor, but it still has a caption."""
+    assert not is_fullscreen(MONITOR, MONITOR, "Chrome_WidgetWin_1", "code.exe", maximized_with_caption=True)
+    assert is_fullscreen(MONITOR, MONITOR, "Chrome_WidgetWin_1", "code.exe")  # fullscreen drops the caption
 
 
 def test_fullscreen_on_a_second_monitor():

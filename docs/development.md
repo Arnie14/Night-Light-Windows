@@ -107,7 +107,8 @@ nightlight/
   app.py                    wires the services to the UI
   config.py                 settings, their JSON file, and the data folder
   core/                     pure logic, no Qt or hardware: colortemp (ramps, limits), schedule (night light),
-                            brightness_schedule (and presets), clock (daylight saving), edid, locations
+                            brightness_schedule (and presets), clock (daylight saving), edid, icc (calibrations in
+                            color profiles), locations
   hardware/                 backend interfaces (brightness, gamma), windows + win32 (the Windows display APIs),
                             winsystem (foreground app, power and session events, the pipe's owner, Windows
                             Night Light), calls (time limits), kde (Linux development backend)
@@ -121,7 +122,8 @@ nightlight/
   support/                  diagnostics (Report a Problem), privacy (scrubbing), compat (compatibility report),
                             probe (--probe)
   cli/                      client (winlight-cli) and commands (what the app does for it)
-  ui/                       tray, flyout, settings window and its parts, schedule editor, theme, icons
+  ui/                       tray, flyout, settings window and its parts, schedule editor, the preview note,
+                            theme, icons
   data/                     time zone table for picking a location (from tools/make_timezones.py)
 packaging/                  PyInstaller spec, Inno Setup script, installer notes, licenses, build.py, icon
 tools/                      hardware_checks.py, third_party_notices.py, screenshots.py, make_timezones.py

@@ -413,6 +413,17 @@ def features():
         check("verify() with nothing changed does nothing", g.verify() is False)
         win32.set_gamma_ramp(DISPLAY, base)  # as the lock screen does
         check("verify() puts back a ramp Windows reset", g.verify() is True and ramps_match(current_ramp(), tinted))
+        before = current_ramp()
+        check("reapply() (waking) sends the tint again, nudged", g.reapply() is True and current_ramp() != before
+              and ramps_match(current_ramp(), tinted, tolerance=windows.NUDGE_STEPS))
+        win32.set_gamma_ramp(DISPLAY, base)
+        check("a reset while the desktop comes back is put back, not backed off from",
+              g.verify() is True and ramps_match(current_ramp(), tinted))
+        profile = win32.display_profile(DISPLAY)
+        check("display_profile() names the display's color profile", bool(profile), profile and Path(profile).name)
+        results = windows.WindowsGammaBackend().reload_calibrations()
+        check("reload_calibrations() reads it", DISPLAY in results and "couldn't" not in results[DISPLAY], results.get(DISPLAY))
+        g.reapply()  # the tint back, over whatever the reload left
         g.set_override(DISPLAY, 6500)  # paused for an app
         check("a paused display shows its own colors", ramps_match(current_ramp(), base))
         g.set_override(DISPLAY, None)

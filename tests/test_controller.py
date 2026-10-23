@@ -167,15 +167,31 @@ def test_pausing_a_display_fades_it_to_neutral_and_back():
     controller.shutdown()
 
 
-def test_unlocking_checks_the_ramps_several_times():
+def test_unlocking_sets_the_ramps_again_then_keeps_checking():
+    """Set again whatever they read back (a driver may report the ramp it was
+    sent while the screen shows a reset one), then checked for a while."""
+    gamma = PausingGamma()
+    gamma.reapplied = 0
+    gamma.reapply = lambda: setattr(gamma, "reapplied", gamma.reapplied + 1)
+    controller = make(gamma)
+    gamma.verified = 0
+    controller.reapply_now()
+    QTest.qWait(50)
+    assert gamma.reapplied == 1  # straight away
+    QTest.qWait(2100)
+    assert gamma.reapplied == len(controller_module.REAPPLY_FORCE_MS)
+    QTest.qWait(1100)
+    assert gamma.verified >= 1  # then checks, besides the regular ones
+    controller.shutdown()
+
+
+def test_without_forced_setting_unlocking_checks_the_ramps():
     gamma = PausingGamma()
     controller = make(gamma)
     gamma.verified = 0
     controller.reapply_now()
     QTest.qWait(50)
-    assert gamma.verified >= 1  # straight away
-    QTest.qWait(3200)
-    assert gamma.verified >= len(controller_module.REAPPLY_BURST_MS)
+    assert gamma.verified >= 1
     controller.shutdown()
 
 
@@ -231,3 +247,99 @@ def test_nothing_touches_the_displays_after_shutdown():
     controller.preview(2500)
     controller.set_paused({"DISPLAY1": "game.exe, fullscreen"})
     assert gamma.calls == []
+
+
+# --- Windows resetting the ramps later (LightBulb #223, #448, #462) -----------
+
+
+class ScreenGdi:
+    """A display's gamma ramp as GDI reports it and as the screen shows it.
+    An honest driver reports what the screen shows; a dishonest one keeps
+    reporting the last ramp it was sent after Windows reset the screen's."""
+
+    def __init__(self, honest=True):
+        from nightlight.core.colortemp import identity_ramp
+
+        self.screen = identity_ramp()
+        self.reported = identity_ramp()
+        self.honest = honest
+
+    def install(self, monkeypatch):
+        from nightlight.hardware import win32
+        from tests.test_windows_backend import D1, target
+
+        monkeypatch.setattr(win32, "display_targets", lambda: [target(D1, "A")])
+        monkeypatch.setattr(win32, "get_gamma_ramp", lambda name: [list(c) for c in (self.screen if self.honest else self.reported)])
+        monkeypatch.setattr(win32, "set_gamma_ramp", self.set)
+
+    def set(self, name, ramp):
+        self.screen = self.reported = [list(c) for c in ramp]
+        return True
+
+    def windows_resets(self):
+        """The lock screen, Quick Settings opened for the first time..."""
+        from nightlight.core.colortemp import identity_ramp
+
+        self.screen = identity_ramp()
+        if self.honest:
+            self.reported = identity_ramp()
+
+    @property
+    def tinted(self):
+        return self.screen[2][-1] < 60000
+
+
+@pytest.fixture
+def fast_reapply(monkeypatch):
+    """The reapply timings, ten times faster."""
+    monkeypatch.setattr(controller_module, "REAPPLY_FORCE_MS", (0, 20, 60, 120, 200))
+    monkeypatch.setattr(controller_module, "REAPPLY_CHECK_MS", (300, 500, 800, 1200))
+    monkeypatch.setattr(controller_module, "VERIFY_MS", 60_000)  # only the burst and its checks
+
+
+def night_light_on_real_backend(monkeypatch, gdi):
+    from nightlight.hardware import windows
+
+    gdi.install(monkeypatch)
+    controller = make(windows.WindowsGammaBackend(), ALWAYS_ON)
+    QTest.qWait(QUICK_FADE_WAIT_MS)
+    assert gdi.tinted
+    return controller
+
+
+QUICK_FADE_WAIT_MS = controller_module.QUICK_ADJUST_MS + 300
+
+
+@pytest.mark.parametrize("honest", [True, False])
+def test_a_reset_during_the_burst_is_undone_whatever_the_driver_reports(monkeypatch, fast_reapply, honest):
+    gdi = ScreenGdi(honest)
+    controller = night_light_on_real_backend(monkeypatch, gdi)
+    controller.reapply_now()  # unlocked
+    QTest.qWait(40)
+    gdi.windows_resets()  # Windows resets it again while the desktop comes back
+    assert not gdi.tinted
+    QTest.qWait(250)
+    assert gdi.tinted  # set again by the burst, even where the driver claims nothing changed
+    controller.shutdown()
+
+
+def test_a_reset_after_the_burst_is_caught_by_the_checks_when_the_driver_is_honest(monkeypatch, fast_reapply):
+    gdi = ScreenGdi(honest=True)
+    controller = night_light_on_real_backend(monkeypatch, gdi)
+    controller.reapply_now()
+    QTest.qWait(250)  # the forced sets are over
+    gdi.windows_resets()  # Quick Settings, opened for the first time, a moment later (LightBulb #448)
+    QTest.qWait(400)
+    assert gdi.tinted  # the next check saw it and put it back
+    controller.shutdown()
+
+
+def test_the_regular_check_catches_a_reset_without_any_event(monkeypatch):
+    """No event at all (Action Center, LightBulb #223): the 1.5 s check."""
+    monkeypatch.setattr(controller_module, "VERIFY_MS", 100)
+    gdi = ScreenGdi(honest=True)
+    controller = night_light_on_real_backend(monkeypatch, gdi)
+    gdi.windows_resets()
+    QTest.qWait(250)
+    assert gdi.tinted
+    controller.shutdown()

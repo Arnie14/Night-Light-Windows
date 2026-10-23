@@ -159,12 +159,63 @@ def test_night_light_commands(handler):
     assert commands.handle({"command": "night-light", "action": "on"})["data"]["night_light"]["override"] == "activate"
     assert commands.handle({"command": "night-light", "action": "toggle"})["data"]["night_light"]["override"] == "suspend"
     assert commands.handle({"command": "night-light", "action": "auto"})["data"]["night_light"]["override"] is None
+    assert commands.handle({"command": "night-light", "action": "suspend"})["data"]["night_light"]["override"] == "suspend"
+    assert controller.override.until is None  # until resumed
+    assert commands.handle({"command": "night-light", "action": "resume"})["data"]["night_light"]["override"] is None
     assert not commands.handle({"command": "night-light", "action": "dim"})["ok"]
 
 
 def test_refresh_retries_skipped_displays(handler):
     commands, monitors, _ = handler
     assert commands.handle({"command": "refresh"})["ok"] and monitors.retried == 1
+
+
+class CalibratingGamma(FakeGamma):
+    def __init__(self):
+        self.reloaded = self.forgotten = 0
+
+    def calibration_status(self):
+        return {r"\\.\DISPLAY1": "In use", r"\\.\DISPLAY9": "None"}
+
+    def reload_calibrations(self):
+        self.reloaded += 1
+        return {r"\\.\DISPLAY1": "loaded from display.icm"}
+
+    def forget_calibrations(self):
+        self.forgotten += 1
+        return 2
+
+
+def test_calibration_status_reload_and_forget(handler):
+    _, monitors, controller = handler
+    gamma = CalibratingGamma()
+    monitors.monitors = [MonitorInfo(1, "Built-in display", True, key="BOE0812", internal=True, display=r"\\.\DISPLAY1")]
+    commands = CommandHandler(monitors, controller, lambda: AppConfig(displays=(DisplayPrefs("BOE0812", "Laptop"),)), gamma)
+    status = commands.handle({"command": "calibration"})
+    assert status["ok"] and status["data"]["calibrations"] == {"Laptop": "In use", r"\\.\DISPLAY9": "None"}
+    reload = commands.handle({"command": "calibration", "action": "reload"})
+    assert reload["output"] == "Laptop: loaded from display.icm" and gamma.reloaded == 1
+    forget = commands.handle({"command": "calibration", "action": "forget"})
+    assert forget["output"] == "Forgot 2 remembered calibrations." and gamma.forgotten == 1
+    assert not commands.handle({"command": "calibration", "action": "delete"})["ok"]
+
+
+def test_calibration_option_becomes_a_request():
+    import argparse
+
+    from nightlight.cli import client
+
+    parser = argparse.ArgumentParser()
+    client.add_arguments(parser)
+    args = parser.parse_args(["--calibration", "reload"])
+    assert client.requested(args)
+    assert client.build_request(args) == {"command": "calibration", "action": "reload"}
+
+
+def test_calibration_without_a_gamma_backend_says_so(handler):
+    commands, _, _ = handler
+    reply = commands.handle({"command": "calibration", "action": "reload"})
+    assert not reply["ok"] and "Windows" in reply["output"]
 
 
 CLI = """

@@ -9,7 +9,8 @@ winlight-cli --set +10 --display 2       # display 2 up by 10
 winlight-cli --set 70 --display DELL     # by name (any part, custom names too) or id (or part of one)
 winlight-cli --set +10 --panel           # and show the panel, for hotkey tools
 winlight-cli --get --display 1           # prints just the number
-winlight-cli --night-light toggle        # also on, off, auto (follow the schedule), status
+winlight-cli --night-light toggle        # also on, off, suspend, resume, auto (follow the schedule), status
+winlight-cli --calibration reload        # reload each display's calibration from its color profile
 winlight-cli --refresh                   # detect displays again
 winlight-cli --list --json               # for scripts
 winlight-cli --diagnostics               # save a Report a Problem zip and print its path
@@ -21,7 +22,8 @@ winlight-cli --diagnostics               # save a Report a Problem zip and print
 | `--get` | Prints the brightness of `--display` (all by default) |
 | `--set VALUE` | Sets brightness: `0`–`100`, or `+N`/`-N` to change it |
 | `--display WHICH` | A number from `--list`, an id or part of one, part of a name, or `all` (the default) |
-| `--night-light ACTION` | `on` or `off` until changed back, `toggle`, `auto` (follow the schedule), `status` |
+| `--night-light ACTION` | `on` or `off` until changed back, `toggle`, `suspend` (until resumed, as the panel's Suspend button), `resume`, `auto` (follow the schedule), `status` |
+| `--calibration ACTION` | `status` (each display's color calibration), `reload` (from each display's color profile, as Windows does at sign-in), `forget` (the calibrations remembered for putting back) |
 | `--refresh` | Detects displays again |
 | `--panel` | Shows Winlight's panel, after any change asked for |
 | `--json` | Prints JSON instead of text |

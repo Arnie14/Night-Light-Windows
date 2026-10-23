@@ -217,13 +217,17 @@ class MonitorService:
     def request_write(self, write: Write) -> None:
         with self._cond:
             pending = self._writes.get(write.key)
-            if pending is not None and pending.source == USER and write.source != USER:
-                # A level the user just picked wins over an unprompted one.
-                self._emit(Deferred(write.key, write.value, write.source, "superseded"))
-                return
-            self._writes.pop(write.key, None)
-            self._writes[write.key] = write  # newest last: written in the order they were last changed
-            self._cond.notify()
+            superseded = pending is not None and pending.source == USER and write.source != USER
+            if not superseded:
+                self._writes.pop(write.key, None)
+                self._writes[write.key] = write  # newest last: written in the order they were last changed
+                self._cond.notify()
+        if superseded:
+            # A level the user just picked wins over an unprompted one. Said
+            # after letting go of the lock: on the UI thread its slots run at
+            # once, and they mustn't run holding it (they take other locks,
+            # the gamma backend's among them).
+            self._emit(Deferred(write.key, write.value, write.source, "superseded"))
 
     def request_software_dimming(self, enabled: bool) -> None:
         with self._cond:

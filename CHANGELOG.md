@@ -2,6 +2,31 @@
 
 Changes in each version of Winlight, newest first. Version numbers follow the scheme in [docs/development.md](docs/development.md#versions-and-releases). Earlier, more detailed reports are kept in [docs/history/](docs/history/).
 
+## 0.3.0 Beta 2 (2026-10-22)
+
+### Added
+
+- **Suspend until resumed**, as in KDE: the panel's Suspend button keeps night light off until it is clicked again, in the day too; its arrow has the timed choices. The tray menu has the same toggle, and the command line `--night-light suspend` and `resume`.
+- **Never pause late at night**: a fourth pausing option. From night light starting to warm, being fully on, or a set time such as bedtime, until the morning transition, nothing pauses night light: no fullscreen app, listed app or automatic pause.
+- **A note on screen while previewing**: holding a temperature slider shows "Night light preview" and the temperature in the middle of the screen, until the slider is let go.
+- **Calibration status, Reload and Forget**: Settings > Displays shows each display's color calibration. Reload reads it again from the display's color profile and puts it on screen; Forget stops Winlight putting back a calibration you removed in Windows. On the command line: `--calibration status`, `reload` and `forget`. The first time a calibrated display is found, a notification explains keeping calibrations, once.
+
+### Changed
+
+- **High latitudes get their real sunset and sunrise.** In Reykjavik from May to July the sun sets but twilight never ends, and on some summer days in Stockholm and Helsinki dusk comes near midnight; the whole schedule fell back to 18:00 and 06:00 on those days. Night light now turns at solar midnight in a white night, and the brightness schedule's sunrise and sunset come from the same calculation.
+- **A maximized window no longer counts as fullscreen**, also with the taskbar hidden automatically: Winlight measures the window's client area, without its title bar, and leaves out maximized windows that draw their own (VS Code, browsers).
+- **While the displays are off**, the gamma checks and watching the app in front slow down rather than run as usual.
+- The calibration status counts how often a calibration was put back today, and says "None detected" for a display without one.
+- **Night light comes back more reliably after waking, unlocking and displays turning on**: the ramps are set again several times over 2 s even where Windows reports them unchanged, then checked for 12 s. Each ramp differs a little from the last (LightBulb's rotating offset), since some drivers ignore one they were sent before. Windows resetting the ramps meanwhile no longer counts as another program fighting over them.
+- **More of Windows' own interface is told apart from fullscreen apps**: Start, search, Alt+Tab, Task View, Quick Settings, the lock screen and others (LightBulb's list, extended for Windows 11). Opening them over a paused video keeps the pause. Store apps are recognised by their own names for the app list.
+- Settings opens on the first page, at its top, and each page opens at its top.
+
+### Fixed
+
+- **The settings window's first opening flickered**: about 40 small windows flashed over the screen while it was built, which also made it take about a second to open.
+- Starting at sign-in compared program paths without case only on Windows; the test failed elsewhere.
+- A gamma ramp change stuck in a display driver on the monitor thread could freeze the app at the next night light change. The app now waits at most 2 seconds, skips the change and says so once.
+
 ## 0.3.0 Beta 1 (2026-10-20)
 
 ### Changed

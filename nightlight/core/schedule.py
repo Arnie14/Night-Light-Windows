@@ -14,12 +14,14 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, tzinfo
 from enum import StrEnum
+from functools import lru_cache
 
 from astral import Observer
-from astral.sun import sun
+from astral.sun import elevation
+from astral.sun import noon as solar_noon
 
 from nightlight.config import Mode, NightLightConfig, parse_hhmm
-from nightlight.core.clock import days_around, fixed, local, wall_time
+from nightlight.core.clock import days_around, local, wall_time
 from nightlight.core.colortemp import NEUTRAL_KELVIN
 
 log = logging.getLogger(__name__)
@@ -104,6 +106,26 @@ def next_transition(config: NightLightConfig, now: datetime, to_night: bool, zon
     return next((t for t in schedule_around(config, now, zone) if t.start > now and t.to_night == to_night), None)
 
 
+def pausing_held(config: NightLightConfig, now: datetime, zone: tzinfo | None = None) -> bool:
+    """Whether "never pause late at night" holds at `now`: from the evening
+    transition's start ("evening"), its end ("night") or a set time ("time")
+    until the next morning transition starts. With night light always on,
+    the custom times stand for evening and morning (as for overrides)."""
+    if not config.never_pause_at_night:
+        return False
+    transitions = schedule_around(config, now, zone)
+    if config.never_pause_from == "time":
+        at = parse_hhmm(config.never_pause_time)
+        starts = [wall_time(day, at, zone or now.tzinfo) for day in days_around(now, zone)]
+    else:
+        starts = [t.start if config.never_pause_from == "evening" else t.end for t in transitions if t.to_night]
+    since = max((start for start in starts if start <= now), default=None)
+    if since is None:
+        return False
+    morning = next((t.start for t in transitions if not t.to_night and t.start > since), None)
+    return morning is None or now < morning
+
+
 def schedule_around(config: NightLightConfig, now: datetime, zone: tzinfo | None = None) -> list[Transition]:
     days = days_around(now, zone)
     tz = zone or now.tzinfo
@@ -135,28 +157,75 @@ def _solar_schedule(latitude: float, longitude: float, days: list[date], tz: tzi
     With `minutes` >= 0, a fixed length instead: the evening change starts at
     sunset, the morning one ends at sunrise (0: at once).
 
-    Returns None if any day lacks these events, so the whole schedule falls
-    back consistently instead of mixing solar and fixed days.
+    In a white night (Reykjavik from May to July: the sun sets but never
+    gets 6 degrees below the horizon) there is no civil dusk or dawn; the
+    darkest moment, solar midnight, stands for both, as LightBulb takes the
+    closest point when the sun doesn't reach an angle. A fixed length ends
+    there at the latest, so evening and morning never overlap.
+
+    Returns None if the sun doesn't set or rise on any of the days (polar
+    day or night), so the whole schedule falls back consistently instead of
+    mixing solar and fixed days.
     """
-    observer = Observer(latitude, longitude)
     transitions = []
     for day in days:
-        try:
-            # astral's dawn/dusk default to civil twilight (sun 6° below the horizon).
-            events = sun(observer, date=day, tzinfo=tz)
-        except ValueError:
+        events = solar_events(latitude, longitude, day)
+        if events is None:
             return None
-        dawn, sunrise, sunset, dusk = (fixed(events[name]) for name in ("dawn", "sunrise", "sunset", "dusk"))
-        # astral gives each event that falls on `day` in `tz`; far from the
-        # place's own zone, dawn and sunrise (or sunset and dusk) can fall on
-        # either side of midnight there, and the twilight would end before it
-        # began. A day earlier or later is the same twilight within a minute.
-        if dawn > sunrise:
-            dawn = local(dawn - timedelta(days=1), tz)
-        if dusk < sunset:
-            dusk = local(dusk + timedelta(days=1), tz)
+        midnight_before, dawn, sunrise, sunset, dusk, midnight_after = (local(e, tz) for e in events)
         if minutes >= 0:
             length = timedelta(minutes=minutes)
-            dawn, dusk = local(sunrise - length, tz), local(sunset + length, tz)
+            dawn, dusk = max(sunrise - length, midnight_before), min(sunset + length, midnight_after)
         transitions += [Transition(dawn, sunrise, False), Transition(sunset, dusk, True)]
     return transitions
+
+
+# The sun's centre this far below the horizon: sunrise and sunset (with
+# refraction and the sun's radius, as astral and knighttime use), and civil
+# twilight's end.
+SUNRISE_ANGLE = -0.833
+CIVIL_ANGLE = -6.0
+_BISECTIONS = 22  # 12 h / 2^22: well under a second
+
+
+def solar_events(latitude: float, longitude: float, day: date) -> tuple[datetime, ...] | None:
+    """See _solar_day; for the brightness schedule's sunrise and sunset too."""
+    return _solar_day(round(latitude, 4), round(longitude, 4), day)
+
+
+@lru_cache(maxsize=64)
+def _solar_day(latitude: float, longitude: float, day: date) -> tuple[datetime, ...] | None:
+    """For `day`'s solar noon (UTC): the solar midnight before, civil dawn,
+    sunrise, sunset, civil dusk and the solar midnight after; None if the sun
+    doesn't rise or set that day. Found as the moments the sun's elevation
+    passes each angle between solar midnight and noon, so an event just
+    past midnight in some time zone is no different from any other (astral's
+    per-date functions refuse those, and refuse a dusk that never comes)."""
+    observer = Observer(latitude, longitude)
+    noon = solar_noon(observer, day)
+    # Solar midnight: halfway between noons, so one day's evening ends exactly
+    # where the next morning starts.
+    before = noon - (noon - solar_noon(observer, day - timedelta(days=1))) / 2
+    after = noon + (solar_noon(observer, day + timedelta(days=1)) - noon) / 2
+    sunrise, sunset = _crossing(observer, before, noon, SUNRISE_ANGLE), _crossing(observer, noon, after, SUNRISE_ANGLE)
+    if sunrise is None or sunset is None:
+        return None
+    dawn = _crossing(observer, before, sunrise, CIVIL_ANGLE) or before
+    dusk = _crossing(observer, sunset, after, CIVIL_ANGLE) or after
+    return before, dawn, sunrise, sunset, dusk, after
+
+
+def _crossing(observer: Observer, start: datetime, end: datetime, angle: float) -> datetime | None:
+    """When the sun's elevation passes `angle` between `start` and `end`, over
+    which it only rises or only sets; None if it stays on one side."""
+    first = elevation(observer, start, with_refraction=False) - angle
+    if first * (elevation(observer, end, with_refraction=False) - angle) > 0:
+        return None
+    low, high = start, end
+    for _ in range(_BISECTIONS):
+        middle = low + (high - low) / 2
+        if (elevation(observer, middle, with_refraction=False) - angle) * first > 0:
+            low = middle
+        else:
+            high = middle
+    return low + (high - low) / 2

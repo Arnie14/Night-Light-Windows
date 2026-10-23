@@ -29,6 +29,9 @@ MAX_TRANSITION_MINUTES = 600
 MAX_IDLE_MINUTES = 240
 MAX_SOLAR_TRANSITION_MINUTES = 120
 THEMES = ("system", "light", "dark")
+# When "never pause late at night" begins: as the evening transition starts,
+# once night light is fully on, or at a set time (bedtime, say).
+NEVER_PAUSE_FROM = ("evening", "night", "time")
 ACCENTS = ("windows", "amber", "blue", "teal", "green", "purple", "rose")  # colors in ui/theme.py
 
 
@@ -64,6 +67,12 @@ class NightLightConfig:
     # Sunrise and sunset: how long the change takes. -1 follows twilight
     # (sunset to civil dusk, dawn to sunrise, about 30 min); 0 is instant.
     solar_transition_minutes: int = -1
+    # Late at night none of the above pause night light, for sleep's sake:
+    # from never_pause_from (NEVER_PAUSE_FROM; "time": never_pause_time)
+    # until the morning transition starts.
+    never_pause_at_night: bool = False
+    never_pause_from: str = "night"
+    never_pause_time: str = "22:00"  # HH:MM
 
     def normalized(self) -> NightLightConfig:
         defaults = NightLightConfig()
@@ -78,6 +87,8 @@ class NightLightConfig:
             longitude=_clamp(self.longitude, -180.0, 180.0),
             exempt_apps=tuple(sorted({app.strip().lower() for app in self.exempt_apps if app.strip()})),
             solar_transition_minutes=-1 if self.solar_transition_minutes < 0 else _clamp(self.solar_transition_minutes, 0, MAX_SOLAR_TRANSITION_MINUTES),
+            never_pause_from=self.never_pause_from if self.never_pause_from in NEVER_PAUSE_FROM else defaults.never_pause_from,
+            never_pause_time=self.never_pause_time if _is_hhmm(self.never_pause_time) else defaults.never_pause_time,
         )
 
 

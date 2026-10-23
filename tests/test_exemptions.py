@@ -39,6 +39,53 @@ def test_watcher_reports_changes_only():
     watcher.stop()
 
 
+def test_shell_ui_in_front_keeps_the_pause_as_it_was():
+    """Start, Alt+Tab or the taskbar over a fullscreen video: night light
+    stays paused, rather than flashing warm while Start is open."""
+    app = {"now": ForegroundApp("vlc.exe", D2, True)}
+    seen = []
+    watcher = ForegroundWatcher(lambda: app["now"], NightLightConfig(exempt_fullscreen=True))
+    watcher.pausedChanged.connect(seen.append)
+    app["now"] = ForegroundApp("startmenuexperiencehost.exe", D2, False, shell=True)
+    watcher.check()
+    assert seen == [] and watcher.paused == {D2: "vlc.exe, fullscreen"}
+    app["now"] = ForegroundApp("explorer.exe", D2, False)  # then the desktop: the pause ends
+    watcher.check()
+    assert seen == [{}]
+    watcher.stop()
+
+
+def test_late_at_night_nothing_pauses_and_morning_brings_pausing_back():
+    late = {"now": True}
+    asked = []
+
+    def held():
+        asked.append(1)
+        return late["now"]
+
+    app = {"now": ForegroundApp("notepad.exe", D2, False)}
+    seen = []
+    config = NightLightConfig(exempt_fullscreen=True, exempt_apps=("vlc.exe",), pause_automatically=True, never_pause_at_night=True)
+    watcher = ForegroundWatcher(lambda: app["now"], config, media=lambda: True, held=held)
+    watcher.pausedChanged.connect(seen.append)
+    asked.clear()
+    app["now"] = ForegroundApp("notepad.exe", D2, False)
+    watcher._media = lambda: False
+    watcher.check()
+    assert asked == []  # nothing would pause: the schedule isn't worked out
+    for front in (ForegroundApp("vlc.exe", D2, True), ForegroundApp("game.exe", D2, True), ForegroundApp("photoshop.exe", D2, False)):
+        app["now"] = front  # listed, fullscreen, automatic: none pauses
+        watcher.check()
+    assert seen == [] and watcher.paused == {}
+    late["now"] = False  # the morning transition started
+    watcher.check()
+    assert seen == [{D2: "photoshop.exe, automatic"}]
+    late["now"] = True  # and the next night, a paused display resumes night light
+    watcher.check()
+    assert seen[-1] == {}
+    watcher.stop()
+
+
 def test_watcher_idles_without_exemptions():
     seen = []
     watcher = ForegroundWatcher(lambda: ForegroundApp("game.exe", D2, True), NightLightConfig(exempt_fullscreen=True))

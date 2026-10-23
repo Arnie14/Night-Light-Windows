@@ -9,7 +9,16 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from nightlight import APP_NAME
 from nightlight.color.controller import NightLightController
 from nightlight.ui import icons
-from nightlight.ui.night_light_text import brightness_status, build_override_menu, is_night_light_on, night_light_status, paused_text
+from nightlight.ui.night_light_text import (
+    brightness_status,
+    build_override_menu,
+    can_suspend,
+    is_night_light_on,
+    is_suspended,
+    night_light_status,
+    paused_text,
+    toggle_suspended,
+)
 
 
 class Tray(QSystemTrayIcon):
@@ -26,6 +35,10 @@ class Tray(QSystemTrayIcon):
 
         self._menu = QMenu()
         self._override_menu = QMenu()
+        # KDE's Suspend: checked, night light stays off until unchecked.
+        self._suspend_action = self._menu.addAction("Suspend Night Light")
+        self._suspend_action.setCheckable(True)
+        self._suspend_action.triggered.connect(lambda _checked: toggle_suspended(controller))
         self._override_action = self._menu.addAction("")
         self._override_action.triggered.connect(controller.clear_override)
         self._menu.addAction("Settings…", self.configureRequested.emit)
@@ -60,6 +73,11 @@ class Tray(QSystemTrayIcon):
 
     def _update_menu(self) -> None:
         # "Suspend ▸" / "Activate ▸" with KDE's durations, or "Resume" / "Turn Off".
-        label = build_override_menu(self._controller, self._override_menu)
+        controller = self._controller
+        label = build_override_menu(controller, self._override_menu)
         self._override_action.setText(f"{label} Night Light")
         self._override_action.setMenu(None if self._override_menu.isEmpty() else self._override_menu)
+        suspended = is_suspended(controller)
+        self._suspend_action.setVisible(can_suspend(controller))
+        self._suspend_action.setChecked(suspended)
+        self._override_action.setVisible(not suspended)  # unchecking Suspend resumes

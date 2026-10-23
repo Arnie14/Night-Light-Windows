@@ -25,6 +25,7 @@ Settings app may change it, so the app reads it at start (read()).
 from __future__ import annotations
 
 import logging
+import ntpath
 import os
 import shlex
 import struct
@@ -67,8 +68,10 @@ def disabled_value(now: float | None = None) -> bytes:
 
 
 def _arguments(command: str) -> list[str]:
-    """A Run value's command split into its parts, for comparing paths."""
-    return [os.path.normcase(part.strip('"')) for part in shlex.split(command, posix=False)]
+    """A Run value's command split into its parts, for comparing paths. They
+    are Windows paths wherever this runs, so they compare as Windows does
+    (without case, either slash): os.path.normcase changes nothing on Linux."""
+    return [ntpath.normcase(part.strip('"')) for part in shlex.split(command, posix=False)]
 
 
 class Autostart(Protocol):

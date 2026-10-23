@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import sys
@@ -24,11 +25,13 @@ from nightlight.cli.commands import CommandHandler
 from nightlight.color.controller import NightLightController
 from nightlight.color.exemptions import ForegroundWatcher
 from nightlight.core.clock import zone_named
+from nightlight.core.schedule import pausing_held
 from nightlight.hardware import winsystem
 from nightlight.hardware.brightness import BrightnessBackend
 from nightlight.hardware.gamma import GammaBackend
 from nightlight.support import compat, diagnostics
 from nightlight.system import autostart
+from nightlight.system.files import write_atomic
 from nightlight.system.safe_mode import SafeMode
 from nightlight.system.watcher import DisplayWatcher
 from nightlight.ui import reveal, theme
@@ -55,6 +58,9 @@ ZONE_CHECK_MS = 60_000
 # way), then once a day for an app left running.
 CLEANUP_DELAY_MS = 60_000
 CLEANUP_INTERVAL_MS = 24 * 3600_000
+# Hints shown once ever (their names are kept in hints.json next to the settings).
+CALIBRATION_HINT = "calibration"
+HINT_MS = 20_000
 
 
 def system_zone():
@@ -108,8 +114,10 @@ class NightLightApp:
         )
         self.brightness_keys = BrightnessKeys(self.monitors, self._hidden_keys)
         self.controller = NightLightController(gamma, self._config.night_light, zone=zone)
-        self.commands = CommandHandler(self.monitors, self.controller, lambda: self._config)
+        self.commands = CommandHandler(self.monitors, self.controller, lambda: self._config, gamma)
         self._settings: SettingsWindow | None = None
+        self._hints_path = config_path.with_name("hints.json")
+        self._hints = _load_hints(self._hints_path)
         self._windows_night_light: bool | None = None
         self._autostart = autostart.create()
         self._read_autostart()  # only read: writing it at every start set off Defender
@@ -123,7 +131,8 @@ class NightLightApp:
         self.flyout.set_scheduler(self.scheduler)
 
         self._exemptions = ForegroundWatcher(winsystem.foreground_app, self._config.night_light,
-                                             media=lambda: winsystem.display_required() or winsystem.exclusive_fullscreen())
+                                             media=lambda: winsystem.display_required() or winsystem.exclusive_fullscreen(),
+                                             held=self._pausing_held)
         self._exemptions.pausedChanged.connect(self.controller.set_paused)
         # Its first check ran before this connection: an exempt or fullscreen
         # app already in front at start pauses night light too.
@@ -153,7 +162,7 @@ class NightLightApp:
         # before anyone notices, and nothing goes to sleeping displays.
         self.system_events = winsystem.SystemEvents(qapp)
         self.system_events.endingSession.connect(self._shutdown)  # signing out: there may be no later chance
-        self.system_events.unlocked.connect(self.controller.reapply_now)
+        self.system_events.unlocked.connect(self._on_unlocked)
         self.system_events.displayChanged.connect(self.controller.reapply_now)  # at once; detection follows once settled
         self.system_events.panelBrightness.connect(self.brightness_keys.on_windows_event)
         self._watcher = DisplayWatcher(qapp, events=self.system_events,
@@ -179,6 +188,7 @@ class NightLightApp:
         QTimer.singleShot(CLEANUP_DELAY_MS, diagnostics.remove_old_bundles)
 
         qapp.aboutToQuit.connect(self._shutdown)
+        self.monitors.monitorsChanged.connect(lambda _monitors: self._hint_calibration())
         self.monitors.refresh()
 
     # --- Windows and panels ---------------------------------------------------
@@ -223,6 +233,8 @@ class NightLightApp:
                 report_problem=self.report_problem,
                 warmest=getattr(self._gamma, "warmest_accepted", dict),
                 display_name=self.flyout.display_name_of,
+                reload_calibrations=getattr(self._gamma, "reload_calibrations", None),
+                forget_calibrations=getattr(self._gamma, "forget_calibrations", None),
             )
             self._settings.applied.connect(self._apply_settings)
         self._settings.set_windows_night_light(self._windows_night_light)
@@ -232,7 +244,8 @@ class NightLightApp:
 
     def compatibility(self) -> list[compat.CompatibilityEntry]:
         warmest = getattr(self._gamma, "warmest_accepted", dict)()
-        return compat.entries(self.monitors.monitors, self.monitors.states, warmest)
+        calibrations = getattr(self._gamma, "calibration_status", dict)()
+        return compat.entries(self.monitors.monitors, self.monitors.states, warmest, calibrations)
 
     def compatibility_report(self) -> str:
         return compat.render(self.compatibility(), compat.system_summary())
@@ -296,6 +309,32 @@ class NightLightApp:
             compatibility=self.compatibility_report,
         )
 
+    def _hint_calibration(self) -> None:
+        """Once ever, when a display with a color calibration is first seen:
+        say that night light keeps it, and that Winlight can put it back
+        when Windows drops it, if asked to (off by default)."""
+        calibrated = getattr(self._gamma, "calibrated", None)
+        if (self.tray is None or calibrated is None or CALIBRATION_HINT in self._hints
+                or self._config.general.keep_calibration):
+            return
+        try:
+            displays = calibrated()
+        except Exception:
+            log.debug("Could not tell which displays are calibrated", exc_info=True)
+            return
+        if not displays or self._busy("a hint about calibrations"):
+            return  # asked again at the next detection
+        self._hints.add(CALIBRATION_HINT)
+        _save_hints(self._hints_path, self._hints)
+        name = self.flyout.display_name_of(displays[0])
+        self.tray.showMessage(
+            f"{APP_NAME}: a calibrated display",
+            f"{name} has a color calibration, and night light keeps it. If Windows drops it (after the screen turns off, say), "
+            "Winlight can put it back: Settings > Displays > Keep each display's color calibration.",
+            QSystemTrayIcon.MessageIcon.Information,
+            HINT_MS,
+        )
+
     # --- Settings -------------------------------------------------------------
 
     def _location(self) -> tuple[float, float] | None:
@@ -317,6 +356,12 @@ class NightLightApp:
             app = winsystem.foreground_app()
             return bool(app and app.exe in listed)
         return False
+
+    def _pausing_held(self) -> bool:
+        """"Never pause late at night" holds now (night light keeps going for
+        every app). Only while night light is on: off, there's nothing to pause."""
+        controller = self.controller
+        return controller.state.night_factor > 0 and pausing_held(controller.config, controller.now(), controller.zone)
 
     def _hidden_keys(self) -> frozenset[str]:
         """The connected displays the user hid (found under older keys too)."""
@@ -370,12 +415,21 @@ class NightLightApp:
         # Nothing goes to the displays while the PC sleeps or the screens are
         # off: DDC/CI can wake a sleeping monitor or hang its firmware.
         self.monitors.suspend()
+        self._set_displays_off(True)
+
+    def _set_displays_off(self, off: bool) -> None:
+        """Gamma checks and watching the app in front, rarely while nothing is
+        on screen (LightBulb #419: no work while the displays are off), as
+        usual again once they are on."""
+        self.controller.set_displays_off(off)
+        self._exemptions.set_displays_off(off)
 
     def _on_resumed(self) -> None:
         # Windows' event and the clock check can both report one wake; the
         # wake report follows it once (and schedules detection, logging when
         # each display answers again).
         new_wake = self.wake_report.woke()
+        self._set_displays_off(False)
         if self.monitors.paused:
             self.monitors.resume(() if new_wake else RESCAN_AFTER_CHANGE_S)
         if not new_wake:
@@ -392,6 +446,7 @@ class NightLightApp:
         # is reported, but ramps and levels may have been reset (Monitorian
         # re-checks then too), and DisplayPort monitors often drop out while
         # off; detection brings them back.
+        self._set_displays_off(False)
         if self.monitors.paused:
             self.monitors.resume(RESCAN_AFTER_DISPLAYS_ON_S)
         else:
@@ -399,6 +454,10 @@ class NightLightApp:
         self.controller.reapply_now()
         self.brightness_memory.restore_all_soon()
         self._reapply_colors()
+
+    def _on_unlocked(self) -> None:
+        self._set_displays_off(False)  # someone is at the screen, whatever was missed
+        self.controller.reapply_now()
 
     def _on_clock_changed(self) -> None:
         if not self._check_zone():
@@ -444,6 +503,24 @@ class NightLightApp:
         self.brightness_memory.shutdown()
         self.monitors.shutdown()
         self.system_events.close()
+
+
+def _load_hints(path: Path) -> set[str]:
+    try:
+        names = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError):
+        log.debug("Could not read %s", path.name, exc_info=True)
+        return set()
+    return {name for name in names if isinstance(name, str)} if isinstance(names, list) else set()
+
+
+def _save_hints(path: Path, hints: set[str]) -> None:
+    try:
+        write_atomic(path, json.dumps(sorted(hints)))
+    except OSError:
+        log.debug("Could not save %s", path.name, exc_info=True)
 
 
 def _reveal(path: Path) -> None:

@@ -15,6 +15,11 @@ from nightlight.core.colortemp import NEUTRAL_KELVIN, Whitepoint, whitepoint
 log = logging.getLogger(__name__)
 
 
+class GammaBusy(OSError):
+    """Another thread's ramp change is stuck (in the display driver, say):
+    the change asked for wasn't made. See windows._GammaLock."""
+
+
 class GammaBackend(Protocol):
     """Backends may also set `animates = True` if they animate changes
     themselves, and define `displays_changed()` to hear about display changes."""

@@ -21,9 +21,6 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 
-from astral import Observer
-from astral.sun import sun
-
 from nightlight.config import (
     DEFAULT_SCHEDULE_POINTS,
     DEFAULT_SCHEDULE_TRANSITION,
@@ -32,7 +29,8 @@ from nightlight.config import (
     SchedulePoint,
     parse_hhmm,
 )
-from nightlight.core.clock import days_around, fixed, local, wall_time
+from nightlight.core.clock import days_around, local, wall_time
+from nightlight.core.schedule import solar_events
 
 log = logging.getLogger(__name__)
 
@@ -126,11 +124,11 @@ def sun_times(day: date, zone: tzinfo, location: tuple[float, float] | None) -> 
     """(sunrise, sunset, approximate) on `day`; the fallback times when the
     location is unknown or the sun doesn't rise or set there that day."""
     if location is not None:
-        try:
-            events = sun(Observer(*location), date=day, tzinfo=zone)
-            return fixed(events["sunrise"]), fixed(events["sunset"]), False
-        except ValueError:
-            pass  # polar day or night
+        # As night light finds them: also in white nights and when sunset is
+        # just past midnight, where astral's sun() gives up.
+        events = solar_events(*location, day)
+        if events is not None:  # None: polar day or night
+            return local(events[2], zone), local(events[3], zone), False
     return wall_time(day, FALLBACK_SUNRISE, zone), wall_time(day, FALLBACK_SUNSET, zone), True
 
 

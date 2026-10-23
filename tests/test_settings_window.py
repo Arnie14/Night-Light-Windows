@@ -3,7 +3,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from PySide6.QtCore import QByteArray, QTime, QTimeZone
+from PySide6.QtCore import QByteArray, Qt, QTime, QTimeZone
 from PySide6.QtWidgets import QDialogButtonBox
 
 from nightlight.color.controller import NightLightController
@@ -240,6 +240,92 @@ def test_the_displays_tab_lists_each_display_and_its_control():
 
     assert QGuiApplication.clipboard().text() == "REPORT"
     controller.shutdown()
+
+
+def test_each_display_shows_its_calibration_and_can_reload_or_forget_them():
+    from nightlight.hardware.brightness import FakeBrightnessBackend
+    from nightlight.support import compat
+
+    monitors = FakeBrightnessBackend(latency=0).list_monitors()
+    gdi = monitors[0].details.source
+    status = {gdi: "In use"}
+
+    def reload():
+        status[gdi] = "Loaded from its color profile"
+        return {gdi: "loaded from display.icm"}
+
+    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
+    window = SettingsWindow(controller, AppConfig(KYIV), compatibility=lambda: compat.entries(monitors, calibrations=status),
+                            display_name=lambda name: "DELL U2720Q", reload_calibrations=reload, forget_calibrations=lambda: 0)
+    assert "Calibration: In use" in window.display_rows[0].description.text()
+    assert "Calibration" not in window.display_rows[1].description.text()  # not known for it
+    window.reload_calibration.click()
+    assert window.calibration_result.text() == "DELL U2720Q: loaded from display.icm."
+    assert "Calibration: Loaded from its color profile" in window.display_rows[0].description.text()  # the list follows
+    window.forget_calibration.click()
+    assert window.calibration_result.text() == "No calibrations were remembered."
+    controller.shutdown()
+
+
+def test_calibration_buttons_are_off_without_a_backend_for_them(window):
+    assert not window.reload_calibration.isEnabled() and not window.forget_calibration.isEnabled()
+
+
+def test_pages_open_at_their_top_and_closing_starts_afresh(window):
+    from PySide6.QtWidgets import QApplication
+
+    window.resize(760, 480)  # small enough for every page to scroll
+    window.show()
+    QApplication.processEvents()
+
+    def scroll_bar():
+        return window._stack.currentWidget().verticalScrollBar()
+
+    window._nav[1].click()
+    assert scroll_bar().maximum() > 0
+    scroll_bar().setValue(scroll_bar().maximum())
+    window._nav[0].click()
+    window._nav[1].click()
+    assert scroll_bar().value() == 0  # switching back: at the top again, not where it was left
+    scroll_bar().setValue(scroll_bar().maximum())
+    window.close()
+    window.show()
+    QApplication.processEvents()
+    assert window.current_page() == 0 and window._nav[0].isChecked() and scroll_bar().value() == 0
+    window._nav[1].click()
+    assert scroll_bar().value() == 0
+    window.close()
+
+
+def test_never_pausing_late_at_night(window):
+    assert not window.never_pause.isChecked() and not window._never_pause_when.isEnabled()
+    window.never_pause.setChecked(True)
+    assert window._never_pause_when.isEnabled() and window.never_pause_time.isHidden()  # "when fully on" by default
+    window.never_pause_from.setCurrentIndex(window.never_pause_from.findData("time"))
+    window.never_pause_time.setTime(QTime(23, 30))
+    assert not window.never_pause_time.isHidden()
+    config = window.current_config().night_light
+    assert (config.never_pause_at_night, config.never_pause_from, config.never_pause_time) == (True, "time", "23:30")
+    assert apply_button(window).isEnabled()
+
+
+def test_holding_a_temperature_slider_previews_it_with_a_note_on_screen(window):
+    window.show()
+    slider = window.night_temperature
+    slider.setValue(3500)
+    slider.slider.sliderPressed.emit()
+    notice = window._preview_notice
+    assert window._controller.target_temperature == 3500
+    assert notice.isVisible() and notice.value.text() == "3500 K"
+    assert notice.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)  # never takes the foreground
+    slider.setValue(3000)
+    slider.slider.sliderMoved.emit(30)
+    assert notice.value.text() == "3000 K" and window._controller.target_temperature == 3000
+    slider.slider.sliderReleased.emit()
+    assert not notice.isVisible() and window._controller.target_temperature != 3000  # back to the schedule
+    slider.slider.sliderPressed.emit()
+    window.close()  # closed while held: the note goes too
+    assert not notice.isVisible()
 
 
 def test_software_dimming_option(window):

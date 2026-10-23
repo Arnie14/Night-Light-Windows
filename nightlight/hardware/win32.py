@@ -30,6 +30,7 @@ import time
 from ctypes import wintypes
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 from nightlight.core import edid as edid_parser
 
@@ -400,6 +401,10 @@ if sys.platform == "win32":
         _dxva2 = ctypes.WinDLL("dxva2", use_last_error=True)
     except OSError:  # missing on some stripped-down Windows editions
         _dxva2 = None
+    try:
+        _mscms = ctypes.WinDLL("mscms", use_last_error=True)  # Windows Color System
+    except OSError:
+        _mscms = None
 
     # Explicit types everywhere: handles are pointers and would be truncated
     # to 32 bits if ctypes guessed int.
@@ -435,6 +440,19 @@ if sys.platform == "win32":
     _gdi32.GetDeviceGammaRamp.restype = wintypes.BOOL
     _gdi32.SetDeviceGammaRamp.argtypes = [wintypes.HDC, ctypes.c_void_p]
     _gdi32.SetDeviceGammaRamp.restype = wintypes.BOOL
+    _gdi32.GetICMProfileW.argtypes = [wintypes.HDC, ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR]
+    _gdi32.GetICMProfileW.restype = wintypes.BOOL
+    if _mscms is not None:
+        _mscms.WcsGetUsePerUserProfiles.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.BOOL)]
+        _mscms.WcsGetUsePerUserProfiles.restype = wintypes.BOOL
+        _mscms.WcsGetDefaultColorProfileSize.argtypes = [ctypes.c_int, wintypes.LPCWSTR, ctypes.c_int, ctypes.c_int, wintypes.DWORD,
+                                                         ctypes.POINTER(wintypes.DWORD)]
+        _mscms.WcsGetDefaultColorProfileSize.restype = wintypes.BOOL
+        _mscms.WcsGetDefaultColorProfile.argtypes = [ctypes.c_int, wintypes.LPCWSTR, ctypes.c_int, ctypes.c_int, wintypes.DWORD,
+                                                     wintypes.DWORD, wintypes.LPWSTR]
+        _mscms.WcsGetDefaultColorProfile.restype = wintypes.BOOL
+        _mscms.GetColorDirectoryW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        _mscms.GetColorDirectoryW.restype = wintypes.BOOL
 
     _kernel32.FormatMessageW.argtypes = [
         wintypes.DWORD,
@@ -809,6 +827,77 @@ def set_gamma_ramp(gdi_name: str, ramp: GammaRamp) -> bool:
             array[c][i] = max(0, min(0xFFFF, int(value)))  # WORD: out-of-range values would wrap around
     with _DisplayDC(gdi_name) as hdc:
         return bool(_gdi32.SetDeviceGammaRamp(hdc, ctypes.byref(array)))
+
+
+MAX_PATH = 260
+
+
+# Windows Color System (mscms): a monitor's profile association, per user or
+# for the whole system, as Color Management and Settings > Display set it.
+_CLASS_MONITOR = int.from_bytes(b"mntr", "big")
+_CPT_ICC, _CPST_NONE = 0, 4
+_WCS_SYSTEM_WIDE, _WCS_CURRENT_USER = 0, 1
+
+
+def display_profile(gdi_name: str) -> str | None:
+    """The path of the color profile Windows uses for a display, or None if
+    Windows won't say. The profile chosen for the monitor (for this user, if
+    it has its own choice, as DisplayCAL reads it); without one, the
+    device context's, which is sRGB when none was chosen."""
+    return _associated_profile(gdi_name) or _device_context_profile(gdi_name)
+
+
+def _associated_profile(gdi_name: str) -> str | None:
+    if _mscms is None:
+        return None
+    monitor = DISPLAY_DEVICEW()
+    monitor.cb = ctypes.sizeof(monitor)
+    if not _user32.EnumDisplayDevicesW(gdi_name, 0, ctypes.byref(monitor), 0):
+        return None  # cloned displays share one ramp: the first monitor stands for them
+    key = monitor.DeviceKey
+    per_user = wintypes.BOOL()
+    if not _mscms.WcsGetUsePerUserProfiles(key, _CLASS_MONITOR, ctypes.byref(per_user)):
+        per_user.value = False
+    size = wintypes.DWORD()
+    scope = _WCS_CURRENT_USER if per_user.value else _WCS_SYSTEM_WIDE
+    if not _mscms.WcsGetDefaultColorProfileSize(scope, key, _CPT_ICC, _CPST_NONE, 0, ctypes.byref(size)) or size.value < 2:
+        return None  # none chosen (ERROR_FILE_NOT_FOUND)
+    name = ctypes.create_unicode_buffer(size.value // 2 + 1)
+    if not _mscms.WcsGetDefaultColorProfile(scope, key, _CPT_ICC, _CPST_NONE, 0, size, name) or not name.value:
+        return None
+    folder_size = wintypes.DWORD(MAX_PATH * 2)
+    folder = ctypes.create_unicode_buffer(MAX_PATH)
+    if not _mscms.GetColorDirectoryW(None, folder, ctypes.byref(folder_size)):
+        return None
+    return str(Path(folder.value) / name.value)
+
+
+def _device_context_profile(gdi_name: str) -> str | None:
+    size = wintypes.DWORD(MAX_PATH)
+    path = ctypes.create_unicode_buffer(MAX_PATH)
+    with _DisplayDC(gdi_name) as hdc:
+        if not _gdi32.GetICMProfileW(hdc, ctypes.byref(size), path):
+            if size.value <= MAX_PATH:
+                log.debug("GetICMProfileW failed for %s: %s", gdi_name, describe_error(ctypes.get_last_error()))
+                return None
+            path = ctypes.create_unicode_buffer(size.value)  # a longer path: asked again with room for it
+            if not _gdi32.GetICMProfileW(hdc, ctypes.byref(size), path):
+                return None
+    return path.value or None
+
+
+def windows_loads_calibrations() -> bool:
+    """Whether "Use Windows display calibration" is on (Color Management >
+    Advanced): Windows itself loads each display's calibration. Off, another
+    program (DisplayCAL's loader, say) usually does. On unless it says off."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM\Calibration") as key:
+            value, _kind = winreg.QueryValueEx(key, "CalibrationManagementEnabled")
+    except OSError:
+        return True
+    return bool(value)
 
 
 # --- Run-time checks ----------------------------------------------------------

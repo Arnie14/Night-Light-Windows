@@ -36,18 +36,61 @@ class ForegroundApp:
     exe: str  # lower-case executable name, e.g. "game.exe"
     display: str  # GDI name of the display it is mostly on, e.g. "\\.\DISPLAY2"
     fullscreen: bool
+    # Windows' own passing UI in front (Start, search, Alt+Tab, the taskbar):
+    # pausing stays as it was, rather than ending for the moment it is open.
+    shell: bool = False
 
 
-# The desktop and taskbar cover a whole display too, but aren't "fullscreen apps".
-SHELL_CLASSES = frozenset({"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"})
+# Windows' shell covers a whole display too, but isn't a "fullscreen app".
+# The window classes and processes are LightBulb's (github.com/Tyrrrz/LightBulb,
+# MIT: Window.IsSystemWindow and ExternalApplicationService), from years of
+# its users' reports; those under "Windows 11" are added here. Class names
+# compare without case, as LightBulb's do.
+DESKTOP_CLASSES = frozenset({"progman", "workerw"})  # the desktop: nothing in front, so pausing ends
+SHELL_CLASSES = DESKTOP_CLASSES | frozenset({
+    "shell_traywnd", "shell_secondarytraywnd",  # the taskbars
+    "immersivelauncher",  # Start (Windows 10)
+    "immersiveswitchlist", "multitaskingviewframe", "xamlexplorerhostislandwindow",  # Alt+Tab and Task View
+    "foregroundstaging", "applicationmanager_desktopshellwindow",
+    # Windows 11: the taskbar's overflow of tray icons.
+    "toplevelwindowforoverflowxamlisland", "notifyiconoverflowwindow",
+})
+SHELL_PROCESSES = frozenset({
+    "explorer.exe", "shellexperiencehost.exe", "startmenuexperiencehost.exe",
+    # Windows 11: search, Quick Settings and notifications, the touch keyboard
+    # and emoji panel, the lock screen, and the snipping overlay.
+    "searchhost.exe", "searchapp.exe", "shellhost.exe", "textinputhost.exe", "lockapp.exe", "screenclippinghost.exe",
+})
+# Store (UWP) apps' windows belong to this host; the app is a child window's process.
+UWP_FRAME_CLASS = "applicationframewindow"
+UWP_HOST = "applicationframehost.exe"
 
 
-def is_fullscreen(window: tuple[int, int, int, int], monitor: tuple[int, int, int, int], class_name: str) -> bool:
-    """Whether a window (left, top, right, bottom) covers its whole monitor:
-    borderless and exclusive fullscreen games, videos and presentations."""
-    if class_name in SHELL_CLASSES:
+def is_shell(class_name: str, exe: str) -> bool:
+    """Whether a window is Windows' own UI (desktop, taskbar, Start, Alt+Tab...)."""
+    return class_name.lower() in SHELL_CLASSES or exe in SHELL_PROCESSES
+
+
+def is_passing_shell(class_name: str, exe: str) -> bool:
+    """Shell UI opened for a moment over an app (all of it but the desktop):
+    while it is in front, pausing stays as it was."""
+    return is_shell(class_name, exe) and class_name.lower() not in DESKTOP_CLASSES
+
+
+def is_fullscreen(client: tuple[int, int, int, int], monitor: tuple[int, int, int, int], class_name: str, exe: str = "",
+                  maximized_with_caption: bool = False) -> bool:
+    """Whether a window's client area (left, top, right, bottom, in screen
+    coordinates) covers its whole monitor: borderless and exclusive
+    fullscreen games, videos and presentations.
+
+    Not a maximized window: its title bar is outside the client area (as
+    LightBulb checks), and one that draws its own title bar (VS Code, a
+    browser) is still maximized with a caption, which fullscreen drops.
+    With the taskbar hidden automatically, a maximized window covers the
+    whole monitor."""
+    if is_shell(class_name, exe) or maximized_with_caption:
         return False
-    left, top, right, bottom = window
+    left, top, right, bottom = client
     m_left, m_top, m_right, m_bottom = monitor
     return left <= m_left and top <= m_top and right >= m_right and bottom >= m_bottom
 
@@ -69,7 +112,7 @@ def _foreground_app() -> ForegroundApp | None:
     from nightlight.hardware.win32 import MONITORINFOEXW
 
     hwnd = _user32.GetForegroundWindow()
-    if not hwnd or _user32.IsIconic(hwnd):
+    if not hwnd or _user32.IsIconic(hwnd) or not _user32.IsWindowVisible(hwnd):
         # A minimized window can stay the foreground one (when nothing else
         # takes focus), but it isn't on screen: nothing to pause for.
         return None
@@ -78,29 +121,65 @@ def _foreground_app() -> ForegroundApp | None:
 
     pid = wintypes.DWORD()
     _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    exe = ""
-    process = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
-    if process:
-        try:
-            path = ctypes.create_unicode_buffer(1024)
-            size = wintypes.DWORD(len(path))
-            if _kernel32.QueryFullProcessImageNameW(process, 0, path, ctypes.byref(size)):
-                exe = PureWindowsPath(path.value).name.lower()
-        finally:
-            _kernel32.CloseHandle(process)
+    exe = _exe_of(pid.value)
+    if exe == UWP_HOST and class_name.value.lower() == UWP_FRAME_CLASS:
+        exe = _uwp_app(hwnd, pid.value) or exe
 
-    # The visible bounds, without the invisible resize borders GetWindowRect includes.
+    # The client area in screen coordinates: without the title bar and borders.
     rect = wintypes.RECT()
-    if _dwmapi.DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, ctypes.byref(rect), ctypes.sizeof(rect)) != 0:
-        _user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    origin = wintypes.POINT(0, 0)
+    if not _user32.GetClientRect(hwnd, ctypes.byref(rect)) or not _user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+        return None
+    client = (origin.x, origin.y, origin.x + rect.right, origin.y + rect.bottom)
+    maximized_with_caption = bool(_user32.IsZoomed(hwnd)) and (_user32.GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION
     monitor = _user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
     info = MONITORINFOEXW()
     info.cbSize = ctypes.sizeof(info)
     if not monitor or not _user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
         return None
     m = info.rcMonitor
-    fullscreen = is_fullscreen((rect.left, rect.top, rect.right, rect.bottom), (m.left, m.top, m.right, m.bottom), class_name.value)
-    return ForegroundApp(exe, info.szDevice, fullscreen)
+    fullscreen = is_fullscreen(client, (m.left, m.top, m.right, m.bottom), class_name.value, exe, maximized_with_caption)
+    return ForegroundApp(exe, info.szDevice, fullscreen, is_passing_shell(class_name.value, exe))
+
+
+def _exe_of(pid: int) -> str:
+    """A process's lower-case executable name, or "" if Windows won't say."""
+    from ctypes import wintypes
+
+    process = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not process:
+        return ""
+    try:
+        path = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(len(path))
+        if _kernel32.QueryFullProcessImageNameW(process, 0, path, ctypes.byref(size)):
+            return PureWindowsPath(path.value).name.lower()
+        return ""
+    finally:
+        _kernel32.CloseHandle(process)
+
+
+def _uwp_app(frame: int, host_pid: int) -> str:
+    """The Store app in an ApplicationFrameHost window: the process of its
+    first child window that isn't the host's (as LightBulb finds it)."""
+    from ctypes import wintypes
+
+    found: list[int] = []
+
+    def visit(hwnd, _lparam):
+        try:  # nothing may escape a ctypes callback (see running_apps)
+            child = wintypes.DWORD()
+            _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(child))
+            if child.value and child.value != host_pid:
+                found.append(child.value)
+                return False
+        except Exception:
+            log.debug("Skipping a child window", exc_info=True)
+        return True
+
+    callback = _ENUM_PROC(visit)  # referenced until EnumChildWindows returns
+    _user32.EnumChildWindows(frame, callback, 0)
+    return _exe_of(found[0]) if found else ""
 
 
 # SHQueryUserNotificationState: Windows' own "don't interrupt" signal.
@@ -188,8 +267,6 @@ def running_apps() -> list[str]:
     from ctypes import wintypes
 
     names: set[str] = set()
-    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    _user32.EnumWindows.argtypes = [enum_proc, wintypes.LPARAM]
 
     def visit(hwnd, _lparam):
         # Nothing may escape a ctypes callback: ctypes would print it and
@@ -204,19 +281,12 @@ def running_apps() -> list[str]:
         if _user32.IsWindowVisible(hwnd) and _user32.GetWindowTextLengthW(hwnd) > 0:
             pid = wintypes.DWORD()
             _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            process = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
-            if process:
-                try:
-                    path = ctypes.create_unicode_buffer(1024)
-                    size = wintypes.DWORD(len(path))
-                    if _kernel32.QueryFullProcessImageNameW(process, 0, path, ctypes.byref(size)):
-                        names.add(PureWindowsPath(path.value).name.lower())
-                finally:
-                    _kernel32.CloseHandle(process)
+            if exe := _exe_of(pid.value):
+                names.add(exe)
 
-    callback = enum_proc(visit)  # referenced until EnumWindows returns
+    callback = _ENUM_PROC(visit)  # referenced until EnumWindows returns
     _user32.EnumWindows(callback, 0)
-    return sorted(names - {"explorer.exe", "applicationframehost.exe", "textinputhost.exe", "winlight.exe"})
+    return sorted(names - SHELL_PROCESSES - {UWP_HOST, "winlight.exe"})
 
 
 # --- Session and power events -------------------------------------------------
@@ -551,7 +621,8 @@ def _token_user(process) -> bytes | None:
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 MONITOR_DEFAULTTONEAREST = 2
-DWMWA_EXTENDED_FRAME_BOUNDS = 9
+GWL_STYLE = -16
+WS_CAPTION = 0x00C00000  # a title bar (WS_BORDER | WS_DLGFRAME)
 
 
 class _GUID(ctypes.Structure):
@@ -574,7 +645,6 @@ if sys.platform == "win32":
 
     _user32 = ctypes.WinDLL("user32", use_last_error=True)
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _dwmapi = ctypes.WinDLL("dwmapi")
     _wtsapi32 = ctypes.WinDLL("wtsapi32", use_last_error=True)
     _shell32 = ctypes.WinDLL("shell32")
     _powrprof = ctypes.WinDLL("powrprof")
@@ -613,7 +683,11 @@ if sys.platform == "win32":
     _user32.GetWindowRect.restype = wintypes.BOOL
     _user32.IsWindowVisible.restype = wintypes.BOOL
     _user32.GetWindowTextLengthW.restype = ctypes.c_int
+    _ENUM_PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    _user32.EnumWindows.argtypes = [_ENUM_PROC, wintypes.LPARAM]
     _user32.EnumWindows.restype = wintypes.BOOL
+    _user32.EnumChildWindows.argtypes = [wintypes.HWND, _ENUM_PROC, wintypes.LPARAM]
+    _user32.EnumChildWindows.restype = wintypes.BOOL
     _kernel32.CloseHandle.restype = wintypes.BOOL
     _user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     _user32.GetWindowThreadProcessId.restype = wintypes.DWORD
@@ -625,6 +699,14 @@ if sys.platform == "win32":
     _user32.IsWindowVisible.argtypes = [wintypes.HWND]
     _user32.IsIconic.argtypes = [wintypes.HWND]
     _user32.IsIconic.restype = wintypes.BOOL
+    _user32.IsZoomed.argtypes = [wintypes.HWND]
+    _user32.IsZoomed.restype = wintypes.BOOL
+    _user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    _user32.GetClientRect.restype = wintypes.BOOL
+    _user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+    _user32.ClientToScreen.restype = wintypes.BOOL
+    _user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+    _user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
     _user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
     _user32.RegisterPowerSettingNotification.argtypes = [wintypes.HANDLE, ctypes.POINTER(_GUID), wintypes.DWORD]
     _user32.RegisterPowerSettingNotification.restype = wintypes.HANDLE
@@ -633,8 +715,6 @@ if sys.platform == "win32":
     _kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
     _kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
     _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    _dwmapi.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
-    _dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
     _wtsapi32.WTSRegisterSessionNotification.argtypes = [wintypes.HWND, wintypes.DWORD]
     _wtsapi32.WTSRegisterSessionNotification.restype = wintypes.BOOL
     _wtsapi32.WTSUnRegisterSessionNotification.argtypes = [wintypes.HWND]

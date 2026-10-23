@@ -264,3 +264,13 @@ def test_log_files_by_either_name():
     assert config.is_log_file("WinLight.log") and config.is_log_file("WinLight.log.2")
     assert config.is_log_file("night-light.log.1")  # one an older copy kept open
     assert not config.is_log_file("probe.txt") and not config.is_log_file("settings.json")
+
+
+def test_never_pausing_late_at_night_round_trips_and_bad_values_fall_back(tmp_path):
+    path = tmp_path / "settings.json"
+    night_light = NightLightConfig(never_pause_at_night=True, never_pause_from="time", never_pause_time="23:15")
+    config.save(AppConfig(night_light=night_light), path)
+    assert config.load(path).night_light == night_light
+    path.write_text('{"night_light": {"never_pause_at_night": true, "never_pause_from": "dusk", "never_pause_time": "25:00"}}')
+    loaded = config.load(path).night_light
+    assert (loaded.never_pause_at_night, loaded.never_pause_from, loaded.never_pause_time) == (True, "night", "22:00")

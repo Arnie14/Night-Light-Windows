@@ -32,9 +32,17 @@ PREVIEW_SPEEDUP = 8
 # lock screen and after sleep, often before any event says so). Each check is
 # one GetDeviceGammaRamp per display.
 VERIFY_MS = 1500
-# After unlocking or waking, check again at these moments (ms): Windows may
-# reset the ramp once more after the event, while the desktop reappears.
-REAPPLY_BURST_MS = (0, 100, 300, 700, 1500, 3000)
+# While the displays are off (or the PC sleeps), only this often: nothing is
+# on screen to fix, and turning them on sets the ramps again anyway. Slower,
+# not stopped, in case that event never comes.
+VERIFY_OFF_MS = 30_000
+# After unlocking, waking or a display turning on, the ramps are set again
+# at these moments (ms), whatever they read back (a driver may report the
+# ramp it was sent while the screen shows a reset one), as LightBulb does
+# for two seconds after such an event; then checked at these, as Windows
+# may reset them once more while the desktop reappears.
+REAPPLY_FORCE_MS = (0, 200, 600, 1200, 2000)
+REAPPLY_CHECK_MS = (3000, 5000, 8000, 12000)
 
 # Pausing night light on one display (an exempt app or fullscreen game) and
 # resuming it fade in about a quarter of a second, not a jump.
@@ -137,11 +145,33 @@ class NightLightController(QObject):
             except Exception:
                 log.warning("Checking the gamma ramps failed", exc_info=True)
 
+    def set_displays_off(self, off: bool) -> None:
+        """Check the ramps rarely while the displays are off, and as usual again
+        once they are on (reapply_now() follows that)."""
+        interval = VERIFY_OFF_MS if off else VERIFY_MS
+        if self._verify_timer.interval() != interval:
+            self._verify_timer.setInterval(interval)  # keeps it running, or stopped
+
     def reapply_now(self) -> None:
-        """After unlocking, waking or a display turning on: check right away and
-        a few more times as the desktop comes back."""
-        for delay in REAPPLY_BURST_MS:
-            QTimer.singleShot(delay, self.verify)
+        """After unlocking, waking or a display turning on: set the ramps again
+        right away and a few times as the desktop comes back, then check them
+        for a while longer."""
+        for delay in REAPPLY_FORCE_MS:
+            QTimer.singleShot(delay, self, self._force_reapply)
+        for delay in REAPPLY_CHECK_MS:
+            QTimer.singleShot(delay, self, self.verify)
+
+    def _force_reapply(self) -> None:
+        if self._stopped:
+            return
+        reapply = getattr(self._gamma, "reapply", None)
+        if reapply is None:
+            self.verify()
+            return
+        try:
+            reapply()
+        except Exception:
+            log.warning("Applying the gamma ramps again failed", exc_info=True)
 
     def set_config(self, config: NightLightConfig) -> None:
         self._config = config
@@ -177,7 +207,10 @@ class NightLightController(QObject):
         self._verify_timer.stop()
         self._fade_out()
         # Undo everything, software dimming included, where the backend can.
-        getattr(self._gamma, "release", self._gamma.reset)()
+        try:
+            getattr(self._gamma, "release", self._gamma.reset)()
+        except Exception:
+            log.warning("Could not give the displays their colors back", exc_info=True)
 
     def _fade_out(self) -> None:
         """A short fade to neutral before quitting, rather than a jump."""

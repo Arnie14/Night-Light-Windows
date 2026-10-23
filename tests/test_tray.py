@@ -78,3 +78,29 @@ def test_tooltip_leaves_out_a_schedule_that_is_off(tray):
     assert "Brightness" not in tray.toolTip()
     tray.set_scheduler(FakeScheduler(None))
     assert "Brightness" not in tray.toolTip()
+
+
+def test_suspend_is_a_toggle_until_resumed(tray):
+    """KDE's Suspend: checked, night light stays off until it is unchecked."""
+    from nightlight.core.schedule import OverrideKind
+
+    controller = tray._controller
+    tray._update_menu()
+    suspend = tray._suspend_action
+    assert suspend.isVisible() and not suspend.isChecked()
+    suspend.trigger()
+    assert controller.override.kind is OverrideKind.SUSPEND and controller.override.until is None
+    tray._update_menu()
+    assert suspend.isChecked() and not tray._override_action.isVisible()  # unchecking it is how to resume
+    suspend.trigger()
+    assert controller.override is None
+    tray._update_menu()
+    assert not suspend.isChecked() and tray._override_action.isVisible()
+
+
+def test_nothing_to_suspend_while_night_light_is_off():
+    controller = NightLightController(FakeGamma(), NightLightConfig(), lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
+    tray = Tray(controller)
+    tray._update_menu()
+    assert not tray._suspend_action.isVisible() and tray._override_action.text() == "Activate Night Light"
+    controller.shutdown()

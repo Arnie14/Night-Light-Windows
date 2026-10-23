@@ -99,6 +99,27 @@ def schedule_description(controller: NightLightController) -> str:
     return "\n".join(lines)
 
 
+def is_suspended(controller: NightLightController) -> bool:
+    """Suspended, for a while or until resumed."""
+    override = controller.state.override
+    return override is not None and override.kind is OverrideKind.SUSPEND
+
+
+def can_suspend(controller: NightLightController) -> bool:
+    """Whether there is night light to suspend (or a suspension to end)."""
+    return controller.config.enabled or controller.state.override is not None
+
+
+def toggle_suspended(controller: NightLightController) -> None:
+    """KDE's Suspend and Resume: suspended until resumed by hand, at any
+    time of day (in the day, the evening doesn't turn night light on), or
+    resumed. Replaces a timed suspension or an activation."""
+    if is_suspended(controller):
+        controller.clear_override()
+    else:
+        controller.set_override(OverrideKind.SUSPEND, None)
+
+
 def build_override_menu(controller: NightLightController, menu: QMenu) -> str:
     """Fill `menu` with KDE's override choices; returns the button label.
 

@@ -5,6 +5,7 @@ import time
 from datetime import UTC
 
 import pytest
+from PySide6.QtCore import QEvent, QObject
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from nightlight import app as app_module
@@ -57,6 +58,69 @@ def test_start_minimized_shows_only_the_tray(start):
     night_light, _ = start(GeneralConfig(start_minimized=True))
     assert night_light._settings is None
     assert not night_light.flyout.isVisible()
+
+
+class WindowsShown(QObject):
+    """Every widget shown as a window of its own while installed."""
+
+    def __init__(self):
+        super().__init__()
+        self.shown = []
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Show and obj.isWidgetType() and obj.isWindow():
+            self.shown.append(type(obj).__name__)
+        return False
+
+    def stop(self):
+        QApplication.instance().removeEventFilter(self)
+
+
+def test_opening_settings_and_the_panel_shows_no_other_window(start):
+    """A widget shown before it has a parent opens as a window of its own:
+    each row's description did, so the first opening of the settings flashed
+    dozens of small windows over the screen."""
+    windows = WindowsShown()
+    try:
+        night_light, _ = start(GeneralConfig(start_minimized=True))
+        night_light.show_settings()
+        QApplication.processEvents()
+        night_light._settings.close()
+        night_light.flyout.show_near()
+        QApplication.processEvents()
+        night_light.flyout.hide()
+    finally:
+        windows.stop()
+    assert sorted(set(windows.shown)) == ["Flyout", "SettingsWindow"], windows.shown
+
+
+def calibrated_backends(displays):
+    brightness, gamma = create_backends("fake")
+    gamma.calibrated = lambda: list(displays)
+    return brightness, gamma
+
+
+def test_a_calibrated_display_is_hinted_at_once_ever(start, tmp_path, monkeypatch):
+    shown = []
+    monkeypatch.setattr(QSystemTrayIcon, "showMessage", lambda self, title, text, *args: shown.append(text))
+    night_light, _ = start(GeneralConfig(), backends=calibrated_backends([r"\\.\DISPLAY1"]))
+    night_light.monitors.monitorsChanged.emit(night_light.monitors.monitors)
+    night_light.monitors.monitorsChanged.emit(night_light.monitors.monitors)
+    assert len(shown) == 1 and "Keep each display's color calibration" in shown[0]
+    assert json.loads((tmp_path / "hints.json").read_text()) == ["calibration"]
+    again, _ = start(GeneralConfig(), backends=calibrated_backends([r"\\.\DISPLAY1"]))  # the next start
+    again.monitors.monitorsChanged.emit(again.monitors.monitors)
+    assert len(shown) == 1
+
+
+@pytest.mark.parametrize(("general", "displays"), [(GeneralConfig(keep_calibration=True), [r"\\.\DISPLAY1"]), (GeneralConfig(), [])])
+def test_no_calibration_hint_when_kept_already_or_none_is_calibrated(start, tmp_path, monkeypatch, general, displays):
+    shown = []
+    monkeypatch.setattr(QSystemTrayIcon, "showMessage", lambda self, *args: shown.append(args))
+    night_light, _ = start(general, backends=calibrated_backends(displays))
+    night_light.monitors.monitorsChanged.emit(night_light.monitors.monitors)
+    assert shown == [] and not (tmp_path / "hints.json").exists()
 
 
 def test_start_not_minimized_opens_settings(start):
@@ -154,6 +218,24 @@ def test_sleep_and_waking_reach_every_part(start, monkeypatch):
         ("resume", app_module.RESCAN_AFTER_DISPLAYS_ON_S), "restore all",
         ("schedule", "clock"),
     ]
+
+
+def test_with_the_displays_off_checks_and_app_watching_slow_down_but_never_stop(start):
+    from nightlight.color import controller as controller_module
+    from nightlight.color import exemptions
+    from nightlight.config import NightLightConfig
+
+    night_light, _ = start(GeneralConfig())
+    night_light._apply_settings(AppConfig(NightLightConfig(exempt_fullscreen=True)))
+    verify, polling = night_light.controller._verify_timer, night_light._exemptions._timer
+    watcher, events = night_light._watcher, night_light.system_events
+    for off, back_on in ((watcher.displaysOff, watcher.displaysOn), (watcher.suspending, watcher.resumed),
+                         (watcher.displaysOff, events.unlocked)):  # unlocking: someone is at the screen, whatever was missed
+        off.emit()
+        assert verify.interval() == controller_module.VERIFY_OFF_MS and polling.interval() == exemptions.POLL_OFF_MS
+        assert polling.isActive()
+        back_on.emit()
+        assert verify.interval() == controller_module.VERIFY_MS and polling.interval() == exemptions.POLL_MS
 
 
 def test_displays_turning_back_on_without_having_slept_detects_again(start, monkeypatch):
@@ -328,6 +410,25 @@ def test_an_exempt_app_pauses_night_light_on_its_display(start, monkeypatch):
     assert night_light.controller.paused == {r"\\.\DISPLAY2": "game.exe"}
     night_light._apply_settings(AppConfig())
     assert night_light.controller.paused == {}
+
+
+@pytest.mark.parametrize(("enabled", "paused"), [(True, {}), (False, {r"\\.\DISPLAY2": "game.exe"})])
+def test_late_at_night_listed_apps_dont_pause_night_light(start, enabled, paused):
+    """Only while night light is on: off, the pause is kept (it changes
+    nothing), so turning night light on later still pauses for the app."""
+    from datetime import datetime, timedelta
+
+    from nightlight.config import Mode, NightLightConfig
+    from nightlight.hardware.winsystem import ForegroundApp
+
+    now = datetime.now()
+    night_light, _ = start(GeneralConfig())
+    night_light._exemptions._probe = lambda: ForegroundApp("game.exe", r"\\.\DISPLAY2", True)
+    config = NightLightConfig(enabled=enabled, mode=Mode.ALWAYS, exempt_apps=("game.exe",), never_pause_at_night=True,
+                              never_pause_from="time", never_pause_time=f"{now - timedelta(minutes=1):%H:%M}",
+                              day_start=f"{now + timedelta(hours=2):%H:%M}")
+    night_light._apply_settings(AppConfig(config))
+    assert night_light.controller.paused == paused
 
 
 def test_an_app_already_in_front_at_start_pauses_night_light(start, monkeypatch):

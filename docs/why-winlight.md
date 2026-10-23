@@ -10,6 +10,7 @@ Most display tools on Windows cover one side of the problem:
 
 - **Brightness tools** (Twinkle Tray, Monitorian, PowerToys Power Display, monitor makers' utilities) set monitor brightness over DDC/CI. Some add a brightness schedule (Twinkle Tray's time-of-day adjustments, Monitorian's time commands in its Store add-on) or idle dimming (Twinkle Tray). Some can switch a monitor's own color temperature preset over DDC/CI (PowerToys Power Display, Monitorian's add-on), which changes the monitor's setting rather than running a night light.
 - **Color tools** (Windows Night Light, f.lux, Iris, LightBulb, CareUEyes) shift color temperature on a schedule. Some can be turned off for fullscreen apps or listed apps (f.lux, LightBulb), and some also dim the screen.
+- **Calibration loaders** (DisplayCAL's profile loader, calibrator makers' tray apps) put a calibrated display's calibration back on its graphics card, since Windows loads it only at sign-in and drops it when the screen turns off and on, and many color tools overwrite it.
 
 Winlight manages both, for several displays, from one panel:
 
@@ -17,6 +18,7 @@ Winlight manages both, for several displays, from one panel:
 - **Brightness** for every display, whatever its control, with **its own schedule**, separate from night light's.
 - **Dimming when idle**, with exceptions for apps that need the screen on.
 - **Night light paused per display**, while the other displays keep it, in three independent ways: for any fullscreen app, for apps on a list, and automatically for video playback, calls, exclusive-fullscreen games and known photo, video and design apps.
+- **Each display's calibration kept**: night light tints over it, Winlight puts it back when Windows drops it, reloads it from the display's color profile, and shows its status for every display.
 
 We haven't found another Windows app that combines these. If you only need one of them, a dedicated tool may serve you well, and the sections below say when.
 
@@ -53,6 +55,19 @@ What Winlight adds:
 
 A color tool may still suit you better if you need macOS or Linux, its particular color presets or effects, or many years of track record.
 
+## If you use a calibration loader: DisplayCAL, a calibrator's own app
+
+If you calibrate your displays, you may run a loader to keep the calibration on screen. Most night light apps replace the display's ramp with their own tint, so the calibration is lost while they run; Winlight tints over it instead.
+
+What Winlight does as a loader:
+
+- **Keeps the calibration under night light**, and gives it back when it quits, even after a crash.
+- **Puts it back when Windows drops it** (the screen turning off and on, waking), if you turn that on, and says how many times it did today.
+- **Reloads it from the display's color profile** on request, as Windows does at sign-in: the `vcgt` calibration of DisplayCAL, ArgyllCMS and most calibrator software, and the curves of Windows' own calibration tool. A profile without a calibration means none, so one you remove in Windows stops being put back.
+- **Shows each display's calibration** in Settings > Displays and on the command line.
+
+A dedicated loader may still suit you better for profiling and measuring (DisplayCAL is a profiler first), for 3D LUTs or other corrections beyond a gamma ramp, or for calibrations stored in forms Winlight doesn't read yet (Windows' calibration tool with gain or offset curves). Run only one loader: two would fight over the ramp, and Winlight backs off from a program that keeps changing it.
+
 ## If you use a brightness tool: Twinkle Tray, Monitorian, PowerToys, a monitor maker's utility
 
 Twinkle Tray and Monitorian set the standard for monitor brightness on Windows, and Winlight learned a great deal from them: how to find monitors, which fallbacks to use, how to survive sleep, and which Windows quirks to expect. The [acknowledgements](../README.md#acknowledgements) list what came from each, and [windows-notes.md](windows-notes.md) has the details.
@@ -82,6 +97,7 @@ A brightness tool may suit you better if you rely on:
    - Another color tool: turn off its night light, or quit it.
    - Another brightness tool: quit it, or stop it from starting with Windows. Two apps talking DDC/CI to one monitor can make it ignore both.
    - GPU color settings (NVIDIA, AMD, Intel): leave them at their defaults.
+   - A calibration loader, if you turn on keeping calibrations in Winlight: quit it, so only one puts the calibration back.
 
    The installer's first page lists these too.
 3. **Carry over your settings.** They map closely:

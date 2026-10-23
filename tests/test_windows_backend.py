@@ -3,7 +3,7 @@
 
 import pytest
 
-from nightlight.core.colortemp import gamma_ramp, identity_ramp, whitepoint
+from nightlight.core.colortemp import gamma_ramp, identity_ramp, ramps_match, whitepoint
 from nightlight.hardware import win32, windows
 from nightlight.hardware.brightness import MonitorGoneError, MonitorInfo
 from nightlight.hardware.win32 import DdcError, DisplayTarget, PhysicalMonitor
@@ -250,6 +250,11 @@ class FakeGdi:
         return True
 
 
+def same(a, b):
+    """The same ramp, but for the nudge each tinted ramp gets (windows.NUDGE_STEPS)."""
+    return ramps_match(a, b, tolerance=windows.NUDGE_STEPS)
+
+
 def peak_blue(gdi, name=r"\\.\DISPLAY1"):
     return gdi.ramps[name][2][-1] / 65535
 
@@ -270,7 +275,7 @@ def test_calibration_is_kept_as_the_base(monkeypatch):
     gdi.install(monkeypatch, [target(r"\\.\DISPLAY1", "Calibrated")])
     gamma = windows.WindowsGammaBackend()
     gamma.apply(5000)
-    assert gdi.ramps[r"\\.\DISPLAY1"] == gamma_ramp(whitepoint(5000), base=calibration)
+    assert same(gdi.ramps[r"\\.\DISPLAY1"], gamma_ramp(whitepoint(5000), base=calibration))
     gamma.reset()
     assert gdi.ramps[r"\\.\DISPLAY1"] == calibration
 
@@ -315,7 +320,7 @@ def test_ramp_reset_by_windows_becomes_the_new_base(monkeypatch):
     gdi.ramps[r"\\.\DISPLAY1"] = calibration
     gamma.displays_changed()
     gamma.apply(4500)
-    assert gdi.ramps[r"\\.\DISPLAY1"] == gamma_ramp(whitepoint(4500), base=calibration)
+    assert same(gdi.ramps[r"\\.\DISPLAY1"], gamma_ramp(whitepoint(4500), base=calibration))
 
 
 def test_driver_that_ignores_ramps_does_not_cause_rebasing(monkeypatch):
@@ -701,7 +706,7 @@ def test_after_a_crash_the_calibration_is_recovered(monkeypatch, tmp_path):
     restarted.reset()
     assert gdi.ramps[D1] == CALIBRATION  # not a flat ramp: the calibration came back
     restarted.apply(5000)
-    assert gdi.ramps[D1] == gamma_ramp(whitepoint(5000), base=CALIBRATION)
+    assert same(gdi.ramps[D1], gamma_ramp(whitepoint(5000), base=CALIBRATION))
 
 
 def test_a_crash_mid_fade_is_recognised_too(monkeypatch, tmp_path):
@@ -723,7 +728,7 @@ def test_a_stale_journal_entry_is_dropped(monkeypatch, tmp_path):
     gdi.ramps[D1] = [list(c) for c in CALIBRATION]  # ...and Windows reloaded the calibration at sign-in
     restarted = windows.WindowsGammaBackend(journal=windows.GammaJournal(path))
     restarted.apply(5000)
-    assert gdi.ramps[D1] == gamma_ramp(whitepoint(5000), base=CALIBRATION)
+    assert same(gdi.ramps[D1], gamma_ramp(whitepoint(5000), base=CALIBRATION))
     assert windows.GammaJournal(path).entry("DEL41A2:C1") is not None  # tinted again now
     restarted.release()
     assert windows.GammaJournal(path).entry("DEL41A2:C1") is None  # clean exit: nothing to recover
@@ -747,7 +752,7 @@ def test_verify_puts_back_a_ramp_windows_reset(monkeypatch):
     assert gamma.verify() is False  # nothing changed: nothing to do
     gdi.ramps[D1] = identity_ramp()  # the lock screen reset it
     assert gamma.verify() is True
-    assert gdi.ramps[D1] == tinted
+    assert same(gdi.ramps[D1], tinted)
 
 
 def test_verify_leaves_untouched_displays_alone(monkeypatch):
@@ -769,7 +774,7 @@ def test_a_display_can_pause_night_light_on_its_own(monkeypatch):
     gamma.apply(3800)  # night light keeps changing on the other display only
     assert peak_blue(gdi, d2) == 1.0
     gamma.set_override(d2, None)
-    assert peak_blue(gdi, d2) == pytest.approx(peak_blue(gdi, D1))
+    assert peak_blue(gdi, d2) == pytest.approx(peak_blue(gdi, D1), abs=1e-4)
 
 
 def test_idle_dimming_is_a_layer_that_skips_hdr_displays(monkeypatch):
@@ -803,7 +808,7 @@ def test_verify_puts_back_a_reset_ramp_even_when_the_display_list_is_refreshed(m
     gdi.ramps[D1] = identity_ramp()  # the lock screen reset it...
     gamma._listed_at = None  # ...just as the display list is due for a refresh
     assert gamma.verify() is True
-    assert gdi.ramps[D1] == tinted
+    assert same(gdi.ramps[D1], tinted)
 
 
 def test_a_refreshed_list_reapplies_dimming_and_pauses_too(monkeypatch):
@@ -815,7 +820,7 @@ def test_a_refreshed_list_reapplies_dimming_and_pauses_too(monkeypatch):
     gdi.ramps[D1] = identity_ramp()
     gamma._listed_at = None
     gamma.verify()
-    assert gdi.ramps[D1] == dimmed
+    assert same(gdi.ramps[D1], dimmed)
 
 
 def test_a_neutral_display_is_not_touched_when_the_list_is_refreshed(monkeypatch):
@@ -868,7 +873,7 @@ def test_another_program_fighting_over_the_ramp_is_backed_off_from(monkeypatch, 
     with caplog.at_level(logging.INFO):
         for _ in range(2):
             gdi.ramps[D1] = theirs
-            assert gamma.verify() is True and gdi.ramps[D1] == ours  # a reset, or once: put back
+            assert gamma.verify() is True and same(gdi.ramps[D1], ours)  # a reset, or once: put back
         gdi.ramps[D1] = theirs
         assert gamma.verify() is False and gdi.ramps[D1] == theirs  # the third time within 30 s: back off
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "keeps changing the colors" in r.getMessage()]
@@ -882,6 +887,53 @@ def test_another_program_fighting_over_the_ramp_is_backed_off_from(monkeypatch, 
     assert gamma.verify() is True and gdi.ramps[D1] != theirs  # night light is back
     gamma.release()
     assert gdi.ramps[D1] == identity_ramp()  # its tint wasn't a base worth keeping
+
+
+def test_each_tinted_ramp_differs_a_little_from_the_last(monkeypatch):
+    """Some drivers ignore a ramp that is the same as the last one sent, even
+    after the screen's was reset (LightBulb's rotating offset)."""
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    sent = []
+    for _ in range(windows.NUDGE_STEPS):
+        gamma.apply(4500)
+        gamma.reapply()
+        sent.append(gdi.ramps[D1])
+    assert len({tuple(ramp[2]) for ramp in sent}) == windows.NUDGE_STEPS  # all different
+    assert all(same(ramp, gamma_ramp(whitepoint(4500))) for ramp in sent)  # all invisibly so
+    gamma.reset()
+    assert gdi.ramps[D1] == identity_ramp()  # the display's own ramp comes back exactly
+
+
+def test_waking_sets_the_ramp_again_even_where_it_reads_back_right(monkeypatch):
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.apply(4500)
+    sets = gdi.sets
+    assert gamma.verify() is False and gdi.sets == sets  # a check alone leaves a right ramp alone
+    assert gamma.reapply() is True and gdi.sets == sets + 1  # waking: sent again
+
+
+def test_reapplying_leaves_neutral_displays_alone(monkeypatch):
+    gdi = FakeGdi({D1: gamma_ramp(whitepoint(5000))}, min_peak=0.0)  # another tool's tint; ours is off
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    assert gamma.reapply() is False and gdi.sets == 0
+
+
+def test_windows_resetting_the_ramp_while_the_desktop_comes_back_is_no_fight(monkeypatch):
+    """After waking, Windows may reset the ramp several times: those aren't
+    another program, so night light doesn't back off for minutes."""
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.apply(4500)
+    gamma.reapply()
+    for _ in range(windows.CONTEST_CHANGES + 1):
+        gdi.ramps[D1] = identity_ramp()
+        assert gamma.verify() is True and peak_blue(gdi) < 0.9  # put back each time
 
 
 def test_backing_off_takes_longer_each_time_it_happens_again(monkeypatch):
@@ -912,7 +964,7 @@ def test_one_reset_now_and_then_is_not_a_fight(monkeypatch):
     for _ in range(5):  # the lock screen, every few minutes
         time.sleep(0.03)
         gdi.ramps[D1] = identity_ramp()
-        assert gamma.verify() is True and gdi.ramps[D1] == ours
+        assert gamma.verify() is True and same(gdi.ramps[D1], ours)
     assert not gamma._displays[D1].contested
 
 
@@ -935,10 +987,10 @@ def test_a_calibration_windows_drops_is_put_back_under_night_light(monkeypatch, 
     gdi, gamma = kept(monkeypatch, tmp_path)
     gamma.apply(4500)
     tinted = gdi.ramps[D1]
-    assert tinted == gamma_ramp(whitepoint(4500), base=CALIBRATION)
+    assert same(tinted, gamma_ramp(whitepoint(4500), base=CALIBRATION))
     gdi.ramps[D1] = identity_ramp()  # Windows dropped it
     assert gamma.verify() is True
-    assert gdi.ramps[D1] == tinted  # tinted over the calibration again, not over a flat ramp
+    assert same(gdi.ramps[D1], tinted)  # tinted over the calibration again, not over a flat ramp
 
 
 def test_with_night_light_off_the_calibration_alone_is_put_back(monkeypatch, tmp_path):
@@ -960,7 +1012,7 @@ def test_without_the_option_a_dropped_calibration_is_left_to_windows(monkeypatch
     assert gdi.ramps[D1] == identity_ramp()
     gamma._listed_at = None  # a while later (the ramp is re-read when the list is)
     gamma.apply(4500)
-    assert gdi.ramps[D1] == gamma_ramp(whitepoint(4500))  # over what Windows shows
+    assert same(gdi.ramps[D1], gamma_ramp(whitepoint(4500)))  # over what Windows shows
 
 
 def test_a_calibration_lost_while_the_app_was_closed_comes_back(monkeypatch, tmp_path):
@@ -983,6 +1035,88 @@ def test_a_new_calibration_is_taken_up(monkeypatch, tmp_path):
     gdi.ramps[D1] = identity_ramp()
     gamma.verify()
     assert gdi.ramps[D1] == OTHER_CALIBRATION  # the new one is what's kept
+
+
+def with_profile(monkeypatch, tmp_path, ramp_in_profile, windows_loads=True):
+    """The display's color profile holds `ramp_in_profile` (None: no calibration)."""
+    from tests.test_icc import profile, vcgt_table
+
+    path = tmp_path / "display.icm"
+    path.write_bytes(profile({b"vcgt": vcgt_table(ramp_in_profile)} if ramp_in_profile else {b"rTRC": b"curv" + bytes(8)}))
+    monkeypatch.setattr(win32, "display_profile", lambda name: str(path))
+    monkeypatch.setattr(win32, "windows_loads_calibrations", lambda: windows_loads)
+
+
+def test_calibration_status_per_display(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path, keep=False)
+    assert gamma.calibration_status() == {D1: "In use"} and gamma.calibrated() == [D1]
+    gdi.ramps[D1] = identity_ramp()  # Windows dropped it; keeping is off
+    gamma.verify()
+    gamma._listed_at = None
+    assert gamma.calibration_status() == {D1: windows.CALIBRATION_REMEMBERED} and gamma.calibrated() == []
+
+
+def test_reloading_puts_the_profiles_calibration_on_screen(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path, ramp=identity_ramp(), keep=False)  # dropped, and the option is off
+    with_profile(monkeypatch, tmp_path, CALIBRATION)
+    assert gamma.reload_calibrations() == {D1: "loaded from display.icm"}
+    assert gdi.ramps[D1] == CALIBRATION
+    assert gamma.calibration_status() == {D1: "Loaded from its color profile"}
+    gamma.apply(4500)  # night light tints over it
+    assert same(gdi.ramps[D1], gamma_ramp(whitepoint(4500), base=CALIBRATION))
+
+
+def test_reloading_under_night_light_tints_the_reloaded_calibration(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path, ramp=identity_ramp())
+    gamma.apply(4500)
+    with_profile(monkeypatch, tmp_path, CALIBRATION)
+    gamma.reload_calibrations()
+    assert same(gdi.ramps[D1], gamma_ramp(whitepoint(4500), base=CALIBRATION))
+
+
+def test_a_calibration_removed_in_windows_stops_being_put_back_after_a_reload(monkeypatch, tmp_path):
+    """Keeping calibrations would otherwise keep restoring one the user deleted."""
+    gdi, gamma = kept(monkeypatch, tmp_path)
+    gamma.reset()
+    gdi.ramps[D1] = identity_ramp()  # removed in Windows, which reset the ramp
+    gamma.verify()
+    assert gdi.ramps[D1] == CALIBRATION  # put back from memory
+    with_profile(monkeypatch, tmp_path, None)  # the profile now holds none
+    assert gamma.reload_calibrations() == {D1: "none: its profile (display.icm) holds no calibration"}
+    assert gdi.ramps[D1] == identity_ramp()
+    gdi.ramps[D1] = identity_ramp()
+    gamma.verify()
+    assert gdi.ramps[D1] == identity_ramp() and gamma.calibration_status() == {D1: "None detected"}  # forgotten for good
+
+
+def test_forgetting_stops_putting_back_a_remembered_calibration(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path)
+    gamma.apply(4500)
+    gdi.ramps[D1] = identity_ramp()  # dropped
+    gamma.verify()
+    assert gamma.calibration_status() == {D1: "Put back by Winlight after Windows dropped it (once today)"}
+    assert gamma.forget_calibrations() == 1
+    assert same(gdi.ramps[D1], gamma_ramp(whitepoint(4500)))  # over a flat ramp now
+    assert gamma.calibration_status() == {D1: "None detected"}
+    assert windows.GammaJournal(tmp_path / "gamma.json").calibration("A") is None  # forgotten on disk too
+    assert gamma.forget_calibrations() == 0
+
+
+def test_with_windows_calibration_loading_off_reload_leaves_it_alone(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path, ramp=OTHER_CALIBRATION, keep=False)  # DisplayCAL's loader set this
+    with_profile(monkeypatch, tmp_path, None, windows_loads=False)
+    assert "another program" in gamma.reload_calibrations()[D1]
+    assert gdi.ramps[D1] == OTHER_CALIBRATION
+
+
+def test_an_unreadable_profile_is_reported_and_changes_nothing(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path, keep=False)
+    path = tmp_path / "broken.icm"
+    path.write_bytes(b"not a profile")
+    monkeypatch.setattr(win32, "display_profile", lambda name: str(path))
+    monkeypatch.setattr(win32, "windows_loads_calibrations", lambda: True)
+    assert gamma.reload_calibrations() == {D1: "its color profile couldn't be read"}
+    assert gdi.ramps[D1] == CALIBRATION
 
 
 def test_a_display_without_a_calibration_is_not_touched(monkeypatch, tmp_path):
@@ -1093,6 +1227,64 @@ def test_a_calibration_to_a_warm_white_point_is_kept_not_reset(monkeypatch):
     gdi.install(monkeypatch, [target(D1, "Calibrated to D50")])
     backend = windows.WindowsGammaBackend()
     backend.apply(4000)
-    assert gdi.ramps[D1] == gamma_ramp(whitepoint(4000), base=warm_white)
+    assert same(gdi.ramps[D1], gamma_ramp(whitepoint(4000), base=warm_white))
     backend.reset()
     assert gdi.ramps[D1] == warm_white
+
+
+def test_a_ramp_change_stuck_on_another_thread_never_freezes_the_caller(monkeypatch, caplog):
+    """Software dimming changes the ramp on the monitor thread under the
+    lock; a driver call that hangs there is abandoned by its time limit but
+    keeps the lock. The UI thread's next change mustn't wait for ever."""
+    import logging
+
+    from nightlight.hardware.gamma import GammaBusy
+
+    monkeypatch.setattr(windows, "LOCK_WAIT_S", 0.2)
+    gdi = FakeGdi({D1: identity_ramp()}, min_peak=0.0)
+    gdi.install(monkeypatch, [target(D1, "A")])
+    gamma = windows.WindowsGammaBackend()
+    gamma.apply(4500)
+    holding, release = threading.Event(), threading.Event()
+
+    def stuck_driver_call():
+        with gamma._lock:
+            holding.set()
+            release.wait(10)
+
+    worker = threading.Thread(target=stuck_driver_call, daemon=True)
+    worker.start()
+    holding.wait(5)
+    with caplog.at_level(logging.WARNING):
+        started = time.monotonic()
+        gamma.apply(4000)  # skipped, not frozen
+        first = time.monotonic() - started
+        started = time.monotonic()
+        assert gamma.verify() is False and gamma.warmest_accepted() == {} and not gamma.dimmed
+        later = time.monotonic() - started
+    assert first < 1.0 and later < 0.5  # waited once, then barely
+    assert sum("stuck" in r.getMessage() for r in caplog.records) == 1  # said once
+    with pytest.raises(GammaBusy):
+        gamma.reload_calibrations()  # asked by the user: they're told
+    release.set()
+    worker.join(5)
+    gamma.apply(4000)  # it returned: everything works again
+    assert same(gdi.ramps[D1], gamma_ramp(whitepoint(4000)))
+
+
+def test_the_status_counts_how_often_a_calibration_was_put_back_today(monkeypatch, tmp_path):
+    monkeypatch.setattr(windows, "CONTEST_CHANGES", 10)  # three resets in a row here, not a fight
+    gdi, gamma = kept(monkeypatch, tmp_path)
+    gamma.apply(4500)
+    for _ in range(3):
+        gdi.ramps[D1] = identity_ramp()  # the screen turned off and on
+        gamma.verify()
+    assert gamma.calibration_status() == {D1: "Put back by Winlight after Windows dropped it (3 times today)"}
+    gdi.ramps[D1] = [list(c) for c in OTHER_CALIBRATION]  # Windows loaded one itself meanwhile
+    gamma.verify()
+    assert gamma.calibration_status() == {D1: "In use; put back 3 times today"}
+
+
+def test_a_display_without_a_calibration_says_none_detected(monkeypatch, tmp_path):
+    gdi, gamma = kept(monkeypatch, tmp_path, ramp=identity_ramp(), keep=False)
+    assert gamma.calibration_status() == {D1: "None detected"}

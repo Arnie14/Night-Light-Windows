@@ -250,3 +250,34 @@ def test_a_paused_display_is_named_in_the_panel():
         assert "Paused" not in flyout._night_text.text()
     finally:
         controller.shutdown()
+
+
+def test_suspend_button_suspends_until_resumed_with_timed_choices_on_its_arrow():
+    from PySide6.QtWidgets import QToolButton
+
+    from nightlight.config import Mode
+    from nightlight.core.schedule import OverrideKind
+
+    night = NightLightConfig(enabled=True, mode=Mode.TIMES, night_start="20:00", day_start="06:00")
+    controller = NightLightController(FakeGamma(), night, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
+    panel = Flyout(FakeMonitors(), controller, as_window=True)
+    button = panel._toggle
+    # In the day too: suspended, the evening doesn't turn night light on.
+    assert button.text() == "Suspend" and button.popupMode() is QToolButton.ToolButtonPopupMode.MenuButtonPopup
+    assert button.menu().actions()[0].text() == "For 1 hour"  # the timed choices
+    button.click()
+    assert controller.override.kind is OverrideKind.SUSPEND and controller.override.until is None
+    assert button.text() == "Resume" and button.menu() is None
+    button.click()
+    assert controller.override is None and button.text() == "Suspend"
+    controller.shutdown()
+
+
+def test_with_night_light_off_the_button_only_offers_to_activate(flyout):
+    from PySide6.QtWidgets import QToolButton
+
+    panel, _ = flyout
+    assert panel._toggle.text() == "Activate"
+    assert panel._toggle.popupMode() is QToolButton.ToolButtonPopupMode.InstantPopup
+    panel._on_toggle_clicked()  # (a click opens the menu) never suspends night light that is off
+    assert panel._controller.override is None

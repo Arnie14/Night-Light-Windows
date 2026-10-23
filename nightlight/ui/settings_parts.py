@@ -214,7 +214,6 @@ class SettingRow(QWidget):
         text.addWidget(self.title)
         self.description = SecondaryLabel(description, scale=0.9)
         self.description.setWordWrap(True)
-        self.description.setVisible(bool(description))
         text.addWidget(self.description)
         line.addLayout(text, 1)
         if control is not None:
@@ -223,6 +222,10 @@ class SettingRow(QWidget):
         if below is not None:
             outer.addWidget(below)
         self.control = control
+        # Only now, inside this row: showing a widget without a parent opens
+        # it as a window of its own, and every row's label flashed on screen
+        # while the settings window was first built.
+        self.description.setVisible(bool(description))
 
     def set_description(self, text: str) -> None:
         self.description.setText(text)

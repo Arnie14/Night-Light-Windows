@@ -29,10 +29,12 @@ ALL = "all"
 
 
 class CommandHandler:
-    def __init__(self, monitors: MonitorManager, controller: NightLightController, config: Callable[[], AppConfig]) -> None:
+    def __init__(self, monitors: MonitorManager, controller: NightLightController, config: Callable[[], AppConfig],
+                 gamma=None) -> None:
         self._monitors = monitors
         self._controller = controller
         self._config = config
+        self._gamma = gamma  # for calibrations (the Windows gamma backend)
 
     def handle(self, request: dict) -> dict:
         command = request.get("command")
@@ -45,6 +47,8 @@ class CommandHandler:
                 return self._set(str(request.get("value", "")), request.get("display", ALL))
             if command == "night-light":
                 return self._night_light(request.get("action", "status"))
+            if command == "calibration":
+                return self._calibration(request.get("action", "status"))
             if command == "refresh":
                 self._monitors.retry()
                 return _ok("Detecting displays again.")
@@ -103,15 +107,46 @@ class CommandHandler:
         controller = self._controller
         if action == "toggle":
             action = "off" if is_night_light_on(controller) else "on"
-        if action == "on":
+        if action == "suspend":
+            controller.set_override(OverrideKind.SUSPEND, None)
+        elif action == "resume":
+            controller.clear_override()
+        elif action == "on":
             controller.set_override(OverrideKind.ACTIVATE, None)
         elif action == "off":
             controller.set_override(OverrideKind.SUSPEND, None)
         elif action == "auto":
             controller.clear_override()
         elif action != "status":
-            raise _Error(f"Night light action must be on, off, toggle, auto or status: not {action!r}.")
+            raise _Error(f"Night light action must be on, off, toggle, suspend, resume, auto or status: not {action!r}.")
         return _ok(f"Night light: {night_light_status(controller)}", {"night_light": self._night_light_data()})
+
+    def _calibration(self, action: str) -> dict:
+        """Each display's color calibration: how it stands, reloaded from its
+        profile, or the remembered ones forgotten."""
+        if action == "forget":
+            count = self._calibration_call("forget_calibrations")
+            return _ok(f"Forgot {count} remembered calibration{'s' if count != 1 else ''}.", {"forgotten": count})
+        if action == "reload":
+            results = self._calibration_call("reload_calibrations")
+            displays = {self._gdi_name(name): outcome for name, outcome in results.items()}
+            return _ok("\n".join(f"{name}: {outcome}" for name, outcome in displays.items()) or "No displays.",
+                       {"calibrations": displays})
+        if action != "status":
+            raise _Error(f"Calibration action must be status, reload or forget: not {action!r}.")
+        displays = {self._gdi_name(name): text for name, text in self._calibration_call("calibration_status").items()}
+        return _ok("\n".join(f"{name}: {text}" for name, text in displays.items()) or "No displays.", {"calibrations": displays})
+
+    def _calibration_call(self, name: str):
+        method = getattr(self._gamma, name, None)
+        if method is None:
+            raise _Error("Calibrations are only handled on Windows.")
+        return method()
+
+    def _gdi_name(self, gdi_name: str) -> str:
+        """A display's name from its GDI name, as the panel shows it."""
+        monitor = next((m for m in self._monitors.monitors if m.display == gdi_name), None)
+        return self._name(monitor) if monitor is not None else gdi_name
 
     # --- Helpers ----------------------------------------------------------
 

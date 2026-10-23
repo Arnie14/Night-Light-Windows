@@ -50,6 +50,7 @@ class CompatibilityEntry:
     detail: str
     night_light: str
     why: str = ""  # how its brightness is controlled, and why
+    calibration: str = ""  # how its color calibration stands ("In use", "None"); "" if unknown
 
     @property
     def summary(self) -> str:
@@ -70,11 +71,13 @@ def mask_serial(serial: str) -> str:
     return "" if not serial else serial if len(serial) <= 4 else f"…{serial[-4:]}"
 
 
-def entries(monitors: list[MonitorInfo], states: dict | None = None, warmest: dict[str, int] | None = None) -> list[CompatibilityEntry]:
+def entries(monitors: list[MonitorInfo], states: dict | None = None, warmest: dict[str, int] | None = None,
+            calibrations: dict[str, str] | None = None) -> list[CompatibilityEntry]:
     """One entry per display. `states` are MonitorManager.states (for live
     status); `warmest` maps a GDI name to the warmest night light Windows
-    accepted there, where it refused warmer."""
-    states, warmest = states or {}, warmest or {}
+    accepted there, where it refused warmer; `calibrations` a GDI name to
+    how its color calibration stands."""
+    states, warmest, calibrations = states or {}, warmest or {}, calibrations or {}
     result = []
     for info in monitors:
         details = info.details
@@ -112,6 +115,7 @@ def entries(monitors: list[MonitorInfo], states: dict | None = None, warmest: di
                 detail=detail,
                 night_light=night_light,
                 why=info.why,
+                calibration=calibrations.get(source, ""),
             )
         )
     return result
@@ -152,6 +156,7 @@ def render(items: list[CompatibilityEntry], system: dict[str, str] | None = None
             ("Brightness", e.brightness if e.works else f"not controllable: {e.status}"),
             ("How", e.why),
             ("Night light", e.night_light),
+            ("Calibration", e.calibration),
             ("Connection", e.connector),
             ("Manufacturer", e.manufacturer),
             ("Model", e.model),
