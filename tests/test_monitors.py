@@ -498,3 +498,44 @@ def test_an_hdr_monitor_that_takes_changes_stays_on_ddc(manager, monkeypatch):
     for _ in range(32):  # past the verification read (short waits: a long QTest.qWait starves the monitor thread)
         QTest.qWait(50)
     assert monitors.state("A").info.channel == "ddc" and backend.locked == set() and monitors.state("A").observed == 30
+
+
+class HdrOnBackend(SlowBackend):
+    """A DDC/CI monitor with HDR on, its brightness working."""
+
+    def list_monitors(self):
+        from dataclasses import replace
+
+        return [replace(info, hdr=True, channel="ddc") for info in super().list_monitors()]
+
+
+def test_a_display_left_to_the_user_in_hdr_gets_only_the_users_own_changes(manager):
+    """Some monitors show a tint after DDC/CI brightness changes in HDR mode
+    (Twinkle Tray #1310): restoring and the schedule leave such a display alone."""
+    backend = HdrOnBackend(delay=0)
+    monitors = manager(backend)
+    monitors.set_hdr_manual(lambda key: key == "A")
+    state = ready(monitors)
+    assert monitors.hands_off("A")
+    monitors.restore_brightness("A", 30)
+    monitors.set_brightness("A", 40, source=SCHEDULE)
+    QTest.qWait(100)
+    assert backend.sets == []
+    monitors.set_brightness("A", 60)  # the user's own slider
+    assert wait_until(lambda: state.commanded == 60) and backend.sets == [60]
+    monitors.set_hdr_manual(lambda key: False)
+    assert not monitors.hands_off("A")
+
+
+def test_only_hdr_ddc_displays_are_left_to_the_user():
+    from dataclasses import replace
+
+    monitors = MonitorManager(SlowBackend(delay=0))
+    try:
+        monitors.set_hdr_manual(lambda key: True)
+        state = ready(monitors)
+        assert not monitors.hands_off("A")  # HDR is off
+        state.info = replace(state.info, hdr=True, channel="sdr")  # HDR on, but Windows' SDR level: no DDC/CI
+        assert not monitors.hands_off("A")
+    finally:
+        monitors.shutdown()

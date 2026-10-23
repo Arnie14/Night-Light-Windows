@@ -58,6 +58,7 @@ def test_passing_shell_ui_but_not_the_desktop():
     assert is_passing_shell("Shell_TrayWnd", "explorer.exe")
     assert not is_passing_shell("Progman", "explorer.exe")  # on the desktop, nothing is in front
     assert not is_passing_shell("WorkerW", "explorer.exe")
+    assert not is_passing_shell("CabinetWClass", "explorer.exe")  # File Explorer: an app like any other
     assert not is_passing_shell("UnityWndClass", "game.exe")
 
 
@@ -277,3 +278,17 @@ def test_a_real_window_receives_windows_broadcasts():
     signals = seen.split(",")
     # The display state the first time is Windows' current one (ignored, if it hasn't sent its own already).
     assert signals[-6:] == ["displayOff", "displayOn", "panel 35", "suspending", "resumed", "clockChanged"]
+
+
+def test_power_source_changes_are_reported_once_each():
+    from nightlight.hardware.winsystem import GUID_ACDC_POWER_SOURCE, POWER_SOURCE, SystemEvents
+
+    assert classify(winsystem.WM_POWERBROADCAST, winsystem.PBT_POWERSETTINGCHANGE, GUID_ACDC_POWER_SOURCE, 1) == POWER_SOURCE
+    events = SystemEvents()
+    seen = []
+    events.powerSourceChanged.connect(seen.append)
+    events.handle(POWER_SOURCE, 0)  # the current state, reported on registering
+    events.handle(POWER_SOURCE, 1)  # unplugged
+    events.handle(POWER_SOURCE, 1)  # again: no change
+    events.handle(POWER_SOURCE, 0)  # plugged in
+    assert seen == [1, 0]

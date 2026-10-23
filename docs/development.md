@@ -114,7 +114,8 @@ nightlight/
                             Night Light), calls (time limits), kde (Linux development backend)
   brightness/               monitors (the one queue of monitor calls, on a worker thread), memory (remembered
                             levels), scheduler (the brightness schedule), idle_dim, keys (the laptop-key
-                            follower), wake_report (re-detection after waking)
+                            follower), power_source (plugging in and unplugging), wake_report (re-detection
+                            after waking)
   color/                    controller (night light on the displays), exemptions (pausing per display)
   system/                   autostart, single_instance (one copy, and the command-line pipe), watcher (display
                             changes, sleep), gc_guard (garbage collection on the main thread), files (atomic

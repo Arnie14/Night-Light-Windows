@@ -24,6 +24,10 @@ class FakeMonitors(QObject):
         self.sent = []
         self.reads = []
         self.own = False  # whether the app "just wrote" the panel
+        self.manual_in_hdr = set()  # keys left to the user while in HDR
+
+    def hands_off(self, key):
+        return key in self.manual_in_hdr
 
     def value(self, key):
         return self.brightness.get(key)
@@ -118,3 +122,10 @@ def test_a_new_detection_forgets_the_last_panel_level(keys):
     monitors.monitorsChanged.emit(monitors.monitors)
     monitors.observed.emit("BOE0812", 80)
     assert monitors.sent == []
+
+
+def test_a_display_left_to_the_user_in_hdr_doesnt_follow(keys):
+    keys, monitors, _ = keys
+    monitors.manual_in_hdr = {"DEL41A2"}
+    keys.on_windows_event(10)
+    assert monitors.sent == [("SAM7136", 20)]

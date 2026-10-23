@@ -886,6 +886,107 @@ def _device_context_profile(gdi_name: str) -> str | None:
     return path.value or None
 
 
+# Windows refuses gamma ramps far from neutral (very warm night light) unless
+# this value is 256: f.lux's "expanded range" and LightBulb's "Extended gamma
+# range" set it, the way LightBulb does (RegistrySwitch, Reg.SetValue): a
+# direct write, which works when running as administrator, else reg.exe
+# through the administrator prompt.
+GAMMA_RANGE_KEY = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM"
+GAMMA_RANGE_VALUE = "GdiIcmGammaRange"
+EXPANDED_GAMMA_RANGE = 256
+EXPAND_TIMEOUT_S = 60  # reg.exe takes a moment; it mustn't freeze the app if it hangs
+ERROR_CANCELLED = 1223  # the user said No to the administrator prompt
+
+
+class SHELLEXECUTEINFOW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD), ("fMask", wintypes.ULONG), ("hwnd", wintypes.HWND), ("lpVerb", wintypes.LPCWSTR),
+        ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR), ("lpDirectory", wintypes.LPCWSTR),
+        ("nShow", ctypes.c_int), ("hInstApp", wintypes.HINSTANCE), ("lpIDList", ctypes.c_void_p),
+        ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY), ("dwHotKey", wintypes.DWORD),
+        ("hIconOrMonitor", wintypes.HANDLE), ("hProcess", wintypes.HANDLE),
+    ]
+
+
+def gamma_range_expanded() -> bool:
+    """Whether Windows lets gamma ramps go far from neutral (the value is 256,
+    as LightBulb checks it). Readable without administrator rights."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, GAMMA_RANGE_KEY) as key:
+            value, _kind = winreg.QueryValueEx(key, GAMMA_RANGE_VALUE)
+    except OSError:
+        return False
+    return value == EXPANDED_GAMMA_RANGE
+
+
+def expand_gamma_range(parent_window: int = 0) -> str:
+    """Set the value: "done", "cancelled" (the administrator prompt was
+    declined: nothing changed) or "failed". Blocks while the prompt is open."""
+    import os
+    import winreg
+
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, GAMMA_RANGE_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, GAMMA_RANGE_VALUE, 0, winreg.REG_DWORD, EXPANDED_GAMMA_RANGE)
+        return "done"
+    except PermissionError:
+        pass  # not running as administrator, as usual: ask through reg.exe
+    except OSError:
+        log.warning("Could not set %s", GAMMA_RANGE_VALUE, exc_info=True)
+        return "failed"
+    # By its full path: one found on PATH could be anyone's.
+    reg = str(Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "reg.exe")
+    arguments = (f'add "HKLM\\{GAMMA_RANGE_KEY}" /v {GAMMA_RANGE_VALUE} /t REG_DWORD /d {EXPANDED_GAMMA_RANGE} /f')
+    try:
+        exit_code = run_elevated(reg, arguments, parent_window)
+    except OSError as exc:
+        log.warning("Could not run reg.exe to set %s: %s", GAMMA_RANGE_VALUE, exc)
+        return "failed"
+    if exit_code is None:
+        log.info("Unlocking warmer colors: the administrator prompt was declined; nothing changed")
+        return "cancelled"
+    if exit_code != 0 or not gamma_range_expanded():
+        log.warning("reg.exe ended with %s, and %s isn't set", exit_code, GAMMA_RANGE_VALUE)
+        return "failed"
+    log.info("Set %s to %d: Windows accepts warmer gamma ramps", GAMMA_RANGE_VALUE, EXPANDED_GAMMA_RANGE)
+    return "done"
+
+
+def run_elevated(path: str, arguments: str, parent_window: int = 0, verb: str = "runas") -> int | None:
+    """Run a program through the administrator prompt and wait for it: its
+    exit code, or None if the prompt was declined. Raises OSError otherwise.
+    `verb` "open" runs it without the prompt (tests)."""
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
+    shell32.ShellExecuteExW.restype = wintypes.BOOL
+    _kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    _kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _kernel32.CloseHandle.restype = wintypes.BOOL
+    info = SHELLEXECUTEINFOW(cbSize=ctypes.sizeof(SHELLEXECUTEINFOW), fMask=0x40 | 0x100,  # SEE_MASK_NOCLOSEPROCESS | NOASYNC
+                             hwnd=parent_window or None, lpVerb=verb, lpFile=path, lpParameters=arguments, nShow=0)  # SW_HIDE
+    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+        error = ctypes.get_last_error()
+        if error == ERROR_CANCELLED:
+            return None
+        raise ctypes.WinError(error)
+    if not info.hProcess:
+        raise OSError("no process handle")
+    try:
+        if _kernel32.WaitForSingleObject(info.hProcess, EXPAND_TIMEOUT_S * 1000) != 0:  # WAIT_OBJECT_0
+            raise OSError(f"{Path(path).name} didn't finish within {EXPAND_TIMEOUT_S} s")
+        code = wintypes.DWORD()
+        if not _kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(code)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return code.value
+    finally:
+        _kernel32.CloseHandle(info.hProcess)
+
+
 def windows_loads_calibrations() -> bool:
     """Whether "Use Windows display calibration" is on (Color Management >
     Advanced): Windows itself loads each display's calibration. Off, another
@@ -921,6 +1022,7 @@ WINDOWS_ONLY_SIZES = {
     "MONITORINFOEXW": (MONITORINFOEXW, 104),
     "PHYSICAL_MONITOR": (PHYSICAL_MONITOR, _POINTER + 256),
     "DISPLAY_DEVICEW": (DISPLAY_DEVICEW, 840),
+    "SHELLEXECUTEINFOW": (SHELLEXECUTEINFOW, 112 if _POINTER == 8 else 60),
 }
 # Which feature each structure is needed for, to turn off only that feature.
 _STRUCT_FEATURE = {"PHYSICAL_MONITOR": "ddc", "MONITORINFOEXW": "ddc"}

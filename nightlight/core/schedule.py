@@ -168,7 +168,11 @@ def _solar_schedule(latitude: float, longitude: float, days: list[date], tz: tzi
     mixing solar and fixed days.
     """
     transitions = []
-    for day in days:
+    # Each day's events start from that UTC date's solar noon. Where the local
+    # date runs ahead of it (Tonga, Kiribati: UTC+13 and +14), local noon is
+    # the previous UTC date's: a day more on each side keeps yesterday's
+    # evening in the list. Extra transitions are harmless; missing ones aren't.
+    for day in [days[0] - timedelta(days=1), *days, days[-1] + timedelta(days=1)]:
         events = solar_events(latitude, longitude, day)
         if events is None:
             return None

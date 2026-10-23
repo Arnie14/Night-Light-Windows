@@ -112,6 +112,9 @@ class GeneralConfig:
     # Never dim for idle while one of these apps is in front (a call, a video
     # in a player that doesn't keep the screen on): lower-case exe names.
     idle_exempt_apps: tuple[str, ...] = ()
+    # Put the built-in display's level back when Windows changes it for being
+    # plugged in or unplugged (brightness/power_source.py).
+    keep_brightness_on_power_change: bool = False
     # Put each display's color calibration back when Windows drops it (e.g.
     # after the screen turns off and on), as calibration loaders do.
     keep_calibration: bool = False
@@ -187,6 +190,10 @@ class DisplayPrefs:
     key: str
     name: str = ""  # "" keeps the display's own name
     hidden: bool = False  # left out of the panel, linked changes and the brightness schedule
+    # While HDR is on, only the user's own slider changes it over DDC/CI: no
+    # restoring, schedule or following the laptop's keys. Some monitors show a
+    # tint after DDC/CI brightness changes in HDR mode (Twinkle Tray #1310).
+    hdr_manual: bool = False
 
 
 @dataclass(frozen=True)
@@ -380,14 +387,15 @@ def _displays_from(data: object) -> tuple[DisplayPrefs, ...]:
         if isinstance(value, dict):
             name = value.get("name") if isinstance(value.get("name"), str) else ""
             hidden = value.get("hidden") if isinstance(value.get("hidden"), bool) else False
-            if name.strip() or hidden:
-                prefs.append(DisplayPrefs(str(key), name.strip(), hidden))
+            hdr_manual = value.get("hdr_manual") if isinstance(value.get("hdr_manual"), bool) else False
+            if name.strip() or hidden or hdr_manual:
+                prefs.append(DisplayPrefs(str(key), name.strip(), hidden, hdr_manual))
     return tuple(prefs)
 
 
 def _to_json(config: AppConfig) -> dict:
     data = asdict(config)
-    data["displays"] = {d.key: {"name": d.name, "hidden": d.hidden} for d in config.displays}
+    data["displays"] = {d.key: {"name": d.name, "hidden": d.hidden, "hdr_manual": d.hdr_manual} for d in config.displays}
     data["night_light"]["exempt_apps"] = list(config.night_light.exempt_apps)
     data["general"]["idle_exempt_apps"] = list(config.general.idle_exempt_apps)
     data["brightness_schedule"]["points"] = [asdict(p) for p in config.brightness_schedule.points]

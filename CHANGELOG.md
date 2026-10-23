@@ -2,6 +2,30 @@
 
 Changes in each version of Winlight, newest first. Version numbers follow the scheme in [docs/development.md](docs/development.md#versions-and-releases). Earlier, more detailed reports are kept in [docs/history/](docs/history/).
 
+## 0.4.0 Beta 1 (2026-10-23)
+
+### Added
+
+- **A day ribbon**: the Night Light page opens with today from midnight to midnight, each moment painted in the white your screens show then, with a line at the time now. It follows the settings on the page before you apply them, and the 24-hour preview moves its line. The panel has a slim one under Night Light.
+- **The panel's Night Light section** is a tile that takes on the screens' warmth now: neutral by day, amber at night.
+- **The temperature sliders** show the temperatures they set: their track runs from neutral white to the warmest amber.
+- Titles use Windows 11's display typeface (Segoe UI Variable Display).
+
+- **Unlocking warmer colors**: where Windows holds night light back, Settings offers to unlock it, as f.lux and LightBulb do. It sets the `GdiIcmGammaRange` registry value after Windows' administrator prompt; declining the prompt changes nothing.
+- **A 24-hour preview**: the next day of the settings in Settings, on screen in about 20 seconds, as in LightBulb.
+- **Keep brightness when plugging in or unplugging** (Settings > Brightness): Windows' power plans set their own level for the built-in display then; Winlight puts yours back, without changing the power plans.
+- **No automatic DDC/CI writes in HDR**, per display (Settings > Displays): for monitors that show a tint after DDC/CI brightness changes in HDR mode.
+
+### Fixed
+
+- **Night light was off after midnight in UTC+13 and UTC+14** (Tonga, Samoa, Kiribati, Tokelau) with a sunset-to-sunrise schedule, since 0.3.0 Beta 2: the evening before went missing from the schedule.
+- **File Explorer kept a pause going**: leaving a paused video or listed app for File Explorer left that display without night light, because File Explorer runs as `explorer.exe`, like Windows' shell.
+- **The settings window's navigation** kept an outline on the page entry used last after it was closed and opened again, while another page was shown. The outline now shows for keyboard focus only, as in Windows 11.
+
+### For developers
+
+- Tests for time zones ahead of their solar date, File Explorer, and choosing a display's color profile (per user, system-wide, none).
+
 ## 0.3.0 Beta 2 (2026-10-22)
 
 ### Added

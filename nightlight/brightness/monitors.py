@@ -740,6 +740,7 @@ class MonitorManager(QObject):
         self._after_hdr_lock: dict[str, tuple[int | None, int]] = {}
         self._verify_timer = QTimer(self, singleShot=True, interval=VERIFY_DELAY_MS)
         self._verify_timer.timeout.connect(self._verify)
+        self._hdr_manual: Callable[[str], bool] = lambda _key: False
 
         self._bridge = _Bridge(self)
         self._bridge.event.connect(self._on_event)
@@ -833,11 +834,24 @@ class MonitorManager(QObject):
         self._on_Observed(Observed(key, value))
         self.changedElsewhere.emit(key, value)
 
+    def set_hdr_manual(self, manual: Callable[[str], bool]) -> None:
+        """Displays (by key) whose DDC/CI brightness only the user changes while HDR is on."""
+        self._hdr_manual = manual
+
+    def hands_off(self, key: str) -> bool:
+        """Whether only the user's own slider may change this display now: it
+        is in HDR, controlled over DDC/CI, and set to be left alone then."""
+        info = self.monitor(key)
+        return info is not None and info.hdr and info.channel in ("ddc", "ddc-high-level") and self._hdr_manual(key)
+
     def set_brightness(self, key: str, value: int, source: str = USER, fade: bool = False) -> None:
         """Set a display's level, chosen by the user or the schedule."""
         state = self.states.get(key)
         if state is None:
             log.debug("Ignoring a brightness for %s, which isn't connected", key)
+            return
+        if source != USER and self.hands_off(key):
+            log.debug("Not setting %s to %d%% (%s): no automatic DDC/CI writes while HDR is on", key, value, source)
             return
         value = max(state.info.minimum, min(100, value))
         state.desired, state.desired_source = value, source
@@ -858,6 +872,9 @@ class MonitorManager(QObject):
         sleeping monitor or hang some models' firmware (Twinkle Tray's
         "monitor power state detection" exists for this). It doesn't count as
         a choice (no brightnessSet); restoreDeferred follows if it doesn't happen."""
+        if self.hands_off(key):
+            log.debug("Not restoring %s to %d%% (%s): no automatic DDC/CI writes while HDR is on", key, value, source)
+            return
         state = self.states.get(key)
         if state is not None and not (state.desired is not None and state.desired_source == USER):
             state.desired, state.desired_source = max(state.info.minimum, min(100, value)), source

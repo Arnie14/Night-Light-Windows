@@ -19,6 +19,7 @@ from nightlight.brightness.idle_dim import IdleDimmer
 from nightlight.brightness.keys import BrightnessKeys
 from nightlight.brightness.memory import BrightnessMemory
 from nightlight.brightness.monitors import MonitorManager
+from nightlight.brightness.power_source import PowerSourceKeeper
 from nightlight.brightness.scheduler import BrightnessScheduler
 from nightlight.brightness.wake_report import WakeReport
 from nightlight.cli.commands import CommandHandler
@@ -112,7 +113,8 @@ class NightLightApp:
             gamma,
             scheduler=self.scheduler,
         )
-        self.brightness_keys = BrightnessKeys(self.monitors, self._hidden_keys)
+        self.power_source = PowerSourceKeeper(self.monitors)
+        self.brightness_keys = BrightnessKeys(self.monitors, self._hidden_keys, held=self.power_source.settling)
         self.controller = NightLightController(gamma, self._config.night_light, zone=zone)
         self.commands = CommandHandler(self.monitors, self.controller, lambda: self._config, gamma)
         self._settings: SettingsWindow | None = None
@@ -164,7 +166,8 @@ class NightLightApp:
         self.system_events.endingSession.connect(self._shutdown)  # signing out: there may be no later chance
         self.system_events.unlocked.connect(self._on_unlocked)
         self.system_events.displayChanged.connect(self.controller.reapply_now)  # at once; detection follows once settled
-        self.system_events.panelBrightness.connect(self.brightness_keys.on_windows_event)
+        self.system_events.panelBrightness.connect(self._on_panel_brightness)
+        self.system_events.powerSourceChanged.connect(lambda _source: self.power_source.power_source_changed())
         self._watcher = DisplayWatcher(qapp, events=self.system_events,
                                        idle_seconds=winsystem.idle_seconds if sys.platform == "win32" else None)
         self._watcher.displaysChanged.connect(lambda: self._on_displays_changed(RESCAN_AFTER_CHANGE_S))
@@ -235,12 +238,33 @@ class NightLightApp:
                 display_name=self.flyout.display_name_of,
                 reload_calibrations=getattr(self._gamma, "reload_calibrations", None),
                 forget_calibrations=getattr(self._gamma, "forget_calibrations", None),
+                **self._unlocking(),
             )
             self._settings.applied.connect(self._apply_settings)
         self._settings.set_windows_night_light(self._windows_night_light)
         if self.tray:
             self.flyout.hide()
         reveal.show_window(self._settings)
+
+    def _unlocking(self) -> dict:
+        """Unlocking warmer colors, for the settings window: Windows only."""
+        if sys.platform != "win32" or not hasattr(self._gamma, "warmest_accepted"):
+            return {}
+        from nightlight.hardware import win32
+
+        return {"unlock_warmer": self._unlock_warmer_colors, "warmer_unlocked": win32.gamma_range_expanded}
+
+    def _unlock_warmer_colors(self) -> str:
+        """Set GdiIcmGammaRange (after Windows' administrator prompt), then look
+        for each display's limit afresh: Windows may accept warmer ramps now."""
+        from nightlight.hardware import win32
+
+        outcome = win32.expand_gamma_range(int(self._settings.winId()) if self._settings is not None else 0)
+        if outcome == "done":
+            if displays_changed := getattr(self._gamma, "displays_changed", None):
+                displays_changed()  # forgets the limits found
+            self.controller.update()  # applies night light again: a limit that remains is found again
+        return outcome
 
     def compatibility(self) -> list[compat.CompatibilityEntry]:
         warmest = getattr(self._gamma, "warmest_accepted", dict)()
@@ -392,9 +416,11 @@ class NightLightApp:
         general = settings.general
         self.flyout.set_linked(general.link_brightness)
         self.brightness_keys.set_enabled(general.follow_laptop_brightness)
+        self.power_source.set_enabled(general.keep_brightness_on_power_change)
         self.idle_dimmer.configure(general.idle_dim, general.idle_minutes, general.idle_level)
         self.flyout.set_display_prefs(settings.display)
         self.brightness_memory.set_hidden(settings.hidden)
+        self.monitors.set_hdr_manual(lambda key: settings.display(key).hdr_manual)
         self.scheduler.set_hidden(settings.hidden)
         self._exemptions.set_config(settings.night_light)
         theme.apply(general.theme, general.accent)
@@ -454,6 +480,12 @@ class NightLightApp:
         self.controller.reapply_now()
         self.brightness_memory.restore_all_soon()
         self._reapply_colors()
+
+    def _on_panel_brightness(self, level: int) -> None:
+        """Windows reported the built-in display's level: its power plan's for a
+        new power source (put back), or the keys or its slider (followed)."""
+        if not self.power_source.absorbs(level):
+            self.brightness_keys.on_windows_event(level)
 
     def _on_unlocked(self) -> None:
         self._set_displays_off(False)  # someone is at the screen, whatever was missed

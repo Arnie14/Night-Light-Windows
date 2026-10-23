@@ -5,7 +5,7 @@ A Windows tray app that manages night light and brightness for several displays 
 Brightness is set over DDC/CI for external monitors, through WMI for laptop panels, through Windows' SDR content brightness for HDR displays, and with the gamma ramp for TVs and other displays without a brightness control. Night light uses each display's gamma ramp. Winlight is modelled on KDE Plasma's display settings, written in Python with Qt, and free software under the GPL-3.0.
 
 <p align="center">
-  <img src="docs/screenshots/flyout-light.png" alt="The Winlight panel in light mode: a slider per display and Night Light" width="340">
+  <img src="docs/screenshots/flyout-light.png" alt="The Winlight panel in light mode: a slider per display, and Night Light with today's ribbon" width="340">
   &nbsp;
   <img src="docs/screenshots/flyout-dark.png" alt="The Winlight panel in dark mode" width="340">
 </p>
@@ -29,7 +29,7 @@ Brightness is set over DDC/CI for external monitors, through WMI for laptop pane
 Brightness tools for Windows usually manage monitor brightness, color tools manage color temperature, and calibration loaders keep a calibrated display's colors. Winlight does all three, for several displays, with night light paused per display. [Why Winlight?](docs/why-winlight.md) compares it with Windows' own controls and with similar apps, says when one of them may suit you better, and explains how to switch.
 
 <p align="center">
-  <img src="docs/screenshots/settings-light.png" alt="Winlight settings: the Night Light page with its schedule, temperatures, sleep recommendation and pausing" width="520">
+  <img src="docs/screenshots/settings-light.png" alt="Winlight settings: the Night Light page with today's ribbon, its schedule and temperatures" width="520">
 </p>
 
 ## Getting started

@@ -15,9 +15,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, Qt, QTime, QTimeZone, QUrl, Signal
+from PySide6.QtCore import QStandardPaths, Qt, QTime, QTimer, QTimeZone, QUrl, Signal
 from PySide6.QtGui import QCursor, QDesktopServices, QGuiApplication, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -54,16 +55,17 @@ from nightlight.config import (
 from nightlight.core import locations
 from nightlight.core.brightness_schedule import describe as describe_schedule
 from nightlight.core.colortemp import limited_displays
-from nightlight.core.schedule import OverrideKind
+from nightlight.core.schedule import OverrideKind, compute_state
 from nightlight.hardware.gamma import GammaBusy
 from nightlight.ui import icons
 from nightlight.ui import theme as theme_module
+from nightlight.ui.day_ribbon import DayRibbon
 from nightlight.ui.night_light_text import is_night_light_on, night_light_status, schedule_description
 from nightlight.ui.preview_notice import PreviewNotice
 from nightlight.ui.schedule_editor import ScheduleEditor
 from nightlight.ui.settings_parts import ActionBar, Card, NavButton, PageTitle, SectionLabel, SettingRow, StatusBadge, ToggleSwitch
 from nightlight.ui.settings_widgets import AppList, DisplayList
-from nightlight.ui.widgets import HEADING_WEIGHT, SecondaryLabel, Separator, TemperatureSlider, WindowsNightLightNotice, set_font
+from nightlight.ui.widgets import SecondaryLabel, Separator, TemperatureSlider, WindowsNightLightNotice, set_heading_font
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +109,20 @@ SLEEP_ADVICE = (
         "hours before bed. Windows may limit how warm a display can go; Winlight then uses the warmest setting each display "
     "accepts. This is general guidance, not medical advice"
 )
+# The 24-hour preview, at LightBulb's pace (DashboardViewModel.UpdateInstant):
+# 5 minutes of the day every 50 ms: a day in 15 to 20 seconds (Windows' timers run late).
+DAY_PREVIEW_TICK_MS = 50
+DAY_PREVIEW_STEP = timedelta(minutes=5)
+# Unlocking warmer colors (win32.expand_gamma_range), worded after LightBulb's
+# "Limited gamma range" message.
+UNLOCK_DESCRIPTION = ("Windows limits how far colors can be changed, so night light stops early. Unlocking sets the "
+                      "GdiIcmGammaRange setting, as f.lux and LightBulb do, after Windows asks for administrator approval")
+UNLOCKED_DESCRIPTION = ("Unlocked. If night light still stops early, Windows applies it after you sign out and back in, "
+                        "or restart")
+UNLOCK_OUTCOMES = {
+    "cancelled": "Nothing was changed: the administrator prompt was declined.",
+    "failed": "It couldn't be unlocked; the log says why.",
+}
 GAMMA_BUSY = "A change to the display colors is stuck, probably in the display driver. Try again in a moment."
 # When "never pause late at night" starts (config.NEVER_PAUSE_FROM).
 NEVER_PAUSE_CHOICES = {
@@ -135,6 +151,8 @@ class SettingsWindow(QWidget):
         display_name: Callable[[str], str] | None = None,
         reload_calibrations: Callable[[], dict[str, str]] | None = None,
         forget_calibrations: Callable[[], int] | None = None,
+        unlock_warmer: Callable[[], str] | None = None,
+        warmer_unlocked: Callable[[], bool] = lambda: False,
     ) -> None:
         super().__init__()
         self._controller = controller
@@ -149,11 +167,20 @@ class SettingsWindow(QWidget):
         self._running_apps = running_apps
         self._report_problem = report_problem
         self._reload_calibrations = reload_calibrations
+        self._unlock_warmer = unlock_warmer  # sets GdiIcmGammaRange: "done", "cancelled" or "failed"
+        self._warmer_unlocked = warmer_unlocked
+        self._unlock_outcome = ""
         self._preview_notice: PreviewNotice | None = None  # made when a slider is first held
+        # The 24-hour preview: the moment shown now, and when it ends.
+        self._day_at: datetime | None = None
+        self._day_end: datetime | None = None
+        self._day_timer = QTimer(self, interval=DAY_PREVIEW_TICK_MS)
+        self._day_timer.timeout.connect(self._day_preview_step)
         self._forget_calibrations = forget_calibrations
         self._display_prefs = config.displays
         self._saved = replace(config, night_light=controller.config)
         self._mode_while_off = self._saved.night_light.mode
+        self._ribbon_config = self._saved.night_light  # what the day ribbon shows
         self.setWindowTitle(f"{APP_NAME} Settings")
         self.setWindowIcon(icons.night_icon())
 
@@ -239,6 +266,7 @@ class SettingsWindow(QWidget):
             self.schedule.changed,
             self.respect_fullscreen.toggled,
             self.follow_laptop.toggled,
+            self.keep_on_power_change.toggled,
             self.idle_dim.toggled,
             self.idle_minutes.valueChanged,
             self.idle_level.valueChanged,
@@ -305,7 +333,7 @@ class SettingsWindow(QWidget):
         name = QVBoxLayout()
         name.setSpacing(2)
         title = QLabel(APP_NAME)
-        set_font(title, 1.55, HEADING_WEIGHT)
+        set_heading_font(title, 1.6)
         name.addWidget(title)
         tagline = SecondaryLabel("Brightness and night light for every display", scale=0.95)
         tagline.setWordWrap(True)
@@ -398,6 +426,7 @@ class SettingsWindow(QWidget):
         self.remember_brightness = ToggleSwitch("Remember each display's brightness")
         self.link_brightness = ToggleSwitch("Change all displays together")
         self.follow_laptop = ToggleSwitch("External displays follow the laptop's brightness keys")
+        self.keep_on_power_change = ToggleSwitch("Keep the built-in display's brightness when plugging in or unplugging")
         self.software_dimming = ToggleSwitch("Dim displays without brightness control")
         self.idle_dim = ToggleSwitch("Dim displays when I'm away")
         self.idle_minutes = QSpinBox(minimum=1, maximum=MAX_IDLE_MINUTES, suffix=" min")
@@ -434,6 +463,12 @@ class SettingsWindow(QWidget):
 
     def _night_light_page(self) -> QWidget:
         page, layout = _page("Night Light", "Warmer colors in the evening reduce the blue light from your displays.")
+        # Today, from the settings on this page (applied or not).
+        self.day_ribbon = DayRibbon(
+            lambda moment: compute_state(self._ribbon_config, moment, zone=self._controller.zone).temperature, self._controller.now,
+            zone=lambda: self._controller.zone)
+        layout.addWidget(self.day_ribbon)
+        layout.addSpacing(16)
         self._night_card = Card()
         self._field_rows: dict[QWidget, QWidget] = {}
         for field, title, description in (
@@ -448,12 +483,19 @@ class SettingsWindow(QWidget):
                                                     "Twilight lasts longer in some places and seasons")),
         ):
             self._field_rows[field] = self._night_card.add(SettingRow(title, description, field))
+        self.preview_day = QPushButton("Preview")
+        self.preview_day.clicked.connect(self._toggle_day_preview)
+        self._day_row = self._night_card.add(SettingRow("Preview 24 hours", "Plays the next day of these settings on screen in "
+                                                        "about 20 seconds, before you apply them", self.preview_day))
         layout.addWidget(self._night_card)
         layout.addWidget(SectionLabel("Color temperature"))
         self._temperature_card = Card()
         self._field_rows[self.day_temperature] = self._temperature_card.add(SettingRow("Day", "6500 K is neutral, with no filter",
                                                                                          self.day_temperature))
         self._night_row = self._temperature_card.add(SettingRow("Night", NIGHT_DESCRIPTION, self.night_temperature))
+        self.unlock_warmer = QPushButton("Unlock…")
+        self.unlock_warmer.clicked.connect(self._unlock)
+        self._unlock_row = self._temperature_card.add(SettingRow("Warmer night light", UNLOCK_DESCRIPTION, self.unlock_warmer))
         layout.addWidget(self._temperature_card)
         self.schedule_info.setContentsMargins(4, 10, 4, 0)
         layout.addWidget(self.schedule_info)
@@ -507,6 +549,9 @@ class SettingsWindow(QWidget):
         options.add(SettingRow("Follow the laptop's brightness keys",
                                "External displays match the built-in display when its brightness changes",
                                self.follow_laptop))
+        options.add(SettingRow("Keep brightness when plugging in or unplugging",
+                               "Windows sets its own level for battery and for mains power; this puts the built-in "
+                               "display's back. Your power plans aren't changed", self.keep_on_power_change))
         options.add(SettingRow("Dim displays without brightness control",
                                "Dims TVs and monitors without DDC/CI by adjusting their colors. This doesn't reduce power use",
                                self.software_dimming))
@@ -648,6 +693,7 @@ class SettingsWindow(QWidget):
             software_dimming=self.software_dimming.isChecked(),
             respect_fullscreen=self.respect_fullscreen.isChecked(),
             follow_laptop_brightness=self.follow_laptop.isChecked(),
+            keep_brightness_on_power_change=self.keep_on_power_change.isChecked(),
             idle_dim=self.idle_dim.isChecked(),
             idle_minutes=self.idle_minutes.value(),
             idle_level=self.idle_level.value(),
@@ -669,6 +715,8 @@ class SettingsWindow(QWidget):
             self._placed = True
             self._fit_to_screen()
         super().showEvent(event)
+        # Opening, Qt gives focus back to the entry used last; the current one takes it.
+        self._nav[self.current_page()].setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _fit_to_screen(self) -> None:
         """Open centered, and no larger than the screen's free area: with a
@@ -685,12 +733,15 @@ class SettingsWindow(QWidget):
                   area.y() + max(0, (area.height() - height - FRAME_HEIGHT) // 2))
 
     def closeEvent(self, event) -> None:
+        self._stop_day_preview()
         self._preview(None)
         # Opened again, the window starts afresh: the first page, at its top,
         # without the last action's message.
         self.calibration_result.hide()
         self.show_page(0)
         self._scroll_to_top()
+        if (focused := self.focusWidget()) is not None:
+            focused.clearFocus()  # no outline left on the entry or field used last
         super().closeEvent(event)
 
     def _scroll_to_top(self, *_args) -> None:
@@ -722,6 +773,7 @@ class SettingsWindow(QWidget):
         self.software_dimming.setChecked(general.software_dimming)
         self.respect_fullscreen.setChecked(general.respect_fullscreen)
         self.follow_laptop.setChecked(general.follow_laptop_brightness)
+        self.keep_on_power_change.setChecked(general.keep_brightness_on_power_change)
         self.idle_dim.setChecked(general.idle_dim)
         self.idle_minutes.setValue(general.idle_minutes)
         self.idle_level.setValue(general.idle_level)
@@ -751,6 +803,9 @@ class SettingsWindow(QWidget):
 
     def _on_changed(self) -> None:
         config = self.current_config()
+        if config.night_light != self._ribbon_config:
+            self._ribbon_config = config.night_light
+            self.day_ribbon.refresh()
         Button = QDialogButtonBox.StandardButton
         self.buttons.button(Button.Apply).setEnabled(config != self._saved)
         self.buttons.button(Button.Reset).setEnabled(config != self._saved)
@@ -776,6 +831,7 @@ class SettingsWindow(QWidget):
         self.never_pause_time.setVisible(night_light.never_pause_from == "time")
         self._temperature_card.set_row_visible(self._field_rows[self.day_temperature], mode in (Mode.LOCATION, Mode.TIMES))
         self.night_temperature.setEnabled(night_light.enabled)
+        self._night_card.set_row_visible(self._day_row, mode in (Mode.LOCATION, Mode.TIMES))  # a day that changes
         for field in (self.idle_minutes, self.idle_level, self.idle_exempt_apps):
             field.setEnabled(self.idle_dim.isChecked())
         self._update_status()
@@ -789,6 +845,19 @@ class SettingsWindow(QWidget):
         limited = limited_displays(self.night_temperature.value(), self._warmest())
         notes = [f"{self._display_name(name)}: {kelvin} K (Windows limit)" for name, kelvin in sorted(limited.items())]
         self._night_row.set_description(NIGHT_DESCRIPTION + (". " + "; ".join(notes) if notes else ""))
+        # Unlocking warmer colors, while Windows holds a display back.
+        unlocked = bool(limited) and self._warmer_unlocked()
+        self._temperature_card.set_row_visible(self._unlock_row, bool(limited) and self._unlock_warmer is not None)
+        self.unlock_warmer.setVisible(not unlocked)
+        row = self._unlock_row
+        if unlocked:
+            row.set_description(UNLOCKED_DESCRIPTION)
+        else:
+            row.set_description(" ".join(part for part in (UNLOCK_OUTCOMES.get(self._unlock_outcome, ""), UNLOCK_DESCRIPTION) if part))
+
+    def _unlock(self) -> None:
+        self._unlock_outcome = self._unlock_warmer() if self._unlock_warmer is not None else ""
+        self._update_windows_limit()
 
     def _use_sleep_warmth(self) -> None:
         """Night light at SLEEP_KELVIN or warmer (a warmer choice stays), on if
@@ -962,11 +1031,12 @@ class SettingsWindow(QWidget):
         """While a temperature slider is held, show that temperature on screen,
         with a note in the middle of the screen saying so, as KDE does."""
         inner = slider.slider
+        inner.sliderPressed.connect(self._stop_day_preview)
         inner.sliderPressed.connect(lambda: self._preview(slider.value()))
         inner.sliderMoved.connect(lambda _: self._preview(slider.value()))
         inner.sliderReleased.connect(lambda: self._preview(None))
 
-    def _preview(self, kelvin: int | None) -> None:
+    def _preview(self, kelvin: int | None, hint: str = "") -> None:
         self._controller.preview(kelvin)
         if kelvin is None:
             if self._preview_notice is not None:
@@ -974,7 +1044,41 @@ class SettingsWindow(QWidget):
             return
         if self._preview_notice is None:
             self._preview_notice = PreviewNotice()
-        self._preview_notice.show_kelvin(kelvin, near=self)
+        self._preview_notice.show_kelvin(kelvin, near=self, hint=hint)
+
+    def _toggle_day_preview(self) -> None:
+        """LightBulb's 24-hour cycle preview: a day of the settings shown here,
+        5 minutes of it every 50 ms, then back to now."""
+        if self._day_at is not None:
+            self._stop_day_preview()
+            return
+        self._day_at = self._controller.now()
+        self._day_end = self._day_at + timedelta(days=1)
+        self.preview_day.setText("Stop")
+        self._day_timer.start()
+        self._day_preview_step()
+
+    def _day_preview_step(self) -> None:
+        self._day_at += DAY_PREVIEW_STEP
+        night_light = self.current_config().night_light
+        if self._day_at >= self._day_end or not night_light.enabled:
+            self._stop_day_preview()
+            return
+        # The schedule itself: a Suspend or Activate now isn't part of it.
+        kelvin = compute_state(night_light, self._day_at, zone=self._controller.zone).temperature
+        today = self._controller.now().date()
+        day = "Today" if self._day_at.date() == today else "Tomorrow"
+        self._preview(kelvin, hint=f"{day} {self._day_at:%H:%M} · Stop it in Settings")
+        self.day_ribbon.set_marker(self._day_at)
+
+    def _stop_day_preview(self) -> None:
+        if self._day_at is None:  # the preview's own state, not its timer's: the note and needle must go too
+            return
+        self._day_timer.stop()
+        self._day_at = self._day_end = None
+        self.day_ribbon.set_marker(None)
+        self.preview_day.setText("Preview")
+        self._preview(None)
 
 
 def _page(title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:

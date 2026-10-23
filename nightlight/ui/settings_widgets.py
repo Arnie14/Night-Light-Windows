@@ -91,6 +91,13 @@ class AppList(QWidget):
         self.changed.emit()
 
 
+HDR_MANUAL_TIP = (
+    "While HDR is on, only this display's own slider changes its brightness over DDC/CI: restoring the remembered level, "
+    "the brightness schedule and following the laptop's keys leave it alone. Some monitors show a tint after DDC/CI "
+    "brightness changes in HDR mode. Displays controlled any other way aren't affected."
+)
+
+
 class DisplayList(QWidget):
     """A name field and a "show" box per display, as Twinkle Tray's "Rename
     Monitors" and "Hide Displays": keyed by display id, so they follow the
@@ -104,15 +111,15 @@ class DisplayList(QWidget):
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setHorizontalSpacing(12)
         self._grid.setVerticalSpacing(8)
-        self._rows: dict[str, tuple[QLineEdit, QCheckBox]] = {}
+        self._rows: dict[str, tuple[QLineEdit, QCheckBox, QCheckBox]] = {}
         self._empty = SecondaryLabel("No displays detected yet.")
         self._grid.addWidget(self._empty, 0, 0)
 
     def prefs(self) -> tuple[DisplayPrefs, ...]:
         prefs = []
-        for key, (name, show) in self._rows.items():
-            if name.text().strip() or not show.isChecked():
-                prefs.append(DisplayPrefs(key, name.text().strip(), not show.isChecked()))
+        for key, (name, show, hdr_manual) in self._rows.items():
+            if name.text().strip() or not show.isChecked() or hdr_manual.isChecked():
+                prefs.append(DisplayPrefs(key, name.text().strip(), not show.isChecked(), hdr_manual.isChecked()))
         return tuple(prefs)
 
     def set_displays(self, monitors: list[MonitorInfo], prefs: tuple[DisplayPrefs, ...]) -> None:
@@ -143,9 +150,14 @@ class DisplayList(QWidget):
             name.setFixedWidth(220)
             show = QCheckBox("Show in panel")
             show.setChecked(not pref.hidden)
+            hdr_manual = QCheckBox("No automatic DDC/CI writes in HDR")
+            hdr_manual.setChecked(pref.hdr_manual)
+            hdr_manual.setToolTip(HDR_MANUAL_TIP)
+            for box in (show, hdr_manual):
+                box.toggled.connect(self.changed)
             name.textChanged.connect(self.changed)
-            show.toggled.connect(self.changed)
             self._grid.addWidget(name, row, 0)
             self._grid.addWidget(show, row, 1)
-            self._rows[key] = (name, show)
+            self._grid.addWidget(hdr_manual, row, 2)
+            self._rows[key] = (name, show, hdr_manual)
         self.changed.emit()

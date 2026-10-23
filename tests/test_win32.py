@@ -4,6 +4,7 @@
 import ctypes
 import itertools
 import os
+import pathlib
 import sys
 import time
 
@@ -177,3 +178,89 @@ def test_monitor_handles_are_closed_if_opening_the_rest_fails(monkeypatch):
     with pytest.raises(OSError):
         win32.physical_monitors()
     assert closed == [101]
+
+
+# --- Which color profile a display uses (Reload calibrations) -----------------
+
+
+class FakeColorSystem:
+    """Windows Color System's answers for one monitor: whether it uses
+    per-user profiles, and the profile chosen per scope (0 system, 1 user)."""
+
+    def __init__(self, per_user, chosen):
+        self.per_user, self.chosen, self.asked = per_user, chosen, []
+
+    def EnumDisplayDevicesW(self, gdi_name, index, monitor, flags):
+        monitor._obj.DeviceKey = r"\Registry\Machine\...\0007"
+        return True
+
+    def WcsGetUsePerUserProfiles(self, key, device_class, result):
+        result._obj.value = self.per_user
+        return True
+
+    def WcsGetDefaultColorProfileSize(self, scope, key, kind, subtype, profile_id, size):
+        self.asked.append(scope)
+        name = self.chosen.get(scope)
+        if name is None:
+            return False  # ERROR_FILE_NOT_FOUND: none chosen
+        size._obj.value = 2 * (len(name) + 1)
+        return True
+
+    def WcsGetDefaultColorProfile(self, scope, key, kind, subtype, profile_id, size, buffer):
+        buffer.value = self.chosen[scope]
+        return True
+
+    def GetColorDirectoryW(self, machine, folder, size):
+        folder.value = r"C:\WINDOWS\system32\spool\drivers\color"
+        return True
+
+
+@pytest.mark.parametrize(("per_user", "chosen", "expected", "asked"), [
+    (True, {1: "DELL calibrated.icc", 0: "sRGB.icm"}, "DELL calibrated.icc", [1]),  # the user's own choice
+    (False, {1: "ignored.icc", 0: "Office.icm"}, "Office.icm", [0]),  # the system's, when the user has none of their own
+    (True, {}, "fallback", [1]),  # none chosen: the device context's (sRGB)
+])
+def test_the_profile_chosen_for_the_monitor_comes_first(monkeypatch, per_user, chosen, expected, asked):
+    from pathlib import Path
+
+    fake = FakeColorSystem(per_user, chosen)
+    monkeypatch.setattr(win32, "_mscms", fake, raising=False)
+    monkeypatch.setattr(win32, "_user32", fake, raising=False)
+    monkeypatch.setattr(win32, "_device_context_profile", lambda gdi_name: "fallback")
+    profile = win32.display_profile(r"\.\DISPLAY1")
+    assert fake.asked == asked
+    assert profile == (expected if expected == "fallback" else str(Path(r"C:\WINDOWS\system32\spool\drivers\color") / expected))
+
+
+# --- Unlocking warmer colors (GdiIcmGammaRange, as LightBulb sets it) ---------
+
+
+@windows_only
+@pytest.mark.parametrize(("exit_code", "set_after", "expected"), [
+    (0, True, "done"),
+    (None, False, "cancelled"),  # the administrator prompt was declined: nothing changed, no error
+    (5, False, "failed"),
+    (0, False, "failed"),  # reg.exe said yes, but the value isn't there
+])
+def test_unlocking_asks_reg_exe_through_the_administrator_prompt(monkeypatch, exit_code, set_after, expected):
+    import winreg
+
+    def not_administrator(*args):
+        raise PermissionError("Access is denied")
+
+    asked = []
+    monkeypatch.setattr(winreg, "CreateKeyEx", not_administrator)
+    monkeypatch.setattr(win32, "run_elevated", lambda path, arguments, parent=0: asked.append((path, arguments)) or exit_code)
+    monkeypatch.setattr(win32, "gamma_range_expanded", lambda: set_after)
+    assert win32.expand_gamma_range() == expected
+    [(path, arguments)] = asked
+    assert path.lower().endswith(r"\system32\reg.exe")  # by its full path, not whatever PATH finds
+    assert arguments == r'add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM" /v GdiIcmGammaRange /t REG_DWORD /d 256 /f'
+
+
+@windows_only
+def test_elevated_programs_report_their_exit_code():
+    """The ShellExecuteEx plumbing, for real, without the prompt ("open")."""
+    reg = str(pathlib.Path(os.environ["SYSTEMROOT"]) / "System32" / "reg.exe")
+    assert win32.run_elevated(reg, rf'query "HKLM\{win32.GAMMA_RANGE_KEY}"', verb="open") == 0
+    assert win32.run_elevated(reg, rf'query "HKLM\{win32.GAMMA_RANGE_KEY}" /v NoSuchValue', verb="open") == 1

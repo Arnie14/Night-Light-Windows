@@ -26,6 +26,7 @@ class FakeEvents(QObject):
     clockChanged = Signal()
     endingSession = Signal()
     panelBrightness = Signal(int)
+    powerSourceChanged = Signal(int)
 
 
 def signal_names(cls):

@@ -33,10 +33,12 @@ OWN_CHANGE_S = 2.0
 
 
 class BrightnessKeys(QObject):
-    def __init__(self, monitors: MonitorManager, hidden: Callable[[], frozenset[str]] = frozenset, parent: QObject | None = None) -> None:
+    def __init__(self, monitors: MonitorManager, hidden: Callable[[], frozenset[str]] = frozenset, parent: QObject | None = None,
+                 held: Callable[[], bool] = lambda: False) -> None:
         super().__init__(parent)
         self._monitors = monitors
         self._hidden = hidden
+        self._held = held  # Windows is setting the panel's level for a new power source (power_source.py): not followed
         self._enabled = False
         self._known: int | None = None  # the panel's level as last seen
         self._poll = QTimer(self, interval=POLL_MS)
@@ -83,10 +85,11 @@ class BrightnessKeys(QObject):
         self._follow(panel, level, source)
 
     def _follow(self, panel: MonitorInfo, level: int, source: str) -> None:
-        if not self._enabled:
+        if not self._enabled or self._held():
             return
         hidden = self._hidden()
-        others = [m for m in self._monitors.monitors if m.supported and not m.internal and m.key not in hidden]
+        others = [m for m in self._monitors.monitors
+                  if m.supported and not m.internal and m.key not in hidden and not self._monitors.hands_off(m.key)]
         if not others:
             return
         log.info("The built-in display changed to %d%% (noticed by %s); external displays follow", level, source)

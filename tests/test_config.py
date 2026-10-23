@@ -2,7 +2,7 @@
 import json
 
 from nightlight import config
-from nightlight.config import Anchor, AppConfig, BrightnessScheduleConfig, GeneralConfig, Mode, NightLightConfig, SchedulePoint
+from nightlight.config import Anchor, AppConfig, BrightnessScheduleConfig, DisplayPrefs, GeneralConfig, Mode, NightLightConfig, SchedulePoint
 
 
 def test_missing_file_gives_defaults(tmp_path):
@@ -126,7 +126,8 @@ def test_new_sections_round_trip(tmp_path):
     config.save(original, path)
     assert config.load(path) == original
     saved = json.loads(path.read_text())
-    assert saved["displays"] == {"DEL41A2": {"name": "Left", "hidden": False}, "SAM7136": {"name": "", "hidden": True}}
+    assert saved["displays"] == {"DEL41A2": {"name": "Left", "hidden": False, "hdr_manual": False},
+                                 "SAM7136": {"name": "", "hidden": True, "hdr_manual": False}}
 
 
 def test_bad_new_sections_are_ignored(tmp_path):
@@ -274,3 +275,9 @@ def test_never_pausing_late_at_night_round_trips_and_bad_values_fall_back(tmp_pa
     path.write_text('{"night_light": {"never_pause_at_night": true, "never_pause_from": "dusk", "never_pause_time": "25:00"}}')
     loaded = config.load(path).night_light
     assert (loaded.never_pause_at_night, loaded.never_pause_from, loaded.never_pause_time) == (True, "night", "22:00")
+
+
+def test_a_display_left_to_the_user_in_hdr_is_saved(tmp_path):
+    path = tmp_path / "settings.json"
+    config.save(AppConfig(displays=(DisplayPrefs("DEL41A2", hdr_manual=True),)), path)
+    assert config.load(path).display("DEL41A2").hdr_manual

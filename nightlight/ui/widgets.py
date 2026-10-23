@@ -9,12 +9,26 @@ keep working without a stylesheet.
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import cache
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPalette
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QLinearGradient, QPainter, QPalette, QPen
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QStyle,
+    QStyleOptionSlider,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
-from nightlight.core.colortemp import MAX_KELVIN, MIN_KELVIN
+from nightlight.core.colortemp import MAX_KELVIN, MIN_KELVIN, whitepoint
 from nightlight.hardware.brightness import MonitorInfo
 
 # While the slider moves, send at most one brightness change per this long,
@@ -47,6 +61,34 @@ def blend(a: QColor, b: QColor, amount: float) -> QColor:
 # Segoe UI Variable with its much thinner Semilight face, which looks washed
 # out as dark text on a light background.
 HEADING_WEIGHT = QFont.Weight.Bold
+
+
+# Windows 11's titles use the display cut of Segoe UI Variable; asked for by
+# its own family name, its semibold is drawn as itself (see HEADING_WEIGHT).
+DISPLAY_FAMILY = "Segoe UI Variable Display Semibold"
+
+
+@cache
+def _has_display_family() -> bool:
+    return DISPLAY_FAMILY in QFontDatabase.families()
+
+
+def set_heading_font(widget: QWidget, scale: float) -> None:
+    """A title: Windows 11's display face where installed, else bold."""
+    font = QFont(widget.font())
+    font.setPointSizeF(font.pointSizeF() * scale)
+    if _has_display_family():
+        font.setFamilies([DISPLAY_FAMILY])
+        font.setWeight(QFont.Weight.Normal)
+    else:
+        font.setWeight(HEADING_WEIGHT)
+    widget.setFont(font)
+
+
+def kelvin_color(kelvin: float) -> QColor:
+    """White as the screen shows it under night light at `kelvin`: the same
+    blackbody table as the gamma ramps (colortemp.whitepoint)."""
+    return QColor.fromRgbF(*whitepoint(kelvin))
 
 
 def set_font(widget: QWidget, scale: float = 1.0, weight: QFont.Weight | None = None) -> None:
@@ -255,6 +297,41 @@ class MonitorBrightness(QWidget):
             self.brightnessRequested.emit(self.info.key, self.slider.value())
 
 
+class WarmthSlider(QSlider):
+    """A slider whose track is the temperatures it sets: neutral white at the
+    cool end, through amber, to the warmest. The handle is the style's own."""
+
+    TRACK = 4.0  # px, as Windows 11's slider track
+
+    def paintEvent(self, _event) -> None:
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        style = self.style()
+        groove = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderGroove, self)
+        handle = style.pixelMetric(QStyle.PixelMetric.PM_SliderLength, option, self)
+        # The track spans the handle's travel, so each point sits under the value it stands for.
+        left, right = groove.left() + handle / 2, groove.right() - handle / 2
+        track = QRectF(left, groove.center().y() - self.TRACK / 2 + 0.5, max(1.0, right - left), self.TRACK)
+        gradient = QLinearGradient(QPointF(track.left(), 0), QPointF(track.right(), 0))
+        steps = 12
+        palette = self.palette()
+        window = palette.color(QPalette.ColorRole.Window)
+        for i in range(steps + 1):
+            share = i / steps
+            fraction = 1 - share if self.invertedAppearance() else share  # inverted: the high (cool) end on the left
+            kelvin = (self.minimum() + (self.maximum() - self.minimum()) * fraction) * 100
+            color = kelvin_color(kelvin)
+            gradient.setColorAt(share, color if self.isEnabled() else blend(window, color, 0.35))
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # A hairline, so the neutral end stays visible on a light card.
+        painter.setPen(QPen(blend(window, palette.color(QPalette.ColorRole.WindowText), 0.22), 1))
+        painter.setBrush(gradient)
+        painter.drawRoundedRect(track, self.TRACK / 2, self.TRACK / 2)
+        option.subControls = QStyle.SubControl.SC_SliderHandle
+        style.drawComplexControl(QStyle.ComplexControl.CC_Slider, option, painter, self)
+
+
 class TemperatureSlider(QWidget):
     """Kelvin slider like KDE's, cool (no filter) on the left and warm on the
     right, with quiet captions at its ends and the value after it."""
@@ -263,7 +340,7 @@ class TemperatureSlider(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider = WarmthSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(MIN_KELVIN // 100, MAX_KELVIN // 100)  # steps of 100 K
         self.slider.setPageStep(5)
         self.slider.setInvertedAppearance(True)  # high (cool) values on the left

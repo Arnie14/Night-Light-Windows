@@ -348,6 +348,19 @@ def test_every_day_of_the_year_has_its_own_sun_times_without_overlaps_or_jumps(c
         previous = factor
 
 
+@pytest.mark.parametrize(("tz", "latitude", "longitude"), [
+    ("Pacific/Tongatapu", -21.14, -175.2),  # UTC+13 at longitude -175: the local date runs ahead of the solar one
+    ("Pacific/Kiritimati", 1.87, -157.4),  # UTC+14
+])
+def test_after_midnight_it_is_night_where_the_local_date_runs_ahead(tz, latitude, longitude):
+    """Each day's sun times start from a UTC date's solar noon; here local
+    noon is the previous UTC date's, and yesterday's evening went missing."""
+    config = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=latitude, longitude=longitude)
+    tz = zone(tz)
+    assert compute_state(config, datetime(2026, 1, 15, 2, tzinfo=tz), zone=tz).night_factor == 1.0
+    assert compute_state(config, datetime(2026, 1, 15, 12, tzinfo=tz), zone=tz).night_factor == 0.0
+
+
 def test_polar_night_falls_back_like_polar_day():
     tromso = NightLightConfig(enabled=True, mode=Mode.LOCATION, latitude=69.65, longitude=18.96)
     tz = zone("Europe/Oslo")

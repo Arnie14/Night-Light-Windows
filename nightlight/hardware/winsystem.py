@@ -73,8 +73,11 @@ def is_shell(class_name: str, exe: str) -> bool:
 
 def is_passing_shell(class_name: str, exe: str) -> bool:
     """Shell UI opened for a moment over an app (all of it but the desktop):
-    while it is in front, pausing stays as it was."""
-    return is_shell(class_name, exe) and class_name.lower() not in DESKTOP_CLASSES
+    while it is in front, pausing stays as it was. File Explorer's windows
+    belong to explorer.exe as well, and are an app like any other: for
+    explorer.exe only the shell's own window classes count."""
+    name = class_name.lower()
+    return name in SHELL_CLASSES - DESKTOP_CLASSES or (exe in SHELL_PROCESSES - {"explorer.exe"} and name not in DESKTOP_CLASSES)
 
 
 def is_fullscreen(client: tuple[int, int, int, int], monitor: tuple[int, int, int, int], class_name: str, exe: str = "",
@@ -309,10 +312,13 @@ GUID_CONSOLE_DISPLAY_STATE = uuid.UUID("6fe69556-704a-47a0-8f24-c28d936fda47")
 # The power setting for display brightness (video subgroup); Windows reports
 # the built-in panel's level in percent when it changes, e.g. by the keys.
 GUID_VIDEO_BRIGHTNESS = uuid.UUID("aded5e82-b909-4619-9949-f5d71dac0bcb")
+# GUID_ACDC_POWER_SOURCE: mains (0), battery (1) or a short-term source such as a UPS (2).
+GUID_ACDC_POWER_SOURCE = uuid.UUID("5d3e9a59-e9d5-4b00-a6bd-ff34ff516548")
 
 UNLOCKED, RESUMED, DISPLAY_ON, DISPLAY_CHANGED = "unlocked", "resumed", "display on", "display changed"
 SUSPENDING, DISPLAY_OFF, LOCKED, CLOCK_CHANGED, ENDING_SESSION = "suspending", "display off", "locked", "clock changed", "ending session"
 PANEL_BRIGHTNESS = "panel brightness"
+POWER_SOURCE = "power source"
 
 # Windows sends resume twice (automatic, then suspend-resume when the user is
 # back); one wake is one event.
@@ -337,6 +343,8 @@ def classify(message: int, wparam: int, setting: uuid.UUID | None = None, data: 
             return {0: DISPLAY_OFF, 1: DISPLAY_ON}.get(data)
         if wparam == PBT_POWERSETTINGCHANGE and setting == GUID_VIDEO_BRIGHTNESS and data is not None:
             return PANEL_BRIGHTNESS
+        if wparam == PBT_POWERSETTINGCHANGE and setting == GUID_ACDC_POWER_SOURCE and data is not None:
+            return POWER_SOURCE
         return None
     if message == WM_DISPLAYCHANGE:
         return DISPLAY_CHANGED
@@ -374,12 +382,14 @@ class SystemEvents(QObject):
     clockChanged = Signal()
     endingSession = Signal()
     panelBrightness = Signal(int)  # the built-in panel's level changed (keys, Windows' slider)
+    powerSourceChanged = Signal(int)  # plugged in (0) or unplugged (1, 2 for a UPS)
 
     def __init__(self, app=None, parent: QObject | None = None, clock=time.monotonic) -> None:
         super().__init__(parent)
         self._clock = clock
         self._resumed_at: float | None = None
         self._display_state: str | None = None
+        self._power_source: int | None = None
         self._last_message: tuple | None = None
         self._filter = None
         self._power: list = []
@@ -403,6 +413,13 @@ class SystemEvents(QObject):
         if what == PANEL_BRIGHTNESS:
             log.debug("Windows: built-in display brightness %s%%", data)
             self.panelBrightness.emit(int(data))
+            return
+        if what == POWER_SOURCE:
+            # Reported once on registering, as the display state is.
+            previous, self._power_source = self._power_source, data
+            if previous is not None and data != previous:
+                log.info("Windows: %s", "on mains power" if data == 0 else "on battery")
+                self.powerSourceChanged.emit(int(data))
             return
         now = self._clock()
         if what == RESUMED:
@@ -458,7 +475,7 @@ class SystemEvents(QObject):
         self._hwnd = int(self._window.winId())
         if not _wtsapi32.WTSRegisterSessionNotification(self._hwnd, 0):  # NOTIFY_FOR_THIS_SESSION
             log.info("Could not register for session notifications (%d); lock and unlock aren't watched", ctypes.get_last_error())
-        self._guids = [_GUID.from_uuid(guid) for guid in (GUID_CONSOLE_DISPLAY_STATE, GUID_VIDEO_BRIGHTNESS)]  # kept alive
+        self._guids = [_GUID.from_uuid(guid) for guid in (GUID_CONSOLE_DISPLAY_STATE, GUID_VIDEO_BRIGHTNESS, GUID_ACDC_POWER_SOURCE)]  # kept alive
         self._power = [_user32.RegisterPowerSettingNotification(self._hwnd, ctypes.byref(guid), 0) for guid in self._guids]  # DEVICE_NOTIFY_WINDOW_HANDLE
         if not all(self._power):
             log.info("Could not register for some power notifications; display on/off or panel brightness may go unnoticed")

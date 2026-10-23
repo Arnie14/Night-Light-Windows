@@ -616,3 +616,17 @@ def test_report_a_problem_clears_its_summary_from_the_clipboard_later(start, mon
     clear()
     assert clipboard.text() == "something the user copied since"  # not ours: left alone
     clipboard.clear()
+
+
+def test_the_power_plans_brightness_isnt_followed_while_it_is_put_back(start, monkeypatch):
+    night_light, _ = start(GeneralConfig(keep_brightness_on_power_change=True, follow_laptop_brightness=True))
+    followed = []
+    monkeypatch.setattr(night_light.brightness_keys, "on_windows_event", followed.append)
+    night_light.power_source._levels.append((0.0, 70))  # the panel's level, a while ago
+    from nightlight.hardware.brightness import MonitorInfo
+
+    panel = MonitorInfo(0, "Built-in display", True, key="BOE0812", internal=True)
+    monkeypatch.setattr(night_light.power_source, "_panel", lambda: panel)
+    night_light.system_events.powerSourceChanged.emit(1)
+    night_light.system_events.panelBrightness.emit(40)  # Windows' battery level
+    assert followed == [] and night_light.brightness_keys._held()

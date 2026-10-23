@@ -15,7 +15,7 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import QAbstractButton, QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
-from nightlight.ui.widgets import HEADING_WEIGHT, SecondaryLabel, blend, set_font
+from nightlight.ui.widgets import SecondaryLabel, blend, set_font, set_heading_font
 
 RADIUS = 7.0  # corner radius of cards, as Windows 11 draws them
 
@@ -248,7 +248,7 @@ class PageTitle(QWidget):
         layout.setContentsMargins(2, 0, 0, 12)
         layout.setSpacing(4)
         heading = QLabel(title)
-        set_font(heading, 1.75, HEADING_WEIGHT)
+        set_heading_font(heading, 1.85)
         layout.addWidget(heading)
         if subtitle:
             layout.addWidget(SecondaryLabel(subtitle))
@@ -366,6 +366,10 @@ class NavButton(QAbstractButton):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._glyph = glyph
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._hovered = False
+        # The outline shows for keyboard focus only, as in Windows 11: a click
+        # gives focus too, and left a second highlight on that entry.
+        self._keyboard_focus = False
 
     def sizeHint(self) -> QSize:
         return QSize(180, max(36, self.fontMetrics().height() + 18))
@@ -377,7 +381,7 @@ class NavButton(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(2, 2, -2, -2)
-        hover = self.underMouse()
+        hover = self._hovered
         if self.isChecked() or hover:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(blend(window, text, 0.09 if self.isChecked() else 0.05))
@@ -391,14 +395,21 @@ class NavButton(QAbstractButton):
         icon.paint(painter, int(rect.left() + 14), int(rect.center().y() - 9), 18, 18)
         painter.setPen(text)
         painter.drawText(rect.adjusted(44, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
-        if self.hasFocus():
+        if self.hasFocus() and self._keyboard_focus:
             painter.setPen(QPen(text, 1.2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(rect, 5, 5)
 
     def event(self, event) -> bool:
-        if event.type() in (QEvent.Type.Enter, QEvent.Type.Leave):
+        kind = event.type()
+        if kind in (QEvent.Type.Enter, QEvent.Type.Leave, QEvent.Type.Hide):
+            # Hidden under the cursor, a button gets no Leave: it would show
+            # as hovered when the window opens again.
+            self._hovered = kind == QEvent.Type.Enter
             self.update()
+        elif kind == QEvent.Type.FocusIn:
+            self._keyboard_focus = event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason,
+                                                      Qt.FocusReason.ShortcutFocusReason)
         return super().event(event)
 
 

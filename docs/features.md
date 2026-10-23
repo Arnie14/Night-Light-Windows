@@ -21,6 +21,8 @@ What Winlight does, and how far each part has been tested. Winlight is in beta: 
 | Remember brightness | Ready | Each display's level is restored after starting, waking and reconnecting. Identical monitors are told apart by their EDID serial number. A level set with the laptop's keys or Windows' slider isn't undone. |
 | Change all displays together | In testing | Needs two displays to try. |
 | External displays follow the laptop's brightness keys | In testing | Optional. Follows the panel's level rather than intercepting the keys; needs an external display to try. |
+| Keep brightness when plugging in or unplugging | In testing | Optional. Windows' power plans set their own level for the built-in display on battery and on mains power; Winlight puts the level from before back, and doesn't let external displays follow Windows' change. Power plans aren't changed. Not yet tried with a real plug and unplug. |
+| No automatic DDC/CI writes in HDR | In testing | Optional, per display (Settings > Displays): while HDR is on, only the display's own slider changes it over DDC/CI; restoring, the schedule and the laptop's keys leave it alone. For monitors that show a tint after DDC/CI changes in HDR mode (Twinkle Tray issue #1310). Needs an HDR monitor to try. |
 | Rename and hide displays | Ready | Keyed by the display's identity, so names follow it between ports. Hidden displays are never changed. |
 | Compatible displays list and report | Ready | Settings > Displays lists each display, its connection and how its brightness is controlled, with why; the report can be copied, saved, or printed with `--report`. It sends nothing to the displays. |
 
@@ -29,6 +31,8 @@ What Winlight does, and how far each part has been tested. Winlight is in beta: 
 | Feature | Status | Notes |
 |---|---|---|
 | Night light | Ready | From 6500 K (neutral) to as warm as Windows allows; the limit, when Windows enforces one, is shown in Settings ([why](windows-notes.md#3-gamma-ramps-night-light-dimming-and-calibrations)). Keeps a display's calibration, even after a crash. Skips HDR displays, which Windows doesn't tint. |
+| Unlocking warmer colors | In testing | Where Windows holds night light back, Settings offers to unlock it, as f.lux and LightBulb do: it sets `GdiIcmGammaRange` after Windows' administrator prompt, and a declined prompt changes nothing. Tested without the prompt; not yet run through it on the test laptop. |
+| 24-hour preview | Ready | Plays the next day of the settings in Settings on screen in about 20 seconds, with the preview note showing the time, as LightBulb's cycle preview does. |
 | Schedule | Ready | Custom times, or sunset to sunrise at a city (searchable, with Detect) or coordinates, including high latitudes: white nights (Reykjavik in summer) turn at solar midnight, and polar day and night use 06:00 and 18:00. Transitions follow twilight or last a length you choose (none, or 5 to 120 minutes). Suspend until resumed, as in KDE, or for a while; Activate the same way. Correct across daylight saving changes and time zone changes. |
 | Pausing per display | Ready | Three independent switches: any fullscreen app; the apps you select (in front, fullscreen or not); and automatically for video playback, calls, exclusive-fullscreen games and well-known photo, video and design apps, as Windows reports them. Only the display showing the app pauses, and night light fades back when the app is minimized, closed or left. Windows' own Start, search, Alt+Tab and taskbar never count as fullscreen apps, and opening them keeps a pause as it was; nor does a maximized window. |
 | Never pausing late at night | In testing | Optional: from night light starting to warm, being fully on, or a set time, until the morning transition, nothing pauses night light. Checked with the schedule's logic; not yet used through a real night. |
@@ -43,7 +47,7 @@ What Winlight does, and how far each part has been tested. Winlight is in beta: 
 
 | Feature | Status | Notes |
 |---|---|---|
-| Tray icon, panel and settings window | Ready | Modelled on KDE Plasma's Brightness and Color panel and Night Light settings, in the Windows 11 style. Light, dark or Windows' own theme, with Windows' accent color or one of six presets. |
+| Tray icon, panel and settings window | Ready | Modelled on KDE Plasma's Brightness and Color panel and Night Light settings, in the Windows 11 style. Light, dark or Windows' own theme, with Windows' accent color or one of six presets. Today's night light shows as a ribbon in the white each moment brings, in Settings and the panel; the temperature sliders show the temperatures they set. |
 | Command line (`winlight-cli`) | Ready | Tested installed, from PATH: list, get and set brightness per display (by number, name or part of an id) or all, relative changes, showing the panel, night light on/off/toggle/auto/status, refresh, diagnostics, JSON output, exit codes. Suspend, resume and calibrations are new and tested in the app, not yet from an installed build. See [command-line.md](command-line.md). |
 | Crash-safe colors and clean exits | Ready | A journal of each display's colors means a crash or a killed process can't leave a tint behind. Quitting, signing out, Ctrl+C and the installer all restore normal colors. |
 | Detection, hotplug and sleep | In testing | Sleep, waking and displays turning off are handled from Windows' own notifications, with re-detection over two minutes after waking. Plugging monitors in and out, and a real sleep cycle, need testing with external monitors. |
@@ -57,9 +61,4 @@ What Winlight does, and how far each part has been tested. Winlight is in beta: 
 
 - **Done:** night light and its schedule, the tray panel and settings, laptop panel brightness, brightness by time of day, the compatible displays list and report, sleep-safe monitor handling, renaming and hiding displays, pausing per display, sleep-friendly schedules, themes, the command line, the installer.
 - **Now:** testing with external monitors, TVs and HDR displays ([installer test plan](testing-installer.md), [full test plan](windows-testing.md)).
-- **Planned for the next build:**
-  - **Unlocking warmer colors:** where Windows limits how warm night light can go, a button sets the `GdiIcmGammaRange` registry value (as f.lux's "expanded range" and LightBulb do), after Windows' administrator prompt; a cancelled prompt changes nothing, and the limit is looked for again afterwards.
-  - **A 24-hour preview:** the whole day's night light shown on screen in about 15 seconds, with the preview note giving the time and temperature, as LightBulb's cycle preview does.
-  - **Re-applying after the power source changes:** the brightness schedule's and the remembered levels put back when the laptop is plugged in or unplugged, since Windows applies its own level then. Power plans themselves are left alone.
-  - **No automatic DDC/CI writes while HDR is on**, per display: restoring, the schedule and following the laptop's keys leave the display alone while it is in HDR, and only its own slider changes it. Some monitors show a tint after DDC/CI brightness changes in HDR mode (Twinkle Tray issue #1310).
 - **Next:** hotkeys with an on-screen indicator, per-display brightness schedules, code signing, then a 1.0 release.

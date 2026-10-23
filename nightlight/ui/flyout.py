@@ -6,8 +6,8 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor, QFont, QGuiApplication
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QCursor, QFont, QGuiApplication, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -22,8 +22,10 @@ from nightlight import APP_NAME
 from nightlight.brightness.monitors import MonitorManager
 from nightlight.color.controller import NightLightController
 from nightlight.config import DisplayPrefs
+from nightlight.core.schedule import compute_state
 from nightlight.hardware.brightness import MonitorInfo
 from nightlight.ui import icons
+from nightlight.ui.day_ribbon import DayRibbon
 from nightlight.ui.night_light_text import (
     brightness_status,
     build_override_menu,
@@ -35,9 +37,30 @@ from nightlight.ui.night_light_text import (
     toggle_suspended,
 )
 from nightlight.ui.placement import flyout_position
-from nightlight.ui.widgets import HEADING_WEIGHT, GlyphButton, MonitorBrightness, SecondaryLabel, Separator, WindowsNightLightNotice, set_font
+from nightlight.ui.widgets import GlyphButton, MonitorBrightness, SecondaryLabel, WindowsNightLightNotice, blend, kelvin_color, set_font, set_heading_font
 
 WIDTH = 340
+
+
+class WarmthTile(QFrame):
+    """The panel's night light section: a quiet card that takes on, faintly,
+    the warmth the screens have now: neutral by day, amber at night."""
+
+    def __init__(self, kelvin: Callable[[], int]) -> None:
+        super().__init__()
+        self._kelvin = kelvin
+
+    def paintEvent(self, _event) -> None:
+        palette = self.palette()
+        window, text = palette.color(QPalette.ColorRole.Window), palette.color(QPalette.ColorRole.WindowText)
+        dark = window.lightnessF() < 0.5
+        card = blend(window, text, 0.05 if dark else 0.02)
+        warmth = kelvin_color(self._kelvin())
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(blend(window, text, 0.12), 1))
+        painter.setBrush(blend(card, warmth, 0.16 if dark else 0.22))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
 
 
 class Flyout(QFrame):
@@ -64,7 +87,7 @@ class Flyout(QFrame):
 
         header = QHBoxLayout()
         title = QLabel("Brightness and Color")
-        set_font(title, 1.15, HEADING_WEIGHT)
+        set_heading_font(title, 1.15)
         refresh = GlyphButton(icons.refresh_glyph, "Detect displays again")
         refresh.clicked.connect(self._refresh)
         header.addWidget(title, 1)
@@ -88,8 +111,10 @@ class Flyout(QFrame):
         layout.addWidget(self.schedule_text)
 
         layout.addSpacing(2)
-        layout.addWidget(Separator())
-        layout.addSpacing(2)
+        self._night_tile = WarmthTile(lambda: controller.current_temperature)
+        tile_layout = QVBoxLayout(self._night_tile)
+        tile_layout.setContentsMargins(12, 10, 8, 12)
+        tile_layout.setSpacing(10)
 
         night = QHBoxLayout()
         night.setSpacing(10)
@@ -102,6 +127,11 @@ class Flyout(QFrame):
         self._night_text = SecondaryLabel(scale=0.92)
         self._night_text.setWordWrap(True)
         night_labels.addWidget(self._night_text)
+        # Today at a glance, from the schedule, across the tile.
+        self._night_ribbon = DayRibbon(
+            lambda moment: compute_state(controller.config, moment, zone=controller.zone).temperature, controller.now, slim=True,
+            zone=lambda: controller.zone)
+        self._ribbon_config = controller.config
         self._override_menu = QMenu(self)
         # KDE's Suspend button: a click suspends until resumed; its arrow has
         # the timed choices. "Resume" or "Turn Off" while an override lasts.
@@ -114,7 +144,9 @@ class Flyout(QFrame):
         night.addLayout(night_labels, 1)
         night.addWidget(self._toggle)
         night.addWidget(configure)
-        layout.addLayout(night)
+        tile_layout.addLayout(night)
+        tile_layout.addWidget(self._night_ribbon)
+        layout.addWidget(self._night_tile)
 
         monitors.monitorsChanged.connect(self._rebuild)
         monitors.displayChanged.connect(self._on_display_changed)
@@ -237,6 +269,11 @@ class Flyout(QFrame):
 
     def _update_night_light(self) -> None:
         controller = self._controller
+        if controller.config != self._ribbon_config:
+            self._ribbon_config = controller.config
+            self._night_ribbon.refresh()
+        self._night_ribbon.setVisible(controller.config.enabled)
+        self._night_tile.update()  # its glow follows the screen's warmth
         self._night_icon.setPixmap((icons.night_icon() if is_night_light_on(controller) else icons.day_icon()).pixmap(26, 26))
         paused = paused_text(controller, self.display_name_of)
         self._night_text.setText(night_light_status(controller) + (f"\n{paused}" if paused else ""))

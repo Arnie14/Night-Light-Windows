@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from PySide6.QtCore import QByteArray, Qt, QTime, QTimeZone
@@ -328,6 +328,29 @@ def test_holding_a_temperature_slider_previews_it_with_a_note_on_screen(window):
     assert not notice.isVisible()
 
 
+def test_reopened_only_the_first_page_entry_is_highlighted(window):
+    """Clicking an entry gave it focus, and Qt gave that focus back on
+    reopening: it kept an outline while another page was shown."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QEnterEvent
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    window.show()
+    QTest.mouseClick(window._nav[3], Qt.MouseButton.LeftButton)
+    QApplication.sendEvent(window._nav[2], QEnterEvent(window._nav[2].rect().center(), window._nav[2].rect().center(),
+                                                       window._nav[2].rect().center()))
+    assert window._nav[2]._hovered and not window._nav[3]._keyboard_focus  # a click's focus draws no outline
+    window.close()
+    window.show()
+    QApplication.processEvents()
+    assert [b.isChecked() for b in window._nav] == [True, False, False, False]
+    assert not any(b._hovered for b in window._nav)  # hidden under the cursor: no hover left over
+    assert [b.hasFocus() for b in window._nav][1:] == [False, False, False]
+    QApplication.sendEvent(window._nav[1], QEvent(QEvent.Type.Leave))
+    window.close()
+
+
 def test_software_dimming_option(window):
     assert window.software_dimming.isChecked()  # on by default
     window.software_dimming.setChecked(False)
@@ -369,9 +392,12 @@ def test_display_names_and_hiding():
     saved = (DisplayPrefs("DEL41A2", "Left"),)
     window = SettingsWindow(controller, AppConfig(KYIV, displays=saved), monitors=monitors)
     assert window.current_config().displays == saved
-    name, show = window.displays._rows["SAM7136"]
+    name, show, hdr_manual = window.displays._rows["SAM7136"]
     show.setChecked(False)
     assert window.current_config().displays == (DisplayPrefs("DEL41A2", "Left"), DisplayPrefs("SAM7136", "", True))
+    window.displays._rows["DEL41A2"][2].setChecked(True)  # no automatic DDC/CI writes in HDR
+    assert window.current_config().displays[0] == DisplayPrefs("DEL41A2", "Left", hdr_manual=True)
+    window.displays._rows["DEL41A2"][2].setChecked(False)
     monitors.monitorsChanged.emit(monitors.monitors)  # re-detection keeps unsaved edits
     assert window.current_config().displays[-1].hidden
     window.buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).click()
@@ -449,7 +475,7 @@ def test_display_names_saved_under_an_older_key_show_on_their_display():
     controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
     window = SettingsWindow(controller, AppConfig(KYIV, displays=(DisplayPrefs("DEL41A2", "Left", True),)), monitors=Monitors())
     assert list(window.displays._rows) == ["DEL41A2:7XKJ9F3"]  # one row, not a "not connected" one for the old key
-    name, show = window.displays._rows["DEL41A2:7XKJ9F3"]
+    name, show, _hdr_manual = window.displays._rows["DEL41A2:7XKJ9F3"]
     assert name.text() == "Left" and not show.isChecked()
     assert window.current_config().displays == (DisplayPrefs("DEL41A2:7XKJ9F3", "Left", True),)  # saved under the new key on Apply
     controller.shutdown()
@@ -604,4 +630,110 @@ def test_the_windows_limit_shows_only_while_it_is_in_the_way():
     limits.clear()  # forgotten after dimming changed: nothing to show until Windows refuses again
     window.night_temperature.setValue(2700)
     assert "Windows limit" not in window._night_row.description.text()
+    controller.shutdown()
+
+
+def test_warmer_colors_are_offered_only_while_windows_holds_night_light_back():
+    state = {"unlocked": False, "warmest": {}}
+    outcomes = iter(["cancelled", "done"])
+
+    def unlock():
+        outcome = next(outcomes)
+        if outcome == "done":
+            state["unlocked"] = True
+        return outcome
+
+    controller = NightLightController(FakeGamma(), KYIV, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
+    window = SettingsWindow(controller, AppConfig(KYIV), warmest=lambda: state["warmest"], display_name=lambda name: "Laptop",
+                            unlock_warmer=unlock, warmer_unlocked=lambda: state["unlocked"])
+    row = window._unlock_row
+    assert row.isHidden()  # no limit known
+    window.night_temperature.setValue(2700)
+    state["warmest"] = {r"\.\DISPLAY1": 3300}
+    window._update_windows_limit()
+    assert not row.isHidden() and window.unlock_warmer.isVisibleTo(window)
+    window.unlock_warmer.click()  # the prompt is declined
+    assert row.description.text().startswith("Nothing was changed")
+    window.unlock_warmer.click()  # approved, but Windows still refuses: it needs signing in again
+    assert "sign out" in row.description.text() and not window.unlock_warmer.isVisibleTo(window)
+    state["warmest"] = {}
+    window._update_windows_limit()
+    assert row.isHidden()
+    controller.shutdown()
+
+
+def test_without_unlocking_there_is_no_offer(window):
+    window._warmest = lambda: {r"\.\DISPLAY1": 3300}
+    window.night_temperature.setValue(2700)
+    window._update_windows_limit()
+    assert window._unlock_row.isHidden()
+
+
+class TimesGamma(FakeGamma):
+    """Records each temperature shown."""
+
+    def __init__(self):
+        self.shown = []
+
+    def apply(self, kelvin):
+        self.shown.append(kelvin)
+
+
+def day_preview_window(monkeypatch, config=None):
+    from nightlight.ui import settings_window as module
+
+    monkeypatch.setattr(module, "DAY_PREVIEW_TICK_MS", 1)
+    monkeypatch.setattr(module, "DAY_PREVIEW_STEP", timedelta(minutes=30))
+    gamma = TimesGamma()
+    times = config or NightLightConfig(enabled=True, mode=Mode.TIMES, night_start="20:00", day_start="06:00",
+                                       night_temperature=3000, transition_minutes=30)
+    controller = NightLightController(gamma, times, lambda: datetime(2026, 6, 15, 12, tzinfo=UTC))
+    window = SettingsWindow(controller, AppConfig(times))
+    window._day_timer.setInterval(1)
+    return window, controller, gamma
+
+
+def test_the_24_hour_preview_plays_the_day_then_returns_to_now(monkeypatch):
+    from PySide6.QtTest import QTest
+
+    window, controller, _gamma = day_preview_window(monkeypatch)
+    asked = []
+    preview = controller.preview
+    monkeypatch.setattr(controller, "preview", lambda kelvin: asked.append(kelvin) or preview(kelvin))
+    window.show()
+    window.preview_day.click()
+    assert window.preview_day.text() == "Stop" and window._preview_notice.isVisible()
+    QTest.qWait(60)  # 6 minutes... in tests: 48 half-hour steps
+    for _ in range(100):
+        if not window._day_timer.isActive():
+            break
+        QTest.qWait(10)
+    assert not window._day_timer.isActive() and window.preview_day.text() == "Preview"
+    assert not window._preview_notice.isVisible() and controller.target_temperature == 6500  # noon: day again
+    assert min(k for k in asked if k is not None) == 3000 and asked[-1] is None  # the night shown, then back
+    controller.shutdown()
+
+
+def test_the_24_hour_preview_shows_unapplied_settings_and_stops_with_a_slider(monkeypatch):
+    window, controller, _gamma = day_preview_window(monkeypatch)
+    window.show()
+    window.night_temperature.setValue(2500)  # not applied yet
+    window._toggle_day_preview()
+    window._day_timer.stop()  # step by hand
+    window._day_at = datetime(2026, 6, 15, 23, 30, tzinfo=UTC)
+    window._day_timer.start()
+    window._day_preview_step()
+    assert controller.target_temperature == 2500
+    assert window._preview_notice.hint.text().startswith("Today 00:00") is False  # 23:30 + 30 min: tomorrow
+    assert window._preview_notice.hint.text().startswith("Tomorrow 00:00")
+    window.night_temperature.slider.sliderPressed.emit()  # holding a slider takes over
+    assert not window._day_timer.isActive()
+    window.night_temperature.slider.sliderReleased.emit()
+    window.close()
+    controller.shutdown()
+
+
+def test_no_24_hour_preview_for_a_day_that_doesnt_change(monkeypatch):
+    window, controller, _gamma = day_preview_window(monkeypatch, NightLightConfig(enabled=True, mode=Mode.ALWAYS))
+    assert window._day_row.isHidden()
     controller.shutdown()
